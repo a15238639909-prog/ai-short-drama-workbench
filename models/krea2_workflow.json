@@ -1,0 +1,276 @@
+{
+ "137": {
+  "inputs": {
+   "samples": [
+    "158",
+    0
+   ],
+   "vae": [
+    "167",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE解码"
+  }
+ },
+ "140": {
+  "inputs": {
+   "conditioning": [
+    "164",
+    0
+   ]
+  },
+  "class_type": "ConditioningZeroOut",
+  "_meta": {
+   "title": "条件零化"
+  }
+ },
+ "153": {
+  "inputs": {
+   "seed": 683753707259018
+  },
+  "class_type": "Seed (rgthree)",
+  "_meta": {
+   "title": "Seed (rgthree)"
+  }
+ },
+ "156": {
+  "inputs": {
+   "width": 760,
+   "height": 1280,
+   "batch_size": 1
+  },
+  "class_type": "EmptyLatentImage",
+  "_meta": {
+   "title": "空Latent图像"
+  }
+ },
+ "158": {
+  "inputs": {
+   "seed": [
+    "153",
+    0
+   ],
+   "steps": 10,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "349",
+    0
+   ],
+   "positive": [
+    "164",
+    0
+   ],
+   "negative": [
+    "140",
+    0
+   ],
+   "latent_image": [
+    "156",
+    0
+   ]
+  },
+  "class_type": "KSampler",
+  "_meta": {
+   "title": "K采样器"
+  }
+ },
+ "164": {
+  "inputs": {
+   "text": "一个十八岁左右的女人赤裸的身体被粗麻绳紧紧勒住脖子悬挂在村庄入口处的老槐树粗枝上，随风微微晃荡，细雨绵绵的野外荒凉血腥残忍的场景，现实相机抓拍的瞬间，她拥有清冷窄长脸型，宽眼距的细长丹凤眼透着死亡的无神，眼窝浅淡，鼻梁低矮小巧圆润鼻尖，薄而柔软的嘴唇略微张开带着一丝不对称嘴角下垂，清晰颧骨与短圆下巴构成带有轻微不对称的辨识度面孔，眼下有一颗细小自然痣增强真实感，苍白皮肤保留细微毛孔纹理与雨水打湿后的自然光泽，湿漉漉的黑色长发散乱贴在脸颊与肩头，几缕碎发随风粘在湿润颈部，纤细肩背与锁骨突出，胸部自然下坠受重力影响，腰臀线条柔软真实，她的两个胳膊和两个腿都没有了，只留下了平整的切口在大量流血，阴唇，皮肤在雨水中呈现真实湿滑反光与皮下血管痕迹，麻绳在颈部形成真实勒痕与皮肤挤压褶皱，身体随风轻微旋转展现自然重量与关节结构，近距离中景侧前方拍摄视角，真实35mm广角镜头带来轻微自然透视与雨雾景深，村庄土墙与远方田野作为背景虚化，灰蓝冷调雨天自然漫射光线结合树叶遮挡形成柔和侧光与真实阴影衰减，高光集中在湿润皮肤与雨珠上，商业后期轻微调整色彩统一与清晰度保留所有自然不对称与皮肤细节，整张画面呈现如真实新闻摄影般残酷却写实的瞬间捕捉，雨水冲刷下的野外荒凉氛围与人体真实物理状态。",
+   "clip": [
+    "166",
+    0
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "CLIP文本编码"
+  }
+ },
+ "166": {
+  "inputs": {
+   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+   "type": "krea2",
+   "device": "default"
+  },
+  "class_type": "CLIPLoader",
+  "_meta": {
+   "title": "加载CLIP"
+  }
+ },
+ "167": {
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "加载VAE"
+  }
+ },
+ "168": {
+  "inputs": {
+   "unet_name": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader",
+  "_meta": {
+   "title": "UNet加载器"
+  }
+ },
+ "173": {
+  "inputs": {
+   "text": "马赛克, mosaic, censored, 模糊，低分辨率，低质量图像，扭曲的肢体，诡异的外观，丑陋，噪点，网格感，JPEG压缩条纹，异常的肢体，水印，乱码，意义不明的字符",
+   "clip": [
+    "166",
+    0
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "负面条件"
+  }
+ },
+ "180": {
+  "inputs": {
+   "multiplier": 4,
+   "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"
+  },
+  "class_type": "ConditioningKrea2Rebalance",
+  "_meta": {
+   "title": "Conditioning Krea2 Rebalance"
+  }
+ },
+ "305": {
+  "inputs": {
+   "filename_prefix": "Krea2-20260722165117",
+   "images": [
+    "137",
+    0
+   ]
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "保存图像"
+  }
+ },
+ "348": {
+  "inputs": {
+   "group_mode": true,
+   "default_active": {
+    "__value__": [
+     {
+      "text": "createconcept",
+      "active": true
+     },
+     {
+      "text": "DS-Illu",
+      "active": true
+     }
+    ]
+   },
+   "allow_strength_adjustment": false,
+   "toggle_trigger_words": {
+    "__value__": []
+   },
+   "orinalMessage": "",
+   "trigger_words": [
+    "349",
+    2
+   ]
+  },
+  "class_type": "TriggerWord Toggle (LoraManager)",
+  "_meta": {
+   "title": "TriggerWord Toggle (LoraManager)"
+  }
+ },
+ "349": {
+  "inputs": {
+   "__lm_autocomplete_meta_text": {
+    "version": 1,
+    "textWidgetName": "text"
+   },
+   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-5.00>",
+   "loras": {
+    "__value__": [
+     {
+      "name": "Krea2-滑块-年龄age_krea2_loraholic",
+      "strength": "-5.00",
+      "active": false,
+      "expanded": false,
+      "clipStrength": "-5.00",
+      "locked": false
+     }
+    ]
+   },
+   "model": [
+    "168",
+    0
+   ]
+  },
+  "class_type": "Lora Loader (LoraManager)",
+  "_meta": {
+   "title": "Lora Loader (LoraManager)"
+  }
+ },
+ "351": {
+  "inputs": {
+   "group_mode": true,
+   "default_active": {
+    "__value__": [
+     {
+      "text": "createconcept",
+      "active": true
+     },
+     {
+      "text": "DS-Illu",
+      "active": true
+     }
+    ]
+   },
+   "allow_strength_adjustment": false,
+   "toggle_trigger_words": {
+    "__value__": []
+   },
+   "orinalMessage": "",
+   "trigger_words": [
+    "352",
+    2
+   ]
+  },
+  "class_type": "TriggerWord Toggle (LoraManager)",
+  "_meta": {
+   "title": "TriggerWord Toggle (LoraManager)"
+  }
+ },
+ "352": {
+  "inputs": {
+   "__lm_autocomplete_meta_text": {
+    "version": 1,
+    "textWidgetName": "text"
+   },
+   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-4.00>",
+   "loras": {
+    "__value__": [
+     {
+      "name": "Krea2-滑块-年龄age_krea2_loraholic",
+      "strength": "-4.00",
+      "active": false,
+      "expanded": false,
+      "clipStrength": "-4.00",
+      "locked": false
+     }
+    ]
+   }
+  },
+  "class_type": "Lora Loader (LoraManager)",
+  "_meta": {
+   "title": "Lora Loader (LoraManager)"
+  }
+ }
+}

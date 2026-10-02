@@ -1,0 +1,180 @@
+{
+ "108": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "DasiwaMinimaxH3_dasiwaREF2VAHybridV1.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "102": {
+  "class_type": "ReservedVRAMSetter",
+  "inputs": {
+   "anything": [
+    "108",
+    0
+   ],
+   "reserved": 1,
+   "mode": "manual",
+   "seed": 298244816787467,
+   "auto_max_reserved": 0,
+   "clean_gpu_before": true
+  }
+ },
+ "115": {
+  "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+  "inputs": {
+   "model": [
+    "102",
+    0
+   ]
+  }
+ },
+ "106": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  }
+ },
+ "109": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+  }
+ },
+ "110": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  }
+ },
+ "113": {
+  "class_type": "MiniMaxH3ImageToVideo",
+  "inputs": {
+   "clip": [
+    "106",
+    0
+   ],
+   "vae": [
+    "109",
+    0
+   ],
+   "prompt": "test",
+   "width": 1344,
+   "height": 768,
+   "length": 124
+  }
+ },
+ "104": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "115",
+    0
+   ],
+   "conditioning": [
+    "113",
+    0
+   ]
+  }
+ },
+ "105": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 253527777282510
+  }
+ },
+ "111": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "112": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "115",
+    0
+   ],
+   "scheduler": "beta",
+   "steps": 25,
+   "denoise": 1
+  }
+ },
+ "119": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "105",
+    0
+   ],
+   "guider": [
+    "104",
+    0
+   ],
+   "sampler": [
+    "111",
+    0
+   ],
+   "sigmas": [
+    "112",
+    0
+   ],
+   "latent_image": [
+    "113",
+    1
+   ]
+  }
+ },
+ "120": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "119",
+    0
+   ],
+   "vae": [
+    "109",
+    0
+   ]
+  }
+ },
+ "121": {
+  "class_type": "VAEDecodeAudio",
+  "inputs": {
+   "samples": [
+    "119",
+    0
+   ],
+   "vae": [
+    "110",
+    0
+   ]
+  }
+ },
+ "122": {
+  "class_type": "VHS_VideoCombine",
+  "inputs": {
+   "images": [
+    "120",
+    0
+   ],
+   "audio": [
+    "121",
+    0
+   ],
+   "frame_rate": 24,
+   "loop_count": 0,
+   "filename_prefix": "MiniMaxH3/workbench",
+   "format": "video/h264-mp4",
+   "pingpong": false,
+   "save_output": true,
+   "pix_fmt": "yuv420p",
+   "crf": 19,
+   "save_metadata": true,
+   "trim_to_audio": false
+  }
+ }
+}

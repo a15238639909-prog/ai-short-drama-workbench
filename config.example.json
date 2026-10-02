@@ -1,0 +1,11 @@
+{
+  "llama_server_exe": "X:/llama.cpp/llama-server.exe",
+  "model_gguf": "X:/models/qwen.gguf",
+  "mmproj_gguf": "X:/models/mmproj.gguf",
+  "llama_log": "X:/llama.cpp/v41_server.log",
+  "llama_err_log": "X:/llama.cpp/v41_server.err.log",
+  "comfy_dir": "X:/ComfyUI",
+  "comfy_output": "X:/ComfyUI/output",
+  "h3_root": "X:/MiniMax-H3",
+  "legacy_root": ""
+}

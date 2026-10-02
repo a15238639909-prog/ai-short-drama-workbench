@@ -1,0 +1,252 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>剧本分镜页 · 三个方向</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  background:#e9e5dd;color:#2a2620}
+.page{max-width:1520px;margin:0 auto;padding:28px 20px 60px}
+.brief{background:#fff;border:1px solid #e3ddd2;border-radius:12px;padding:18px 22px;margin-bottom:26px}
+.brief h1{margin:0 0 8px;font-size:19px;color:#5a3b1e}
+.brief ul{margin:8px 0 0;padding-left:20px;font-size:14px;line-height:1.85;color:#5a5348}
+.opt{margin-bottom:34px}
+.opt-h{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+.opt-h b{font-size:17px;color:#5a3b1e}
+.opt-h span{font-size:13px;color:#8b8375}
+.frame{border:1px solid #d8d0c2;border-radius:14px;overflow:hidden;
+  box-shadow:0 6px 24px rgba(80,58,30,.09);background:#fff}
+.tradeoff{font-size:13px;color:#6b6255;line-height:1.8;margin-top:10px;
+  background:#fdfbf7;border-left:3px solid #c9b899;padding:10px 14px;border-radius:0 8px 8px 0}
+.tradeoff b{color:#8a5a2b}
+</style></head><body>
+<div class="page">
+
+<div class="brief">
+  <h1>剧本分镜页 · 三个方向</h1>
+  <div style="font-size:14px;color:#5a5348;line-height:1.8">三个方案都满足这几条：</div>
+  <ul>
+    <li>最上面一条<b>大时间轴</b>，占满宽度，是页面主角</li>
+    <li>时间轴的单位是<b>「段」（≤15秒）</b>，不是单个 3秒/4秒 的分镜</li>
+    <li>每段显示：段号 / 时长 / 地点 / 里面几个镜头 / 缩略图位</li>
+    <li>点某一段 → 展开完整提示词、参考图、内部分镜列表、生成按钮</li>
+    <li>顶部一行极简工具条：场次、拆场/拆节拍/拆分镜/排段、缩放</li>
+  </ul>
+</div>
+
+<div class="opt">
+  <div class="opt-h"><b>方案 A · 暖白三栏</b><span>和现有平台同一套配色，改动最小</span></div>
+  <div class="frame" id="A"></div>
+  <div class="tradeoff"><b>好处</b>：提示词区域最宽，长文好读；配色和平台其他页面统一，切过来不跳。<br>
+    <b>取舍</b>：没有画面预览位，生成完要去别处看片。</div>
+</div>
+
+<div class="opt">
+  <div class="opt-h"><b>方案 B · 暗色剪辑台</b><span>最像 Premiere / DaVinci</span></div>
+  <div class="frame" id="B"></div>
+  <div class="tradeoff"><b>好处</b>：深灰底不抢画面，长时间盯着不累；段块和缩略图更突出，时间轴的存在感最强。<br>
+    <b>取舍</b>：和平台其他页面（暖白）不是一套，来回切会有割裂感。</div>
+</div>
+
+<div class="opt">
+  <div class="opt-h"><b>方案 C · 大预览 + 右检查器</b><span>中间留一块 16:9 大预览</span></div>
+  <div class="frame" id="C"></div>
+  <div class="tradeoff"><b>好处</b>：生成完直接在中间看片；分镜横排成缩略卡片，一眼看完这段有几个镜头。<br>
+    <b>取舍</b>：提示词收进右栏，宽度窄，长文要滚动。</div>
+</div>
+
+</div>
+
+<script>
+/* 静态稿：数据写死，只为看布局 */
+var CLIPS = [
+  { no:"第1段", sec:"13s", meta:"4 镜 · 布拉格老城街头", thumb:"首帧",     w:330, on:true  },
+  { no:"第2段", sec:"11s", meta:"3 镜 · 布拉格老城街头", thumb:"首帧接续", w:280, on:false },
+  { no:"第3段", sec:"13s", meta:"2 镜 · 布拉格老城街头", thumb:"首帧接续", w:330, on:false },
+  { no:"第4段", sec:"5s",  meta:"1 镜 · 布拉格老城街头", thumb:"首帧接续", w:140, on:false }
+];
+var SHOTS = [
+  { id:"S01", framing:"全景",   move:"固定", sec:"4s", action:"阳光斜射在石板路上，两侧巴洛克建筑立面，街道空无一人" },
+  { id:"S02", framing:"中近景", move:"固定", sec:"4s", action:"李哲背着帆布包，目光快速从画面左侧扫向右侧" },
+  { id:"S03", framing:"特写",   move:"推",   sec:"3s", action:"李哲的手指抓紧帆布包肩带，指节微微发白" },
+  { id:"S04", framing:"全景",   move:"固定", sec:"2s", action:"风穿过桥拱，卷起地面的枯叶" }
+];
+var REFS = [ {k:"人物",n:"李哲"}, {k:"人物",n:"艾莉丝"}, {k:"场景",n:"布拉格老城街头"} ];
+var TICKS = ["00:00","00:15","00:30","00:45"];
+var PROMPT =
+ '<b>subject_definitions:</b><br>&lt;Subject 1&gt; = 李哲：32岁，男，面部骨骼成熟、颧骨和鼻梁立体，身高约175–185cm，7.5–8.2头身，黑色短头发，深灰色高领毛衣，剪裁合体的深蓝色羊毛大衣，左手戴旧皮质表带手表<br>&lt;Subject 2&gt; = 艾莉丝：20岁，女，小脸、下颌柔和收窄，金棕色微卷长发，碧绿色眼睛，皮肤白皙有雀斑，右耳银色小耳钉，白色棉质连衣裙，米色针织开衫<br><br>'
++'<b>summary:</b><br>A man waits at a Prague street corner; a girl on a vintage bicycle rides past and their eyes meet.<br><br>'
++'<b>detailed_description:</b><br>画面站位固定：&lt;Subject 1&gt; 始终在画面左侧，&lt;Subject 2&gt; 始终在画面右侧，整段不交换。<br>[Shot 1] 全景，午后的老城石板路，两侧三到四层巴洛克建筑。镜头保持固定，构图不变。机位设在街道中央，平视正面，距主体约 12 米，标准镜头，焦点落在远处教堂尖顶。前景是路缘石，中景是空荡的石板路，背景是远处教堂尖顶。光线为午后天光从画面左上斜照，暖白色温。<br>[Shot 2] At 00:04, the camera cuts to 中近景，&lt;Subject 1&gt; 站在转角，肩上帆布包压出褶皱，目光快速扫过人群……';
+
+function el(tag, style, html){ var d=document.createElement(tag); if(style)d.style.cssText=style;
+  if(html!==undefined)d.innerHTML=html; return d; }
+
+/* ---------- 通用零件 ---------- */
+function ruler(dark){
+  var w=el("div","position:relative;height:26px;border-bottom:1px solid "+(dark?"#2c281f":"#efe9de")+";margin-bottom:12px");
+  TICKS.forEach(function(t,i){
+    var m=el("div","position:absolute;top:0;left:"+(i*250)+"px;height:26px;border-left:1px solid "+(dark?"#332e25":"#e8e0d2")+";padding-left:6px");
+    m.appendChild(el("span","font-size:11px;line-height:26px;color:"+(dark?"#7d7466":"#a49a89"),t));
+    w.appendChild(m);
+  });
+  return w;
+}
+function clips(dark, h){
+  var row=el("div","display:flex;gap:6px;align-items:stretch;height:"+h+"px");
+  CLIPS.forEach(function(c){
+    var f=el("div","width:"+c.w+"px;flex:none;border-radius:9px;overflow:hidden;cursor:pointer;"+
+      "background:"+(dark?"#262218":"#fff")+";display:flex;flex-direction:column;"+
+      "border:1px solid "+(c.on?"#a5682a":(dark?"#342e24":"#e3ddd2"))+";"+
+      (c.on?"box-shadow:0 0 0 3px rgba(165,104,42,"+(dark?".22":".14")+");":""));
+    f.appendChild(el("div","height:"+(h-52)+"px;background:"+(dark?"#2c271c":"#efeae1")+
+      ";display:flex;align-items:center;justify-content:center;border-bottom:1px solid "+(dark?"#342e24":"#f0ebe1"),
+      '<span style="font-size:11px;color:'+(dark?"#6e6557":"#9d9284")+'">'+c.thumb+'</span>'));
+    f.appendChild(el("div","padding:8px 10px",
+      '<div style="display:flex;align-items:baseline;gap:6px">'+
+      '<span style="font-size:14px;font-weight:600;color:'+(dark?"#ece5d8":"#33291b")+'">'+c.no+'</span>'+
+      '<span style="font-size:13px;font-weight:600;color:'+(dark?"#d8a15d":"#8a5a2b")+'">'+c.sec+'</span></div>'+
+      '<span style="font-size:11px;color:#8b8375">'+c.meta+'</span>'));
+    row.appendChild(f);
+  });
+  return row;
+}
+function toolbar(dark){
+  var bg=dark?"#232019":"#fff", line=dark?"#322d24":"#e3ddd2";
+  var btn=function(t,on){ return '<div style="padding:5px 13px;border-radius:7px;font-size:13px;'+
+    (on?'background:#8a5a2b;color:#fff;':'border:1px solid '+(dark?"#3a342a":"#ded5c7")+';color:'+
+        (dark?"#c6bcac":"#5a5348")+';background:'+(dark?"#282419":"linear-gradient(180deg,#fbf8f3,#f0ebe1)")+';')+
+    '">'+t+'</div>'; };
+  return el("div","display:flex;align-items:center;gap:14px;padding:10px 20px;background:"+bg+
+    ";border-bottom:1px solid "+line+";flex:none",
+    '<span style="font-weight:700;font-size:15px;color:'+(dark?"#d8a15d":"#5a3b1e")+'">剧本分镜</span>'+
+    '<div style="display:flex;gap:4px">'+btn("第1场",true)+btn("第2场")+btn("第3场")+'</div>'+
+    '<div style="width:1px;height:20px;background:'+line+'"></div>'+
+    '<div style="display:flex;gap:6px">'+btn("拆场")+btn("拆节拍")+btn("拆分镜")+btn("排段")+'</div>'+
+    '<span style="font-size:13px;color:#8b8375">布拉格老城街头 · 42 秒 · 4 段 · 10 镜</span>'+
+    '<div style="margin-left:auto;display:flex;gap:8px;align-items:center">'+
+    '<div style="width:26px;height:26px;border-radius:6px;border:1px solid '+(dark?"#3a342a":"#ded5c7")+
+    ';display:flex;align-items:center;justify-content:center;color:#8b8375">−</div>'+
+    '<div style="width:26px;height:26px;border-radius:6px;border:1px solid '+(dark?"#3a342a":"#ded5c7")+
+    ';display:flex;align-items:center;justify-content:center;color:#8b8375">＋</div></div>');
+}
+function segHead(dark){
+  return '<div style="display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid '+
+    (dark?"#2c281f":"#f2eee5")+'">'+
+    '<span style="font-size:15px;font-weight:600;color:'+(dark?"#d8a15d":"#8a5a2b")+'">第 1 段</span>'+
+    '<span style="font-size:13px;color:#8b8375">13 秒 · 4 个镜头 · 布拉格老城街头</span>'+
+    '<div style="margin-left:auto;display:flex;gap:6px">'+
+    '<div style="padding:5px 12px;border-radius:7px;font-size:12px;border:1px solid '+
+    (dark?"#3a342a":"#ded5c7")+';color:'+(dark?"#c6bcac":"#5a5348")+'">重编提示词</div>'+
+    '<div style="padding:5px 14px;border-radius:7px;font-size:12px;font-weight:500;color:#fff;'+
+    'background:linear-gradient(180deg,#c08339,#a5682a)">生成这一段</div></div></div>';
+}
+function promptBox(dark){
+  return '<div style="flex:1;overflow:auto;padding:14px 20px;font-size:12px;line-height:1.85;'+
+    'font-family:Consolas,Menlo,monospace;color:'+(dark?"#b8b0a2":"#4a4238")+
+    ';background:'+(dark?"#17150f":"#fdfbf7")+'">'+
+    PROMPT.replace(/<b>/g,'<b style="color:'+(dark?"#d8a15d":"#8a5a2b")+'">')+'</div>';
+}
+function refGrid(dark, cols){
+  return REFS.map(function(r){
+    return '<div><div style="aspect-ratio:16/9;border-radius:7px;display:flex;align-items:center;'+
+      'justify-content:center;background:'+(dark?"#262218":"#efeae1")+';border:1px solid '+
+      (dark?"#342e24":"#e8e0d2")+'"><span style="font-size:11px;color:'+(dark?"#6e6557":"#9d9284")+
+      '">'+r.k+'</span></div><div style="font-size:11px;margin-top:5px;text-align:center;color:'+
+      (dark?"#a89e8e":"#5a5348")+'">'+r.n+'</div></div>';
+  }).join("");
+}
+function shotRows(dark){
+  return SHOTS.map(function(s,i){
+    return '<div style="padding:10px 16px;border-bottom:1px solid '+(dark?"#2a2620":"#f5f1e9")+
+      (i===0?';background:'+(dark?"#262218":"#fdfbf7"):"")+'">'+
+      '<div style="display:flex;align-items:baseline;gap:8px">'+
+      '<span style="font-size:12px;font-weight:600;color:'+(dark?"#d8a15d":"#8a5a2b")+'">'+s.id+'</span>'+
+      '<span style="font-size:12px;color:'+(dark?"#ece5d8":"#33291b")+'">'+s.framing+'</span>'+
+      '<span style="font-size:11px;color:#8b8375">'+s.move+'</span>'+
+      '<span style="margin-left:auto;font-size:12px;color:#8b8375">'+s.sec+'</span></div>'+
+      '<div style="font-size:11px;line-height:1.6;margin-top:3px;color:'+(dark?"#948b7c":"#6b6255")+
+      '">'+s.action+'</div></div>';
+  }).join("");
+}
+
+/* ---------- 方案 A / B（三栏） ---------- */
+function threeCol(dark){
+  var page=el("div","width:100%;height:830px;display:flex;flex-direction:column;background:"+
+    (dark?"#1c1a17":"#f3f0ea"));
+  page.appendChild(toolbar(dark));
+  var tl=el("div","flex:none;padding:0 20px 18px;border-bottom:1px solid "+(dark?"#322d24":"#e3ddd2")+
+    ";background:"+(dark?"#191713":"#fff"));
+  tl.appendChild(ruler(dark)); tl.appendChild(clips(dark,128));
+  page.appendChild(tl);
+  var body=el("div","flex:1;min-height:0;display:grid;grid-template-columns:1fr 320px 300px");
+  var c1=el("div","border-right:1px solid "+(dark?"#322d24":"#e3ddd2")+
+    ";display:flex;flex-direction:column;min-height:0;background:"+(dark?"#201d17":"#fff"));
+  c1.innerHTML=segHead(dark)+promptBox(dark);
+  var c2=el("div","border-right:1px solid "+(dark?"#322d24":"#e3ddd2")+
+    ";background:"+(dark?"#201d17":"#fff")+";display:flex;flex-direction:column;min-height:0");
+  c2.innerHTML='<div style="padding:12px 16px;border-bottom:1px solid '+(dark?"#2c281f":"#f2eee5")+
+    ';display:flex;align-items:center"><span style="font-size:14px;font-weight:600;color:'+
+    (dark?"#ece5d8":"#2a2620")+'">参考图</span><span style="font-size:12px;color:#8b8375;margin-left:8px">3 张</span>'+
+    '<span style="margin-left:auto;font-size:12px;color:'+(dark?"#d8a15d":"#8a5a2b")+'">＋ 添加</span></div>'+
+    '<div style="padding:14px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;overflow:auto">'+
+    refGrid(dark)+'</div>';
+  var c3=el("div","background:"+(dark?"#201d17":"#fff")+";display:flex;flex-direction:column;min-height:0");
+  c3.innerHTML='<div style="padding:12px 16px;border-bottom:1px solid '+(dark?"#2c281f":"#f2eee5")+
+    '"><span style="font-size:14px;font-weight:600;color:'+(dark?"#ece5d8":"#2a2620")+
+    '">这一段的分镜</span><span style="font-size:12px;color:#8b8375;margin-left:8px">4 个</span></div>'+
+    '<div style="flex:1;overflow:auto">'+shotRows(dark)+'</div>';
+  body.appendChild(c1); body.appendChild(c2); body.appendChild(c3);
+  page.appendChild(body);
+  return page;
+}
+
+/* ---------- 方案 C（大预览 + 右检查器） ---------- */
+function bigPreview(){
+  var page=el("div","width:100%;height:830px;display:flex;flex-direction:column;background:#f3f0ea");
+  page.appendChild(toolbar(false));
+  var tl=el("div","flex:none;padding:0 20px 18px;border-bottom:1px solid #e3ddd2;background:#fff");
+  tl.appendChild(ruler(false)); tl.appendChild(clips(false,118));
+  page.appendChild(tl);
+  var body=el("div","flex:1;min-height:0;display:grid;grid-template-columns:1fr 400px");
+  var left=el("div","display:flex;flex-direction:column;min-height:0;padding:20px 24px;gap:14px");
+  left.innerHTML=
+    '<div style="display:flex;align-items:center;gap:10px">'+
+    '<span style="font-size:16px;font-weight:600;color:#8a5a2b">第 1 段</span>'+
+    '<span style="font-size:13px;color:#8b8375">13 秒 · 4 个镜头 · 布拉格老城街头</span>'+
+    '<div style="margin-left:auto;display:flex;gap:6px">'+
+    '<div style="padding:6px 14px;border-radius:8px;border:1px solid #ded5c7;background:#fff;font-size:13px;color:#5a5348">重编提示词</div>'+
+    '<div style="padding:6px 16px;border-radius:8px;font-size:13px;font-weight:500;color:#fff;background:linear-gradient(180deg,#c08339,#a5682a)">生成这一段</div></div></div>'+
+    '<div style="flex:none;height:300px;background:#ece7dd;border:1px solid #e3ddd2;border-radius:12px;'+
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">'+
+    '<span style="font-size:14px;color:#8b8375">这一段还没有生成</span>'+
+    '<span style="font-size:12px;color:#a49a89">13 秒 · 1152×640</span></div>'+
+    '<div style="flex:1;min-height:0;border:1px solid #e3ddd2;border-radius:12px;background:#fff;'+
+    'display:flex;flex-direction:column;overflow:hidden">'+
+    '<div style="padding:10px 16px;border-bottom:1px solid #f2eee5"><span style="font-size:13px;font-weight:600">这一段的分镜</span>'+
+    '<span style="font-size:12px;color:#8b8375;margin-left:8px">4 个</span></div>'+
+    '<div style="flex:1;overflow:auto;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px 16px">'+
+    SHOTS.map(function(s){ return '<div style="border:1px solid #eee7db;border-radius:9px;overflow:hidden;background:#fdfbf7">'+
+      '<div style="height:58px;background:#efeae1;display:flex;align-items:center;justify-content:center;font-size:11px;color:#9d9284">'+s.framing+'</div>'+
+      '<div style="padding:7px 9px"><div style="display:flex;align-items:baseline;gap:6px">'+
+      '<span style="font-size:12px;font-weight:600;color:#8a5a2b">'+s.id+'</span>'+
+      '<span style="font-size:11px;color:#8b8375">'+s.sec+'</span></div>'+
+      '<div style="font-size:11px;line-height:1.55;margin-top:3px;color:#6b6255">'+s.action+'</div></div></div>'; }).join("")+
+    '</div></div>';
+  var right=el("div","background:#fff;border-left:1px solid #e3ddd2;display:flex;flex-direction:column;min-height:0");
+  right.innerHTML=
+    '<div style="padding:12px 18px;border-bottom:1px solid #f2eee5;display:flex;gap:16px">'+
+    '<span style="font-size:13px;font-weight:600;color:#8a5a2b;border-bottom:2px solid #8a5a2b;padding-bottom:8px;margin-bottom:-13px">提示词</span>'+
+    '<span style="font-size:13px;color:#8b8375">参考图</span><span style="font-size:13px;color:#8b8375">设置</span></div>'+
+    promptBox(false)+
+    '<div style="border-top:1px solid #f2eee5;padding:12px 18px">'+
+    '<div style="font-size:12px;color:#8b8375;margin-bottom:8px">参考图 3 张</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'+refGrid(false)+'</div></div>';
+  body.appendChild(left); body.appendChild(right);
+  page.appendChild(body);
+  return page;
+}
+
+document.getElementById("A").appendChild(threeCol(false));
+document.getElementById("B").appendChild(threeCol(true));
+document.getElementById("C").appendChild(bigPreview());
+</script>
+</body></html>

@@ -1,0 +1,23 @@
+用户对这张「本话安排」像聊天一样说了一句要改什么。你只改被要求改的那几条，其余保持原样——用户已经看过、认可过的内容，一个字不动。
+
+【你会拿到】
+· 当前安排：六项、四段情节顺序、时间预算、人物、场景、总时长。
+· 用户的修改要求：一句大白话，例如"别安排悲伤的身世。灯是老板自己做坏的，结尾轻松好笑一点。"
+
+【怎么改】
+· 先判断这句话涉及哪几条：身世是人物或"经过"里的原因；结尾是 beats[3]；气氛可能同时影响 pace.text 和最后一段的时间预算。
+· 改哪条就只返回哪条的新值，用点路径指到那一条。
+· 改了情节的某一段，如果时间预算里对应的那条内容跟着变了，也一起返回新的 budget（整个列表），各条秒数之和仍等于总时长。
+· 改了人物的某一项，返回整个 items.who.people 列表。
+· 用户说"删掉某段"时不减少四段结构，把那一段改写成合理的内容。
+· why 用一句话告诉用户你改了什么、为什么。
+
+可用的点路径：
+items.what.text / items.shoot.text / items.how.text / items.how.geometry / items.pace.text / items.pace.value /
+items.who.text / items.who.people / items.where.text / items.where.places /
+beats[0].text（开始）/ beats[1].text（经过）/ beats[2].text（变化）/ beats[3].text（结束）/
+budget（整个列表）/ whole_story / first_episode_ends_at / mood
+
+只输出下面这个 JSON，不加解释：
+{"changes": {"beats[3].text": "新内容", "budget": [{"beat": "内容", "seconds": 8, "focus": "拍摄重点"}]},
+ "why": "一句话说明改了什么"}
