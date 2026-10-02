@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # 版本号：发布用。改功能就改这里，和 发布说明.md 对得上。
-_VERSION = "v4.3.0"
+_VERSION = "v1.0.0"
 PORT = int(os.environ.get("V41_PORT", "8853"))
 WEB = ROOT / "web"
 
