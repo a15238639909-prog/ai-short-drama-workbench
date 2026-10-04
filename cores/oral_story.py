@@ -876,14 +876,40 @@ def merge_split_quotes(pics):
     return "\n".join(out)
 
 
+def dialogue_performance(text):
+    """Separate leading stage directions from the words to be spoken.
+
+    Only recognise performance cues; parenthesised dialogue/meaning stays intact.
+    """
+    text = str(text or "").strip()
+    cues = []
+    while True:
+        m = re.match(r"^[（(]([^（）()\n]{1,24})[）)]\s*(.+)$", text)
+        if not m:
+            break
+        cue = m.group(1).strip()
+        if not re.match(r"^(?:低喝|低声|低吼|轻声|高声|大喊|怒吼|喊道|喃喃|喘息|"
+                        r"温柔|平静|冷笑|微笑|咬牙|愣住|点头|摇头|眯起眼|"
+                        r"看向|望向|转向|护住|扶住|抱住|握紧|抬头|低头)", cue):
+            break
+        cues.append(cue)
+        text = m.group(2).strip()
+    return text, cues
+
+
 def numbered_script(pics):
     """剧本里的台词行编号：【D3】名：句。返回 (编号后的剧本, [(说话人, 句子), ...])。"""
     D, lines = [], []
     for l in merge_split_quotes(pics).splitlines():
         m = _DLG_LINE.match(l.strip())
         if m and not l.startswith("──"):
-            D.append((m.group(1), m.group(3).strip()))
-            lines.append("【D%d】%s：%s" % (len(D), m.group(1), m.group(3).strip()))
+            spoken, cues = dialogue_performance(m.group(3))
+            if m.group(2):
+                cues.insert(0, m.group(2)[1:-1])
+            if cues:
+                lines.append(m.group(1) + "，" + "，".join(cues) + "。")
+            D.append((m.group(1), spoken))
+            lines.append("【D%d】%s：%s" % (len(D), m.group(1), spoken))
         else:
             lines.append(l)
     return "\n".join(lines), D
@@ -1374,7 +1400,7 @@ _PLACE_CLASSES = (("棚", r"棚|柴房|窝棚|茅舍"), ("水", r"河|湖|溪|�
 def split_merged_by_class(main_name, main_space, merged):
     """P419：【归并自】里和主景不同类的地点拆出来：返回 [(新卡名, [别名...])]，同类的留在主景里。
     （海上（水）不能并沙滩（岸）；礁石堆这种判不出类的跟着主景。）"""
-    main_cls = place_class(str(main_name or "") + " " + str(main_space or "")[:40])
+    main_cls = place_class(main_name) or place_class(str(main_space or "")[:40])
     groups = {}
     for m in merged or []:
         c = place_class(m)
@@ -1385,8 +1411,17 @@ def split_merged_by_class(main_name, main_space, merged):
 
 
 def place_class(t):
-    """地点词 → 类别（棚 > 水 > 路 > 院 > 屋 > 山林；「山脚的废草棚」是棚不是山）。"""
-    t = str(t or "")
+    """先认地点名称中的具体空间，再回退到自然地貌；专名里的海/林不抢占正殿/广场。"""
+    t = re.split(r"[，。；\n]", str(t or "").strip(), maxsplit=1)[0]
+    spaces = (("棚", r"柴房|窝棚|茅舍|草棚|棚"),
+              ("岸", r"沙滩|海滩|河滩|码头|渡口|岸边|河岸|湖岸|海岸"),
+              ("路", r"官道|大道|道路|街道|小路|巷|桥"),
+              ("院", r"庭院|院子|花园|草坪|广场|院|园|坪"),
+              ("屋", r"室内|正殿|大殿|大厅|房间|房|屋|堂|殿|厅|阁|楼|寺|庙|洞"),
+              ("水", r"水中|船上|海上|河中|湖中|江中|池塘"))
+    matches = [(m.end(), len(m.group()), c) for c, rx in spaces for m in re.finditer(rx, t)]
+    if matches:
+        return max(matches)[2]
     for c, rx in _PLACE_CLASSES:
         if re.search(rx, t):
             return c

@@ -3320,7 +3320,14 @@ def _pic_parts(pics):
             continue
         if _PIC_DLG.match(line) and len(line) < 120:
             _flush()
-            out.append((True, line))
+            from .oral_story import dialogue_performance
+            m = _PIC_DLG.match(line)
+            spoken, cues = dialogue_performance(m.group(3))
+            if m.group(2):
+                cues.insert(0, m.group(2)[1:-1])
+            if cues:
+                out.append((False, m.group(1) + "，" + "，".join(cues) + "。"))
+            out.append((True, m.group(1) + "：" + spoken))
             continue
         buf.append(line)
     _flush()
@@ -4539,7 +4546,7 @@ def _h3_camera_line(settings, lead=""):
     """摄影行里的机位句。视点从套装表取；电影第三人称/没选就是默认那句。"""
     name, sp = _pov_spec(settings)
     if not sp or name == "电影第三人称":
-        return "机位略低于视线，人物不正对镜头；看人物的时候画面里始终带着环境。"
+        return "第三人称摄影，景别、角度、运动和可见范围按本段【机位】执行。"
     bits = []
     for k in ("camera", "must", "movement"):
         v = str(sp.get(k) or "").strip().rstrip("。")
@@ -4591,6 +4598,11 @@ def _h3_cine(settings, scene_space, lead=""):
             break
     if not look:
         look = (getattr(_sp, "H3_LOOK", None) or {}).get("默认", "")
+    if ((settings or {}).get("_beat") or {}).get("director"):
+        # 导演段的镜头与取景范围由骨架负责；画风保留影像质感与色彩。
+        look = (look.replace("35mm 电影镜头，", "").replace("浅景深，", "").replace("浅景深", "")
+                .replace("人物清晰、背景柔和虚化", "材质层次清晰")
+                .replace("背景柔和虚化", "景深服从本段景别")).strip("，； ")
     # 光：场景描写里带光源的句子（烛/灯/火/窗/日光/月）
     # P372：本段场景卡自己的光优先（整话那句「炭盆火光照亮床铺」曾串到后山野外）
     _el = str((settings or {}).get("_scene_light") or (settings or {}).get("_time_light") or "").strip()
@@ -6134,6 +6146,7 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
     _dd = (_bt or {}).get("director") if _bt else None
     if _dd:
         from . import director_shots as _ds
+        _dd = _ds.fit_dialogue_timing(_dd)
         ins += "\n\n【本段骨架（【机位】行照抄；块数、每块起止秒、每块的事按这个；标了台词的块末写谁嘴唇开合）】\n" + _ds.skeleton_text(_dd, idx)
         if not _dd.get("cast"):
             ins += "\n【本段是空镜】画面里没有人，只拍景和物。"
@@ -6173,7 +6186,8 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
             say_lines.append("%s说：<Subject %d> (S%d) says:<d>[Chinese]%s</d>" % (w, i, i, str(q).strip().strip("“”「」\"")))
     secs = int(round(float(seconds or 10)))
     _layout = (settings or {}).get("_scene_layout") or []
-    _layout_hd = ("【这个地方的位置（戏区）——写清每个人在哪个位置；这一拍只演一件事，人不用换位置】" if (isinstance(settings, dict) and settings.get("_beat"))
+    _layout_hd = ("【这个地方的位置（戏区）——按骨架中的动作写出起点、经过和终点，构图跟随机位】" if _dd else
+                 "【这个地方的位置（戏区）——写清每个人在哪个位置；这一拍只演一件事，人不用换位置】" if (isinstance(settings, dict) and settings.get("_beat"))
                   else "【这个地方的位置（戏区）——每一块写清每个人在哪个位置，随事情推进要在这些位置之间移动】")
     _layout_txt = ("\n" + _layout_hd + "\n" + "\n".join("· " + x for x in _layout)) if _layout else ""
     _wrow = (settings or {}).get("_wardrobe_row") if isinstance(settings, dict) else None
@@ -6273,7 +6287,8 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
     # 会因为主角同时命中两个名单而被判成误改。
     body = ally_side_fix(body, _heroes, [n for n in _allies if n not in _heroes])
     # 朝向守卫：不合格的块只改那一块
-    probs = _tl_facing_problems(body, [c["name"] for c in chars])
+    # 导演骨架已有机位与走位；旧守卫会把脸部特写/移动镜头重写成全身站位介绍。
+    probs = [] if _dd else _tl_facing_problems(body, [c["name"] for c in chars])
     if probs:
         blocks, head, tail = _tl_blocks(body)
         for k, why in probs[:2]:
@@ -14131,9 +14146,13 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
                                 and str(c.get("name")) not in
                                 {str(x.get("name") or "") for x in _present}
                                 and str(c.get("name")) in str(_p or "")]
-        _extra = [] if (_empty_beat or _dcast is not None) else _names_in(p)      # P385：空镜拍不按最终文本补绑人；P435 导演段在场是导演定的
+        _extra = [] if _empty_beat else _names_in(p)
         if _extra:
             _present = list(_present) + _extra
+            if _dcast is not None:
+                # The generated shot can reveal an entering actor omitted by its cast list.
+                # Keep reference bindings and director metadata consistent before one rewrite.
+                settings["_beat"]["director"]["cast"] = [str(c.get("name") or "") for c in _present]
             p = h3_prompt(chunk, _present, [_sc_name] if _sc_name else scene, settings,
                           prev_tail=_tail, scene_image=_sc_has_img,
                           anchor=env_anchor_from_card(_sc_card) if _sc_card else None,

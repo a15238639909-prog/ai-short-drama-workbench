@@ -3,8 +3,8 @@
 
 用户 9-19 看了手写 13 段的前 5 段成片后定：本地链路按手写提示词的格式改。
 手写版和旧「一句一拍」的差别只有一个：输入单位。旧法拿一句话出一拍（4～6 秒硬切，全员参考图，
-结束状态由模型每段现编，程序事后查矛盾）；导演分段拿**一件事**（正文一个段落）出 2～3 段镜头单，
-每段一个连续镜头 11～15 秒、段内机位只运动不切、只列画面里的人、段末状态在同一次调用里连着写。
+结束状态由模型每段现编，程序事后查矛盾）；导演分段拿**一件事**（正文一个段落）出 1～3 段镜头单，
+每段一个连续镜头 4～15 秒、段内机位只运动不切、只列画面里的人、段末状态在同一次调用里连着写。
 
 流程：
   shot_list(pics, scenes, chars, q)        剧本按空行分件 → 每件一次模型调用（带上一段结束状态）→ 解析 → 程序修
@@ -12,7 +12,7 @@
   director 字段：{purpose, camera, cast, blocks:[[a,b,text,[D编号]]], end_state:{名:{pos,facing,hands,posture,side}}, says:[(名,句)]}
   提示词那步（authoring._h3_timeline_body）拿 director 当骨架：模型只扩写时间块，【机位】行和「这一段结束时」由程序写死。
 
-程序做的（模型不做）：秒数=最后一块止点、超 15 按块拆两段、不足 8 并进同地点下一段；台词编号每个只用一次按顺序，
+程序做的（模型不做）：秒数=最后一块止点、超 15 按块拆两段、不足 4 仅并进同地点同机位同在场段；台词编号每个只用一次按顺序，
 漏的补到说话人所在的块；在场只认卡名；地点对场景卡（对不上沿用上一段）；结束状态每个在场的人一行，缺的沿用上一段。"""
 import json
 import os
@@ -29,9 +29,9 @@ _BLOCK_INLINE = re.compile(r"[；;｜|]\s*(?=\d+(?:\.\d+)?\s*[-—–~～]\s*\d+
 _DREF = re.compile(r"[（(【\[]?\s*D\s*(\d+)\s*[）)】\]]?")
 _DQUOTE = re.compile(r"[，,]?\s*[（(【\[]?\s*D\s*(\d+)\s*[）)】\]]?\s*(?:[^：:，。；！？\s]{1,8}[：:]\s*[^。！？\n]*[。！？]?)?")   # P436：「【D1】张明：风浪有点大。」整块
 _SIDE = re.compile(r"画面?(左|右)|(左|右)侧")
-_SHOT_MAP = (("全景", r"全景|远景|大全景|大远景"), ("特写", r"特写|近景|大特写"), ("中景", r"中景|中近景|半身"))
+_SHOT_RE = re.compile(r"大远景|大全景|大特写|中近景|远景|全景|特写|近景|中景|半身")
 _POSTURE = re.compile(r"躺|趴|卧|坐|跪|蹲|站|立|走|跑|行走|骑")
-MIN_SEC, MAX_SEC, TARGET_LO = 8, 15, 11
+MIN_SEC, MAX_SEC, TARGET_LO = 4, 15, 6
 
 
 def _hz(t):
@@ -40,9 +40,9 @@ def _hz(t):
 
 def shot_of(camera):
     t = str(camera or "")
-    for k, rx in _SHOT_MAP:
-        if re.search(rx, t):
-            return k
+    m = _SHOT_RE.search(t)
+    if m:
+        return {"大远景": "远景", "大全景": "全景", "大特写": "特写", "半身": "中景"}.get(m.group(), m.group())
     return "中景"
 
 
@@ -152,27 +152,64 @@ def apply_pov(shots, pov, owner):
     return shots
 
 
+def fit_dialogue_timing(director):
+    """Borrow spare time inside the same shot, preserving actions and total duration."""
+    import copy
+    import math
+    d = copy.deepcopy(director)
+    blocks = d.get("blocks") or []
+    ids = list(dict.fromkeys(n for b in blocks for n in b[3]))
+    speech = dict(zip(ids, d.get("says") or []))
+    lengths = [float(b[1]) - float(b[0]) for b in blocks]
+    minimum = []
+    for b in blocks:
+        lines = [speech[n][1] for n in b[3] if n in speech]
+        count = sum(len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", str(line))) for line in lines)
+        minimum.append(max(2., float(math.ceil(count / 4.5 + .5 * len(lines)))))
+    if not any(lengths[i] < minimum[i] for i in range(len(blocks))):
+        return d
+    if sum(minimum) > sum(lengths):
+        raise ValueError("本镜头对白时间不足，请拆分长台词或延长镜头后再出片")
+    for i in range(len(blocks)):
+        needed = max(0., minimum[i] - lengths[i])
+        if not needed:
+            continue
+        for j in sorted(range(len(blocks)), key=lambda j: lengths[j] - minimum[j], reverse=True):
+            spare = max(0., lengths[j] - minimum[j]) if j != i else 0.
+            take = min(spare, needed)
+            lengths[j] -= take
+            lengths[i] += take
+            needed -= take
+            if needed < .001:
+                break
+    start = float(blocks[0][0]) if blocks else 0.
+    for b, length in zip(blocks, lengths):
+        b[0], b[1] = start, start + length
+        start += length
+    return d
+
+
 def instruction(scene_names, char_items, pov="", owner=""):
     ch = "、".join("%s（%s%s）" % (n, s or "", (str(a) + "岁") if a and a > 0 else "") for n, s, a in char_items) or "剧本里的人"
     return ("你是短剧导演。我给你这一话里的一件事（剧本的一段）、上一段结束时每个人的状态、可用的地点和人物。"
-            "你把这件事拍成 2～3 段视频：每段是一个连续镜头，11～15 秒，一段只讲一个目的。\n"
+            "把这件事按可见变化拍成 1～3 段视频：每段一个连续镜头，4～15 秒，一段一个目的，动作完成就切到下一件有变化的事。\n"
             "每段固定写这几行（行首字样一字不改，<>里换成这一件事的内容）：\n"
-            "【段】地点=<地点名>｜在场=<画面里的人名，顿号分开>｜秒=<11～15>｜机位=<景别，机位高低，固定或推/拉/摇/跟，谁在画面左侧谁在右侧>\n"
+            "【段】地点=<地点名>｜在场=<画面里的人名，顿号分开>｜秒=<4～15>｜机位=<景别，画面拍到的范围，机位高低，固定或推/拉/摇/跟>\n"
             "目的=<这一段让观众知道的一件事，一句>\n"
-            "0-4秒=<谁做什么，对方什么反应；这一块有台词就在句末写编号，如 D3>\n"
-            "4-9秒=<…>\n"
-            "9-13秒=<…>\n"
+            "0-3秒=<谁从哪里做什么到哪里；这一块有台词就在句末写编号，如 D3>\n"
+            "3-6秒=<接下来的动作或结果；这里用6秒示范，实际按动作和台词决定止点>\n"
             "结束=<人名>：<位置>，<面朝谁或哪边>，<手里什么>，<姿势：站/坐/蹲/躺/趴/走>，<画面左侧/右侧/中央>；<下一个人>：…\n"
             "规矩：\n"
-            "1. 每件事 2～3 段；每段 11～15 秒；换地点就换段。\n"
-            "2. 一段一个机位：段内可以推、拉、摇、跟，景别随运动变化；每段 3～4 个时间块，第一块 0 秒就有动作，最后一块的止点等于秒数。\n"
+            "1. 特写和短反应通常4～6秒，移动动作通常6～10秒，长对白按说完所需时间安排，最长15秒；换地点就换段。\n"
+            "2. 一段一个机位，1～4个时间块，0秒开始动作，末块止点等于秒数。景别按任务选：面部或手部细节用特写，移动交锋用全景跟拍，空间变化用远景；近景是胸部以上，特写让脸或关键物占满画面。\n"
             "3. 每块一句话：谁做什么、对方什么反应，都是看得见的动作；心理、比喻、观众已经知道的事（报名字）不拍；同一种情绪只拍一次。\n"
             "4. 台词已编号（D1、D2…），写在它该说的那一块句末；每个编号用一次、按顺序、不跳过；一段最多 3 个编号。\n"
+            "对白时间：按清楚的普通话每秒约4～5个汉字安排，每次换人再留0.5秒；每块的台词都能在这一块内说完，长对白单独留足时间。人物可一边行动一边说话。\n"
             "5. 在场=只写这一段画面里的人；画面外的人只在动作里写「望向画外」。地点只从这些名字里选：%s。人只能是：%s。"
             "剧本里没在这个名单上的群众（村民、路人、几名女子）在时间块里按剧本里的称呼写（几名＋剧本的称呼＋从哪侧走过），在场栏不写他们；名单上的人没在这件事的剧本里出现就不要拉进画面。\n"
-            "6. 结束=每个在场的人一条，从上一段结束时的状态起，本段没改变的项照抄。\n"
+            "6. 结束=每个在场的人一条，实地位置、手中物和动作进度承接上一段；本段发生走动就写到达的位置。\n"
             "7. 姿势和地点相配：水里的人趴着或抱着木板漂，地上的人才站、坐、蹲。\n"
-            "8. 同一地点连着的几段，每个人的画面左右和上一段结束时一样；要换边就在时间块里写出他走过去。\n"
+            "8. 每个机位独立构图；切机位可改变人物在画面中的左右和大小，实地位置与行动方向保持连贯。对白可伴随原文已有动作，其他人在同一时刻完成自己的动作。\n"
             + pov_clause(pov, owner) +
             "只输出段，不解释。") % ("、".join(scene_names or []) or "剧本里的地点", ch)
 
@@ -251,6 +288,9 @@ def parse(raw, scene_names, char_names, D, aliases=None):
                     _set_kv(cur, k, v, aliases)
             else:
                 _set_kv(cur, m.group(1), m.group(2), aliases)
+        elif cur["blocks"] and re.match(r"^[^：:]{1,10}[：:]", st) and len(re.split(r"[，,｜|]", st)) >= 4:
+            # 本地模型偶尔省略“结束=”；保留其已写出的状态，而非回填站立/空手。
+            cur["end_state"].update(parse_end_state(st, aliases))
     return shots
 
 
@@ -294,7 +334,7 @@ def parse_end_state(v, aliases):
         rest = [x for x in parts if x is not side]
         facing = next((x for x in rest if re.match(r"^(面朝|朝|背对|侧对|看向|望向)", x)), "")
         rest2 = [x for x in rest if x != facing]
-        posture = next((x for x in rest2 if re.search(r"^(站|坐|蹲|躺|趴|跪|走|立|半跪|半蹲|俯身|弯腰)", x) or re.fullmatch(r"(站立|站着|坐着|蹲着|躺着|趴着|跪着|行走)", x)), "")
+        posture = next((x for x in rest2 if re.search(r"^(站|坐|蹲|躺|趴|跪|走|跑|奔跑|行走|立|半跪|半蹲|俯身|弯腰)", x)), "")
         rest3 = [x for x in rest2 if x != posture]
         hands = next((x for x in rest3 if re.search(r"手|无|空着|握|拿|提|抓|捧|扶|端|攥|抱", x)), "")
         rest4 = [x for x in rest3 if x != hands]
@@ -495,7 +535,7 @@ def guard_place(shots, ev_text, scene_names, prev_place, char_names=()):
             s["place"] = prev_place                                             # P454⑯：谁都没证据、剧本里也没人换地方 → 接着上一处；有「醒来/走出」才信模型
 
 
-def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_place, aliases=None, ev_text="", char_sex=None, prev_cast=None, char_type=None):
+def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_place, aliases=None, ev_text="", char_sex=None, prev_cast=None, char_type=None, cast_context=""):
     aliases = aliases or _os_.aliases_of(char_names)
     shots = [s for s in shots if s.get("blocks")]
     # ① 块头归整：按顺序连续、最后止点=秒；块内空秒去掉
@@ -517,7 +557,7 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
     guard_place(shots, ev_text, scene_names, prev_place, char_names)           # P454⑦
     for s in shots:
         s["says"] = [(_os_.canon(D[d - 1][0], aliases) or D[d - 1][0], D[d - 1][1]) for b in s["blocks"] for d in b[3] if 1 <= d <= len(D) and d in expect_dids]   # 别件事的编号不算
-    fix_shots.last_cut = guard_cast(shots, ev_text, char_names, char_sex, aliases, prev_place, prev_cast, char_type)   # P454⑥
+    fix_shots.last_cut = guard_cast(shots, ev_text + "\n" + str(cast_context or ""), char_names, char_sex, aliases, prev_place, prev_cast, char_type)
     shots = [s for s in shots if s.get("blocks")]
     # ② 超 15 拆两段（按块边界，靠近一半处）；结束状态前一半留空（后面按上一段补）
     out = []
@@ -547,13 +587,13 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
             s = dict(s, blocks=rest, seconds=sum(b[1] - b[0] for b in rest), purpose=s["purpose"] + "（续）")
         out.append(s)
     shots = out
-    # ③ 不足 8 秒：并进同地点、同在场的下一段（合起来 ≤15）
+    # ③ 不足 4 秒：只合并同地点、同在场、同机位的段（合起来 ≤15）
     out = []
     i = 0
     while i < len(shots):
         s = shots[i]
         nx = shots[i + 1] if i + 1 < len(shots) else None
-        if (s["seconds"] < MIN_SEC and nx and nx["place"] == s["place"] and (set(nx["cast"]) == set(s["cast"]) or s["seconds"] <= 6)
+        if (s["seconds"] < MIN_SEC and nx and nx["place"] == s["place"] and set(nx["cast"]) == set(s["cast"]) and nx["camera"] == s["camera"]
                 and s["seconds"] + nx["seconds"] <= MAX_SEC):
             off = s["seconds"]
             merged = dict(nx, blocks=[list(b) for b in s["blocks"]] + [[b[0] + off, b[1] + off, b[2], list(b[3])] for b in nx["blocks"]],
@@ -564,7 +604,7 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
             i += 1
             continue
         if (s["seconds"] < MIN_SEC and out and out[-1]["place"] == s["place"] and s["seconds"] + out[-1]["seconds"] <= MAX_SEC
-                and (set(out[-1]["cast"]) == set(s["cast"]) or s["seconds"] <= 6)):
+                and set(out[-1]["cast"]) == set(s["cast"]) and out[-1]["camera"] == s["camera"]):
             pv = out[-1]                                                        # P454⑩：没有可并的下一段 → 并进上一段
             off = pv["seconds"]
             pv["blocks"] = pv["blocks"] + [[b[0] + off, b[1] + off, b[2], list(b[3])] for b in s["blocks"]]
@@ -576,7 +616,7 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
         out.append(s)
         i += 1
     shots = out
-    for s in shots:                                                             # P455⑫：并不进去的短段拉到 8 秒
+    for s in shots:                                                             # 并不进去的短段拉到 H3 下限 4 秒
         if 0 < s["seconds"] < MIN_SEC and s["blocks"]:
             _sc = MIN_SEC / s["seconds"]
             t0 = 0.0
@@ -687,20 +727,13 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
             base = state.get(nm) or {}
             for k, dflt in (("pos", "画面中央"), ("facing", "面朝对方"), ("hands", "无"), ("posture", "站立"), ("side", cam_side.get(nm, "画面中央"))):
                 if not e.get(k):
-                    e[k] = base.get(k) or dflt
+                    e[k] = (cam_side.get(nm) or dflt) if k == "side" else (base.get(k) or dflt)
             if not (s["end_state"].get(nm) or {}).get("posture"):
                 mp = re.search(re.escape(_os_.short_name(nm)) + r"[^。；，]{0,14}?(躺|趴|坐|跪|蹲|站起|起身|站)", last_txt)
                 if mp:
                     e["posture"] = {"站起": "站立", "起身": "站立", "站": "站立", "坐": "坐着", "蹲": "蹲着", "跪": "跪着", "躺": "躺着", "趴": "趴着"}[mp.group(1)]
             e["side"] = norm_side(e.get("side"))
-            # P439：同一地点连着的段，左右沿用上一段（骨架里这个人没写走位/换边就不许换）
-            _pv = (state.get(nm) or {}).get("side")
-            if _pv and _pv != e["side"] and s["place"] == (prev_place_now or s["place"]) and not re.search(
-                    re.escape(_os_.short_name(nm)) + r"[^。；]{0,12}(走到|走向|换到|绕到|退到|挪到|移到|跑到|站到|坐到|转到|来到)", " ".join(b[2] for b in s["blocks"])):
-                e["side"] = _pv
-                _w = "左" if "左" in _pv else "右"
-                s["camera"] = re.sub(r"(" + re.escape(_os_.short_name(nm)) + r"(?:在|位于|处于)(?:画面)?)(左|右)", lambda mm: mm.group(1) + _w, str(s.get("camera") or ""))   # 机位行跟着改
-                e["pos"] = re.sub(r"(左|右)(侧|边|方)?$", lambda mm: _w + (mm.group(2) or ""), str(e.get("pos") or "")) if re.search(r"(左|右)(侧|边|方)?$", str(e.get("pos") or "")) else e.get("pos")
+            # 画面左右属于本段机位；实地位置和手中物仍由上面的状态继承。
             es[nm] = e
         s["end_state"] = es
         state.update(es)
@@ -811,8 +844,8 @@ def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=
     for i, ev in enumerate(events):
         dids = sorted({int(x) for x in re.findall(r"【D(\d+)】", ev)})
         dl = "\n".join("D%d %s：%s" % (d, D[d - 1][0], D[d - 1][1]) for d in dids) or "无"
-        _kmin = max(2, -(-len(dids) // 3))
-        _tailrule = ("这是最后一件事：最后一段可以用拉远或定格收尾。" if i == len(events) - 1 else "这不是最后一件事：不写拉远、定格、日出这类收尾镜头。")
+        _kmin = max(1, -(-len(dids) // 3))
+        _tailrule = ("这是最后一件事：在事件完成的可见结果处收尾。" if i == len(events) - 1 else "这是中间事件：动作结果直接接下一件事；拉远用于交代空间变化。")
         _cnt = ("【这件事有 %d 句台词 → 至少分 %d 段，每段最多 3 句台词】%s" % (len(dids), _kmin, _tailrule)) if dids else ("【这件事没有台词】" + _tailrule)
         _pt = (event_points[i] if event_points and i < len(event_points) else "")
         user = ("【这一件事的剧本】（第 %d 件，共 %d 件）\n%s\n%s%s\n【上一段结束时】%s\n\n【地点】%s\n【人物】%s\n【台词编号】\n%s"
@@ -835,7 +868,7 @@ def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=
             if shots2 and len(missing_points(_pt, shots2)) <= len(_miss):
                 shots, raw = shots2, raw + "\n\n===== 补要点重出 =====\n" + raw2          # P441b：不比原来差就用重出的
             _miss = missing_points(_pt, shots) if shots else _miss
-        shots, state = fix_shots(shots, D, set(dids), scene_names, char_names, state, prev_place, aliases, ev_text=ev, char_sex=char_sex, prev_cast=prev_cast, char_type=char_type)
+        shots, state = fix_shots(shots, D, set(dids), scene_names, char_names, state, prev_place, aliases, ev_text=ev, char_sex=char_sex, prev_cast=prev_cast, char_type=char_type, cast_context=_pt)
         shots = apply_pov(shots, pov, owner)                                 # P461：按视点钉死在场和机位行
         log.append({"event": i + 1, "raw": raw, "shots": shots, "missing": _miss, "cut_cast": list(getattr(fix_shots, "last_cut", []) or [])})
         if shots:
@@ -966,7 +999,7 @@ def assemble(body, d, chars, say_lines_by_d, scene_space=""):
         t = re.sub(r"(?m)[；;，,]\s*无\s*$", "。", t)
         if not t:
             t = sktxt
-        t = ensure_env(t, scene_space)                                                              # P446：每块带环境
+        # 场景已在参考绑定和输入中给出；可见范围由机位决定，特写不补远处背景。
         if a == 0 and not _ACT_RE.search(t[:30]) and _ACT_RE.search(sktxt):
             _k8 = _hz(sktxt)[:8]
             _sents = [x for x in re.split(r"(?<=[。；！？])", t) if x.strip()]
