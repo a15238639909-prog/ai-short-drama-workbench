@@ -1,0 +1,185 @@
+{
+ "129": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "DasiwaMinimaxH3_dasiwaREF2VAHybridV1.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "142": {
+  "class_type": "ReservedVRAMSetter",
+  "inputs": {
+   "anything": [
+    "129",
+    0
+   ],
+   "reserved": 1,
+   "mode": "manual",
+   "seed": 95023784637039,
+   "auto_max_reserved": 0,
+   "clean_gpu_before": true
+  }
+ },
+ "147": {
+  "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+  "inputs": {
+   "model": [
+    "142",
+    0
+   ]
+  }
+ },
+ "132": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  }
+ },
+ "131": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+  }
+ },
+ "130": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  }
+ },
+ "153": {
+  "class_type": "MiniMaxH3ReferenceToVideo",
+  "inputs": {
+   "clip": [
+    "132",
+    0
+   ],
+   "vae": [
+    "131",
+    0
+   ],
+   "audio_vae": [
+    "130",
+    0
+   ],
+   "prompt": "test",
+   "width": 1344,
+   "height": 768,
+   "length": 124,
+   "ref_image_size": "match"
+  }
+ },
+ "138": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "147",
+    0
+   ],
+   "conditioning": [
+    "153",
+    0
+   ]
+  }
+ },
+ "139": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 488357386810245
+  }
+ },
+ "140": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "141": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "147",
+    0
+   ],
+   "scheduler": "beta",
+   "steps": 25,
+   "denoise": 1
+  }
+ },
+ "144": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "139",
+    0
+   ],
+   "guider": [
+    "138",
+    0
+   ],
+   "sampler": [
+    "140",
+    0
+   ],
+   "sigmas": [
+    "141",
+    0
+   ],
+   "latent_image": [
+    "153",
+    1
+   ]
+  }
+ },
+ "145": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "144",
+    0
+   ],
+   "vae": [
+    "131",
+    0
+   ]
+  }
+ },
+ "146": {
+  "class_type": "VAEDecodeAudio",
+  "inputs": {
+   "samples": [
+    "144",
+    0
+   ],
+   "vae": [
+    "130",
+    0
+   ]
+  }
+ },
+ "149": {
+  "class_type": "VHS_VideoCombine",
+  "inputs": {
+   "images": [
+    "145",
+    0
+   ],
+   "audio": [
+    "146",
+    0
+   ],
+   "frame_rate": 24,
+   "loop_count": 0,
+   "filename_prefix": "MiniMaxH3/workbench",
+   "format": "video/h264-mp4",
+   "pingpong": false,
+   "save_output": true,
+   "pix_fmt": "yuv420p",
+   "crf": 19,
+   "save_metadata": true,
+   "trim_to_audio": false
+  }
+ }
+}

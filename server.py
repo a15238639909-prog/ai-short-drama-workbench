@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # 版本号：发布用。改功能就改这里，和 发布说明.md 对得上。
-_VERSION = "v1.02"
+_VERSION = "v1.03"
 PORT = int(os.environ.get("V41_PORT", "8853"))
 WEB = ROOT / "web"
 
@@ -35,10 +35,8 @@ api.load_all()
 # 从而与 v41 自己的 /api/* 完全不冲突。
 _APP = None
 try:
-    # app.py 在哪：先听 config.json / 环境变量里的 legacy_root（独立包里放在
-    # _legacy_8848/ 下），没配才退回父目录（原地部署时就是 D:\小说写作台）。
-    # 2026-09-05：独立抽取时四大模块跟着一起走，不能再写死父目录。
-    _APP_DIR = str(ROOT.parent)
+    # 优先使用显式配置的兼容工具目录，否则加载随包发布的四大工具。
+    _APP_DIR = str(ROOT / "_legacy_8848")
     try:
         from cores import paths as _paths
         _cand = _paths.get("legacy_root")
@@ -53,7 +51,7 @@ except Exception as _app_err:  # 导入失败不拖垮 v41，仅四大模块不�
     # 旧版 8848 的四大工具是**可选**的：独立部署时根本没有 app.py，
     # 原来这里打印"导入失败"，新用户一开机就以为坏了（2026-09-05）。
     if isinstance(_app_err, ImportError) and "app" in str(_app_err):
-        print("[提示] 未挂载旧版四大工具（可选，独立部署不需要）")
+        print("[提示] 内置工具文件不完整，请重新解压完整源码包（_legacy_8848）")
     else:
         print("[legacy] app.py 导入失败，四大模块暂不可用：", _app_err)
     _APP = None
@@ -137,6 +135,7 @@ def _legacy_html():
     global _LEGACY_HTML_CACHE
     if _LEGACY_HTML_CACHE is None:
         html = _APP.HTML
+        html = html.replace('src="/photo_v1_ui.js"', 'src="/legacy/photo_v1_ui.js"')
         html = html.replace('<head><meta charset="utf-8">',
                             '<head><meta charset="utf-8">' + _LEGACY_SHIM, 1)
         html = html.replace('</body></html>', _LEGACY_BOOT + '</body></html>', 1)
