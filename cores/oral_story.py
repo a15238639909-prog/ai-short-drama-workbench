@@ -300,6 +300,52 @@ def events_of(brief, q=None, on_step=None):
     return group_events(event_card(brief), q, on_step)
 
 
+def plan_episode(brief, q, settings=None, previous=None, on_step=None):
+    """One bounded planning call: separate design constraints from causal story events."""
+    settings = settings or {}
+    if on_step:
+        on_step("区分人物场景要求，规划本话的因果事件")
+    instruction = (
+        '你是短剧编剧，先整理用户的一句话或口述，再规划这一话。只输出JSON：'
+        '{"mode":"idea或outline","context":["人物、场景、画风等要求"],'
+        '"events":[{"text":"谁采取什么行动，遇到什么，并造成什么结果",'
+        '"cause":"承接前一件事的具体原因","change":"这件事新增的线索、处境或决定"}]}。\n'
+        '先区分：标题、题材、年龄、外貌、服装、画风、拍摄要求属于context；events只写真正发生的行动与结果。'
+        '混在同一句里的身份和剧情分别整理，人物与场景要求完整保留。\n'
+        '用户只给设想、目标或开场时用idea：围绕同一个目标发展较完整的因果事件链，通常6～9件作为参考，实际按故事需要，'
+        '写清触发问题、主动尝试、实际阻碍、根据新线索改变办法、付诸行动、结果。'
+        '每件约40～80字，变化来自具体行动；内容较长时增加有效进展，而不是多轮询问确认。'
+        '新增阻碍服务原来的题材和目标，普通行动故事也可用方法失败、资源不足和协作推进。\n'
+        '用户已讲明过程、顺序或结尾，或明确只拍一个动作时用outline：忠实整理原有事件，'
+        '关键行为可拆出因果步骤，保持指定的动机、顺序、身份、解法和结局。简单事件可以保持短篇。'
+        '原话台词保留在对应事件，字句保持原样。\n'
+        '每件事的change写具体的变化，例如“旧路封闭，改走排水渠”，而不是“气氛紧张”。'
+        '物件位置、谁拿着什么、已经完成的动作逐件向后承接。'
+        '过渡与最后一次确认并入相邻事件；末事件实际完成本话目标，写清异常原因或问题的解决结果；准备明天行动属于中途步骤。'
+        '已有角色和上一话结尾是固定事实；用户指定的角色、场景范围优先。'
+    )
+    request = {"本话口述": str(brief), "项目要求": {k: settings.get(k) for k in
+               ("world_type", "style", "extra_requirements", "episode_notes", "_cast_names") if settings.get(k)},
+               "上一话结尾": str(settings.get("_ledger_prev") or "") or
+               (str((previous or [])[-1].get("原文") or "")[-1200:] if previous else "")}
+    obj = _json_obj(q(instruction, json.dumps(request, ensure_ascii=False), mt=2400, temperature=0.35))
+    mode, raw_events = obj.get("mode"), obj.get("events")
+    if mode not in ("idea", "outline") or not isinstance(raw_events, list) or not raw_events:
+        raise ValueError("本话事件规划格式不完整，请重新生成文字；未覆盖已有正文")
+    context = obj.get("context")
+    if not isinstance(context, list) or any(not isinstance(x, str) for x in context):
+        raise ValueError("人物场景要求未正确分离，请重新生成文字")
+    events = []
+    for item in raw_events:
+        if not isinstance(item, dict) or any(not isinstance(item.get(k), str) or not item[k].strip()
+                                             for k in ("text", "cause", "change")):
+            raise ValueError("事件缺少行动、原因或结果，请重新生成文字")
+        if any(_norm_cn(item["text"]) == _norm_cn(e["text"]) for e in events):
+            raise ValueError("本话规划出现重复事件，请重新生成文字")
+        events.append(dict(item, n=len(events) + 1))
+    return {"mode": mode, "context": context, "events": events}
+
+
 # ═══════════════ ①c 段落中间的台词提行（P454②） ═══════════════
 # 项目1：写手把台词写成「她开口，嗓音清脆。女：你是我们的俘虏。女：怎么擅自出来了？她保持着…」——不带引号、不独立成行、
 # 说话人写成「女 / 少年 / 精灵 / 队长」。台词编号器只认行首「卡名：」，16 句一句没认出，整话哑剧。
@@ -481,8 +527,8 @@ def sex_from_brief(brief, names):
 
 
 _PACE_TELL = {
-    "舒缓": "文戏为主：每件事至少两轮对白（一问一答算一轮），多写表情和反应；动作句少、动作小（递、接、看、点头），不写走位；口述里写了「快一点」的那件事照快写",
-    "紧凑": "动作为主：每一段都有人在做具体的事，动作句连着写；你自己补的台词短（一句不超过十个字）、少，口述里的原话台词照原样写、不缩短；不写停顿、不写心理、不写站着等着；口述里写了「慢慢来」的那件事照慢写",
+    "舒缓": "给关键交流、观察与选择留空间；人物说话时继续手里的事，回应带来新的信息或决定。过渡简洁，口述指定的快慢优先",
+    "紧凑": "压缩等待、赶路与重复反应，行动和对白接着推进；用短问答交代目的、线索和行动理由，重要交流完整保留。人物边行动边说话，口述指定的快慢优先",
 }
 
 
@@ -495,26 +541,26 @@ def words_range(prose_words):
 
 
 def writer_extras(events, pace="适中", prose_words=None, quotes=None):
-    """给写手的可数规则（并入 universal_writer 的输入表）。P404：节奏同时决定讲法（对白多还是动作多）。
-    P420：篇幅取「事件数×节奏」和项目设置 prose_words（默认 3000～4000）两者的大者——用户要前因后果完整的一话，不是提纲。"""
-    per = _PER_EVENT.get(str(pace or "适中"), 260)
+    """篇幅是整话参考，按因果的重要程度分配，事件数量不再乘固定字数。"""
     n = max(1, len(events or []))
-    total = per * n
     _lo, _hi = words_range(prose_words)
-    if _lo and _lo > total:
-        total = int((_lo + _hi) / 2) if _hi >= _lo else _lo
+    if not _lo:
+        _lo, _hi = 1200, 1800
     _tell = _PACE_TELL.get(str(pace or ""), "")
     return dict(({"讲法（本话节奏：%s）" % pace: _tell} if _tell else {}), **{
         "本话事件卡（按编号顺序各写成 1～3 段；每一件都要写出现场过程，一件不少、顺序不变）":
             {str(e["n"]): e["text"] for e in (events or [])},
         "本话止于": "事件 %d 写完就结束，之后的事一句不写" % n,
-        "不许照抄": "事件卡的原句是给你的提纲，不许原样抄进正文当段落；每一件事都要写成有地点、动作、对白的现场，第一件事也一样",
-        "每件事的篇幅": "每件事约 %d 字，写成现场：这件事为什么发生、谁做了什么说了什么、做完后局面变成什么样，三样都在正文里体现出来" % int(total / n),
+        "现场写法": "事件卡作为因果提纲；正文写人物正在采取的行动、必要对白和实际后果。人物身份和场景设定随行动带出",
+        "篇幅分配": "关键尝试、阻碍、选择和结果展开，赶路、收拾、点头和确认简写。每件事按内容分配篇幅，一次事件结束便进入其造成的下一步",
+        "事件因果与落点": [{"事件": e["n"], "原因": e.get("cause", ""), "实际变化": e.get("change", "")}
+                         for e in (events or []) if e.get("change")],
         "允许补充的四类": "对白、动作、周围环境、表情反应。人物只有事件卡里出现的（可以给他们取名字）；路人不说话、不取名",
-        "对白的写法": "每句对白单独占一行，写成「名字：台词」，名字用人物表里的名字；一行只有一句话；每句对白写在它发生的那个动作后面，前后各有一句动作或反应，每句只写一次",   # P454②⑭
+        "对白的写法": "每个发言单独占一行，写成「名字：台词」，名字用人物表里的名字；对白安排在对应行动发生时，提示、决定在执行之前，确认在结果之后。一次交流与连续动作放在同一个自然段，事件进展后再空行换段",
+        "有效对白": "把关键互动写成问答、提醒、分歧或决定，让观众听懂人物想做什么、依据是什么、下一步怎么做。新增台词通常每句8～24字，条件和原因说完整；原话照原样保留。台词传达判断，画面展示依据和行动，二者提供互补信息；纯动作和独处保留自然的无对白段落，用户明确的对白要求优先",
         **({"口述原话台词（一字不改、不缩短，原样写进对白）": list(quotes)} if quotes else {}),                                                        # P455①
         "数字的写法": "事件卡没给的银两数、年限、天数、招式名、门规一律不写具体数，用「一些银钱」「些时日」这类说法",
-        "篇幅": "约 %d～%d 字" % (int(total * 0.8), int(total * 1.2)),
+        "篇幅": "约 %d～%d 字，作为整话参考；以事件发展完整为准，简单剧情可以更短" % (_lo, _hi),
     })
 
 
@@ -630,6 +676,17 @@ def _repair(prose, events, rep, q):
         return prose
     if not obj:
         return prose
+    # 模型偶尔把4个输入段重编号成8段。部分应用会丢掉后半故事，整批拒绝错误编号。
+    patches = obj.get("patches") or []
+    inserts = obj.get("insert_after") or []
+    try:
+        ids = [int(it["paragraph_id"]) for it in patches]
+        if len(ids) != len(set(ids)) or any(not 1 <= k <= len(paras) for k in ids):
+            return prose
+        if any(not 0 <= int(it["paragraph_id"]) <= len(paras) for it in inserts):
+            return prose
+    except (KeyError, TypeError, ValueError):
+        return prose
     new = list(paras)
     for it in obj.get("patches") or []:
         try:
@@ -654,11 +711,11 @@ def _repair(prose, events, rep, q):
 _ENDING_MARK = re.compile(r"日子一天天过去|从此以后|从此，|故事，?在这一刻|画上句号|新的生活|明天太阳升起|多年以后|后来的日子|岁月静好|他们的故事|再见，?荒岛|一切归于")
 
 
-_TABLE_KEY = "每件事的状态与对白（照此写正文：对白原样用上、顺序不变，可以在中间加动作、旁白和环境；每件事的称呼和关系按它的【状态】写，后面事件才出现的称呼不许提前用；一件事写完再写下一件，不回头重写前面的事）"
+_TABLE_KEY = "每件事的状态与对白参考（按状态承接行动，用户原话原样保留；其余对白按剧情作用选用，已由动作讲清的信息简写；一次事件只演一遍）"
 
 
 def status_dialogue_table(events, q, quotes=None):
-    """P429 写法 H：每件事一行【状态】（称呼、关系到哪一步、谁动手）+ 2～4 轮对白。一次模型调用，返回表文本（失败返回空串）。
+    """每件事的状态与必要对白，一次模型调用；对白数量由信息作用决定。
     P455①：口述里的原话台词一并给，要求原样放进对白。"""
     lines = [str(e.get("text") if isinstance(e, dict) else e).strip() for e in (events or [])]
     lines = [l for l in lines if l]
@@ -666,12 +723,16 @@ def status_dialogue_table(events, q, quotes=None):
         return ""
     sysm = ("你是编剧。给下面每件事写两样东西，只按给的事写，不加人物、不加事件、不写结局之外的事。每件事的格式：\n"
             "【事件N】原句\n【状态】这件事发生时人物之间怎么称呼、关系到哪一步、这件事由谁动手（比如：三个女孩还没接受他，只叫「你」「喂」，不喊张哥；拜师前不叫师父；推门的是莉娅）\n"
-            "对白：这件事里 2～4 轮对白（一问一答算一轮），每行「名字：台词」，口语、短，只用事件里的人物，称呼必须符合【状态】。\n只输出这些。")
+            "对白：先确定这件事的变化，再写需要说出来的试探、理由、分歧或决定。通常关键交流2～4句，动作和过渡0～1句，具体数量按信息需要；连续争执或长解释按用户内容保留。每行「名字：台词」，通常8～24字，原因和条件说完整。"
+            "只用事件里的人物，称呼符合【状态】，知识来自此时已经发生或看到的事。每轮推进目的、证据、分歧、选择中的一项，回应承接上一句；人物一边做事一边交流。"
+            "对白按原文动作顺序安排：看到线索以后辨认，听到声音以后回应，确认依据以后作决定；后来才出现的信息留在后面的对白。对白说明判断与意图，动作展现证据与结果。原文明确要求安静时按原文。\n只输出这些。")
     if quotes:
         sysm += "\n口述里已经写好的原话台词（下面列出）必须原样放进对应那件事的对白里，一个字不改、不缩短、不拆散；其余对白你补。"
-        lines = lines + ["", "【口述原话台词】"] + ["「%s」" % x for x in quotes]
+    user = "【事件】\n" + "\n".join("%d. %s" % (i, l) for i, l in enumerate(lines, 1))
+    if quotes:
+        user += "\n\n【口述原话台词（对应事件中使用，不另算事件）】\n" + "\n".join("「%s」" % x for x in quotes)
     try:
-        t = str(q(sysm, "\n".join("%d. %s" % (i, l) for i, l in enumerate(lines, 1)), mt=2500, temperature=0.4) or "").strip()
+        t = str(q(sysm, user, mt=2500, temperature=0.4) or "").strip()
     except Exception:
         return ""
     return t if "【状态】" in t or "对白" in t else ""
@@ -697,7 +758,7 @@ def strip_echo_paragraphs(prose, events):
     return ("\n\n".join(keep) if keep else prose), dropped
 
 
-def fidelity_pass(prose, events, q, brief="", on_step=None, rounds=1):
+def fidelity_pass(prose, events, q, brief="", on_step=None, rounds=1, preserve_story=False):
     """核对 + 修 + 砍越界。返回 (正文, 报告)。永远返回一份正文，不打回。"""
     brief = brief or " ".join(e["text"] for e in events)
     quotes = quoted_lines_all(brief, q)                                         # P455①；P456：代码 ∪ 千问
@@ -733,13 +794,13 @@ def fidelity_pass(prose, events, q, brief="", on_step=None, rounds=1):
     # P421：收尾式蒙太奇（「日子一天天过去」「故事画上句号」「新的生活」）从标志句起整段砍掉——写手把最后一件事写完还要写以后
     _first_last = min(last_ps) if last_ps else 0
     _mark = next((i for i, p in enumerate(paras, 1) if i > _first_last and _ENDING_MARK.search(p)), 0)
-    if _mark:
+    if _mark and not preserve_story:
         paras = paras[:_mark - 1]
         prose = "\n\n".join(paras)
         rep["ending_cut_from"] = _mark
         mp = {k: [x for x in v if x < _mark] for k, v in mp.items()}
         last_ps = mp.get(last_n) or []
-    if last_ps:
+    if last_ps and not preserve_story:
         last_par = max(last_ps)
         cut = [i for i in range(last_par + 1, len(paras) + 1) if i in set(rep.get("beyond") or [])]
         # beyond 没报但明显在最后事件之后还有很多段 → 也砍（保留最后事件所在段及其后一段作收尾）

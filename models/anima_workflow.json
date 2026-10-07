@@ -1,0 +1,11 @@
+{
+  "44": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima_baseV10.safetensors", "weight_dtype": "default"}},
+  "45": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "stable_diffusion", "device": "default"}},
+  "15": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+  "11": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["45", 0], "text": ""}},
+  "12": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["45", 0], "text": "score_1, score_2, score_3, bad anatomy, bad proportions, deformed anatomy, deformed face, deformed eyes, text, multiple fingers, watermark, artist name"}},
+  "28": {"class_type": "EmptyLatentImage", "inputs": {"width": 1920, "height": 1128, "batch_size": 1}},
+  "63": {"class_type": "KSampler", "inputs": {"model": ["44", 0], "positive": ["11", 0], "negative": ["12", 0], "latent_image": ["28", 0], "seed": 1, "steps": 40, "cfg": 5, "sampler_name": "er_sde", "scheduler": "beta", "denoise": 1}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["63", 0], "vae": ["15", 0]}},
+  "99": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "Anima-Workbench"}}
+}

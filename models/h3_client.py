@@ -204,10 +204,20 @@ def _http(method, path, data=None, timeout=60):
 
 
 def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
-                   filename_prefix=None, size_tier=None, steps=None):
+                   filename_prefix=None, size_tier=None, steps=None, reference_videos=None, exact_frames=None):
     """装配 H3 工作流。images 为本地图片路径列表（正式制作=Reference Pack）。"""
     mode = str(mode or "t2va").lower()
+    # Motion-transfer opt-in only. Existing story generation keeps its frame policy.
+    if exact_frames is not None:
+        if mode != 'ref2va' or not isinstance(exact_frames, int) or not 107 <= exact_frames <= 362 or exact_frames % 17 != 5:
+            raise ValueError('动作迁移帧数须为107～362之间的17n+5')
+    frame_count = exact_frames if exact_frames is not None else _aligned_frames(seconds)
     images = list(images or [])
+    reference_videos = list(reference_videos or [])
+    if reference_videos and mode != 'ref2va':
+        raise ValueError('参考视频只用于ref2va模式')
+    if len(reference_videos) > 3:
+        raise ValueError('参考视频最多3段')
     if mode == "t2va":
         graph = json.loads((TEMPLATES / "t2va.json").read_text(encoding="utf-8"))
         _, h3 = _find_node(graph, "MiniMaxH3ImageToVideo")
@@ -226,8 +236,8 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
         else:
             h3["inputs"].pop("last_frame", None)
     else:  # ref2va 全能参考
-        if not images:
-            raise RuntimeError("全能参考需要参考图")
+        if not images and not reference_videos:
+            raise RuntimeError("全能参考需要参考图或参考视频")
         if len(images) > 9:
             raise RuntimeError("参考图最多 9 张")
         graph = json.loads((TEMPLATES / "ref2va.json").read_text(encoding="utf-8"))
@@ -236,6 +246,14 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
             fname = _copy_to_input(item, "refimg%d" % (i + 1))
             h3["inputs"]["ref_images.ref_image_%d" % i] = _add_load_image(graph, fname)
         h3["inputs"]["ref_image_size"] = "match"
+        for i, video in enumerate(reference_videos):
+            # motion_core prepares a bounded 24fps clip; H3 receives the full frame batch.
+            fname = _copy_to_input(video, 'refvideo%d' % (i + 1))
+            nid = str(max(int(k) for k in graph if str(k).isdigit()) + 1)
+            cid = str(int(nid) + 1)
+            graph[nid] = {'class_type': 'LoadVideo', 'inputs': {'file': fname}}
+            graph[cid] = {'class_type': 'GetVideoComponents', 'inputs': {'video': [nid, 0]}}
+            h3['inputs']['ref_videos.ref_video_%d' % i] = [cid, 0]
     if not h3:
         raise RuntimeError("模板缺少 H3 主节点")
     ratio = ratio or DEFAULT_RATIO
@@ -244,7 +262,7 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
     w, h = _sized(ratio, size_tier)
     h3["inputs"].update({"prompt": str(prompt or "").strip(),
                          "width": int(w), "height": int(h),
-                         "length": _aligned_frames(seconds)})
+                         "length": frame_count})
     _, noise = _find_node(graph, "RandomNoise")
     used_seed = int(seed if seed is not None else random.randint(1, 2**48 - 1))
     if noise:
@@ -256,7 +274,7 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
     _, combine = _find_node(graph, "VHS_VideoCombine")
     if combine:
         combine["inputs"]["filename_prefix"] = filename_prefix or ("MiniMaxH3/v41_" + time.strftime("%Y%m%d_%H%M%S"))
-    return graph, {"mode": mode, "width": w, "height": h, "frames": _aligned_frames(seconds),
+    return graph, {"mode": mode, "width": w, "height": h, "frames": frame_count,
                    "seconds": max(4, min(15, int(round(float(seconds))))),
                    "seed": used_seed,
                    "size_tier": (size_tier if size_tier is not None else SIZE_TIER),
@@ -312,7 +330,7 @@ def start_h3(timeout=240):
 
 
 def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeout=3600,
-             size_tier=None, steps=None):
+             size_tier=None, steps=None, reference_videos=None, exact_frames=None):
     """提交一次 H3 生成，轮询并复制 mp4 到 outputs/video。"""
     from cores.age_policy import assert_model_request
 
@@ -323,7 +341,7 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
     from . import gpu_manager as _gm
     _gm.acquire("h3", note="generate")                 # P273 用模型也要过占卡闸
     graph, meta = build_workflow(mode, prompt, images, seconds, ratio, seed,
-                                 size_tier=size_tier, steps=steps)
+                                 size_tier=size_tier, steps=steps, reference_videos=reference_videos, exact_frames=exact_frames)
     # P267：计时从提交算起（含排队/加载模型），步数读图里的实际值——steps=None 时是模板的 25，
     # 记「None」下次 rate_for 就对不上档
     _t0 = time.time()

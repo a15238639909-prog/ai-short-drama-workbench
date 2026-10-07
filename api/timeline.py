@@ -1001,7 +1001,7 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
     except _Cancelled:
         raise
     except Exception as ex:
-        j.setdefault("logs", []).append({"level": "error", "msg": "补参考图失败（照旧尝试出片）：%s" % str(ex)[:120]})
+        j.setdefault("logs", []).append({"level": "error", "msg": "补参考图失败，出片前检查必需图片是否齐全：%s" % str(ex)[:120]})
         return
 
     # 人物
@@ -1049,6 +1049,11 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
         raise
     except Exception as ex:
         j.setdefault("logs", []).append({"level": "error", "msg": "补参考图失败（照旧尝试出片）：%s" % str(ex)[:120]})
+
+
+    # 自动补图可以分别失败，但缺图不能静默进入 H3。
+    from cores import reference_ready
+    reference_ready.assert_references(sid, tg)
 
 
 def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):

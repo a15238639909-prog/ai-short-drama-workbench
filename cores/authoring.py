@@ -6204,7 +6204,8 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
             _wtxt = "\n【本段衣着（每一块照这个写身上的样子；有变化的那一块写出脱/换的动作）】\n" + "\n".join(_wl)
     _seam_txt = ""
     if _sv2.on():
-        _seam_txt = _sv2.seam_brief((settings or {}).get("_seam") or {}, [c["name"] for c in chars])     # P331：接缝要求 + 结束模板
+        _seam_txt = (_ds.director_seam_brief(_dd) if _dd else
+                     _sv2.seam_brief((settings or {}).get("_seam") or {}, [c["name"] for c in chars]))
         scene_space = _sv2.strip_cast_sentences(scene_space, [c["name"] for c in chars])                  # 场景卡里混进的人物姿势句不给导演
     user = ("【时长】约 %d 秒（最后一块的结束秒数写 %d）\n【场景】%s；%s%s%s\n【人物卡摘要】\n%s\n【上一段结束时的状态】%s\n%s\n【画面稿】\n%s\n\n【台词行原文（一字不改、连格式放进对应时间块，不再用引号写一遍）】\n%s"
             % (secs, secs, scene_name, str(scene_space or "")[:300], _layout_txt, _wtxt, _chars_digest(chars, _wrow, (settings or {}).get("_ledger_people") if isinstance(settings, dict) else None)[:1400],
@@ -11700,8 +11701,6 @@ def _gen_char_images(sid, cards, settings, on_step=None):
     """两阶段：先用 Qwen 批量写完所有人设图提示词，再切到 Krea 批量出图。
     避免每个角色都在 Qwen↔Krea 之间来回切模型（每次约 35 秒）。"""
 
-    assert_allowed(cards=cards, settings=settings, media="image_prompt")
-
     import os
     import shutil
     from . import asset_core
@@ -11750,6 +11749,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
         sheet = None
         for attempt in (1, 2):
             try:
+                # 一张卡未通过校验只影响该角色；原有年龄/内容校验照常执行。
+                assert_allowed(cards=[c], settings=settings, media="image_prompt")
                 manual = str(c.get("prompt_override") or "").strip()
                 sheet = manual or write_char_sheet(sid, c, settings)
                 break
@@ -11789,7 +11790,7 @@ def _gen_char_images(sid, cards, settings, on_step=None):
     return {"ok": len(jobs) - len([f for f in failed if "出图" in f]), "failed": failed}
 
 
-def gen_char_images(sid, only_missing=True, on_step=None):
+def gen_char_images(sid, only_missing=True, on_step=None, ep=None):
     """给这个项目的人物出人设图。only_missing=True 时只补还没有图的那些。
     （偶发失败后用它补图，不用把整个故事重跑一遍。）"""
     from . import story_core, asset_core
@@ -11799,11 +11800,11 @@ def gen_char_images(sid, only_missing=True, on_step=None):
             on_step("项目设置 no_images：跳过人设图")
         return {"ok": 0, "failed": [], "skipped": "no_images"}                  # P429：只做文字
     settings = st.get("settings") or {}
-    have = set()
-    for v in asset_core.list_assets(sid, "visuals"):
-        if v.get("status") == "adopted" and str(v.get("kind") or "").startswith("character"):
-            have.add(v.get("owner_id"))
-    cards = [c for c in asset_core.list_assets(sid, "characters")
+    from . import reference_ready
+    have = reference_ready.adopted_paths(sid, "character")
+    source = (reference_ready.required_characters(sid, ep) if ep is not None
+              else asset_core.list_assets(sid, "characters"))
+    cards = [c for c in source
              if not c.get("auto_incidental")
              and not (only_missing and c.get("character_id") in have)]
     if not cards:
@@ -13982,7 +13983,7 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
                 settings["_beat"]["director"] = slices[k]["director"]                                   # P435：导演骨架
             if slices[k].get("cut"):
                 _relay_prev = None         # 硬切：不带上一段末帧、不接力；上一段的尾句照给（人在哪、躺着还是站着——P371 项目217 实测丢了就来回跳）
-            if slices[k].get("establish") and k > 0:
+            if slices[k].get("establish") and k > 0 and not isinstance(slices[k].get("director"), dict):
                 # P387①：换了地方的第一拍——「转场」＝时间过去了；位置/姿势/托举背负都不沿用（破屋 10 拍背着人对话）
                 _tail = "（换了地方、过了些时候：每个人的位置和姿势按这一拍和【场景】重新安排，不沿用上一段的托举、背负、站位）"
         _wp = settings.get("_wardrobe_plan") or []

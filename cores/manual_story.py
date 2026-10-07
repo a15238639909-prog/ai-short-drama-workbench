@@ -103,12 +103,12 @@ def write(sid, no, on_step=None):
             settings["_ledger_prev"] = _ledg.text(sid, no - 1)
         except Exception:
             settings["_ledger_prev"] = ""
-    # P454①：口述先切句再归并成"事"（模型只回分组编号，程序合并原句）；写手表、写手篇幅、核对、导演分段都用这一份
-    try:
-        from . import oral_story as _os_, authoring as _au
-        settings["_events"] = _os_.events_of(current["brief"], _au._q, on_step)
-    except Exception:
-        settings["_events"] = []
+    # 一个输入框：设定说明与剧情分开，简短构思补成因果链，完整口述忠实整理。
+    from . import oral_story as _os_, authoring as _au
+    plot = _os_.plan_episode(current["brief"], _au._q, settings, previous, on_step)
+    settings["_events"] = plot["events"]
+    settings["_story_context"] = plot["context"]
+    settings["_plot_mode"] = plot["mode"]
     if settings.get("writer_table", True):
         # P429 写法 H（9-19 六种写法试验里最好）：先出每件事的【状态】+ 对白轮次，正文按表写
         try:
@@ -128,7 +128,8 @@ def write(sid, no, on_step=None):
         from . import oral_story as _os_, authoring as _au
         _ev = settings.get("_events") or _os_.event_card(current["brief"])
         if _ev:
-            result["prose"], _fid = _os_.fidelity_pass(result["prose"], _ev, _au._q, brief=current["brief"], on_step=on_step)
+            result["prose"], _fid = _os_.fidelity_pass(result["prose"], _ev, _au._q, brief=current["brief"], on_step=on_step,
+                                                    preserve_story=True)
             result["review"]["fidelity"] = _fid
         # P454②：段落中间的「女：台词」提成独立行、说话人对到卡名（否则台词编号器一句认不出，整话哑剧）
         try:
@@ -154,7 +155,7 @@ def write(sid, no, on_step=None):
     review["brief_sig"] = uw.signature(target["brief"])
     target.update(prose=result["prose"], writing_review=review, prose_draft="", writing_attempt={},
                   writing_request=uw.write.last_request, plan_stale=False, plan_version=0,
-                  events=_ev, fidelity=_fid)                                   # P366：事件卡和核对报告落盘
+                  events=_ev, fidelity=_fid, story_plan=plot)                    # 规划留档，文字和分段使用同一份事件链
     target.pop("prose_approved_sig", None)
     saga_core.save_saga(sid, sg)
     return result["prose"]

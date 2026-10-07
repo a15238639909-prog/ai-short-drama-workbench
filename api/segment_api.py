@@ -48,6 +48,8 @@ def new_pack(sid, g):
     """新链路（<SubjectN> 提示词）的参考图包：人物卡顺序 + 场景卡，
     和提示词里 <Subject 1..N> / <Picture 1..N> 一一对应，顺序不能乱。
     图在独立的 visuals 表里按 owner_id 关联，只认已采用版。"""
+    from cores import reference_ready
+    reference_ready.assert_references(sid, [g])
     adopted = {}
     for v in (asset_core.list_assets(sid, "visuals") or []):
         if str(v.get("status") or "") != "adopted":
@@ -307,6 +309,9 @@ def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=N
     prompt = str(g.get("prompt") or "")
     if not prompt.strip():
         raise RuntimeError("第 %s 段还没有提示词" % seg_no)
+    if is_new_prompt(prompt):
+        from cores import reference_ready
+        reference_ready.assert_references(sid, [g])
     # 严重问题不能只标红后继续烧视频额度。新提示词会把确定性问题写进
     # critical_problems；旧时间轴也在这里按现有字段补算一次。
     critical = _render_critical_problems(st, tl, g, prompt, ep, seg_no)
@@ -1533,6 +1538,12 @@ def gen_segment(h, path, d):
         except Exception as e:
             return _RESP({"ok": False, "error": "编提示词失败：" + str(e)[:220]}, 500)
 
+    if is_new_prompt(g.get("prompt")):
+        from cores import reference_ready
+        try:
+            reference_ready.assert_references(sid, [g])
+        except RuntimeError as error:
+            return _RESP({"ok": False, "error": str(error)}, 400)
     critical = _render_critical_problems(st, tl, g, str(g.get("prompt") or ""), _ep_of(sid), sno)
     if critical:
         return _RESP({"ok": False,

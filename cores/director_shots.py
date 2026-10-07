@@ -22,7 +22,6 @@ import time
 from . import oral_story as _os_
 
 _HEAD = re.compile(r"^\s*【?段\s*\d*】?\s*[：:]?\s*(.*)$")
-MAX_DIDS = 4
 _KV = re.compile(r"(地点|在场|秒|机位|目的|结束)\s*[=＝：:]\s*")
 _BLOCK = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[-—–~～]\s*(\d+(?:\.\d+)?)\s*秒?\s*[=＝：:]\s*(.+?)\s*$")
 _BLOCK_INLINE = re.compile(r"[；;｜|]\s*(?=\d+(?:\.\d+)?\s*[-—–~～]\s*\d+(?:\.\d+)?\s*秒?\s*[=＝：:])")   # P454⑤：一行多块
@@ -64,12 +63,15 @@ def split_events(pics, n_events=0, event_map=None):
                 except Exception:
                     pass
         if owner:
-            groups, cur = {}, None
+            groups, cur = [], None
             for i, p in enumerate(parts, 1):
                 ev = owner.get(i, cur if cur is not None else min(owner.values()))
+                if not groups or ev != cur:
+                    groups.append([])
                 cur = ev
-                groups.setdefault(ev, []).append(p)
-            return ["\n".join(groups[k]) for k in sorted(groups)]
+                groups[-1].append(p)
+            # 事件映射只能决定相邻段落的分组，正文出现顺序始终不变。
+            return ["\n".join(group) for group in groups]
     if n_events and len(parts) > n_events * 1.5:
         total = sum(len(_hz(p)) for p in parts)
         target = total / n_events
@@ -92,7 +94,7 @@ SPLIT_TARGET = 300    # 拆成约这么多汉字一份
 
 def split_long_events(events, event_points=None):
     """P458：正文很长但归并只分了几件事（项目4：3 件事、第 1 件 1328 字）→ 每件事按段落再拆成约 300 字一份，
-    每份当一件事去拍（2～3 段）。返回 (新事件列表, 对齐的要点列表)。要点只留给每件事的第一份。"""
+    每份按信息变化分镜。返回 (新事件列表, 对齐的要点列表)，各要点按出现顺序分配到对应片段。"""
     out, pts = [], []
     for i, ev in enumerate(events or []):
         pt = (event_points[i] if event_points and i < len(event_points) else "")
@@ -115,13 +117,43 @@ def split_long_events(events, event_points=None):
                 chunks[-1] = chunks[-1] + "\n" + "\n".join(cur)               # 尾巴太短并进上一份
             else:
                 chunks.append("\n".join(cur))
+        # 整件事的要点逐条分配到对应片段，避免第一份提前拍完后半段。
+        assigned = [[] for _ in chunks]
+        vocab = [_bigrams(c) for c in chunks]
+        previous = 0
+        for point in re.split(r"(?<=[。！？])", str(pt or "")):
+            if not point.strip():
+                continue
+            tokens = _bigrams(point)
+            scores = [sum(1.0 / sum(token in other for other in vocab)
+                          for token in tokens & words) for words in vocab]
+            best = max(range(previous, len(chunks)), key=lambda j: scores[j])
+            assigned[best].append(point.strip())
+            previous = best
         for k, c in enumerate(chunks):
             out.append(c)
-            pts.append(pt if k == 0 else "")
+            pts.append("".join(assigned[k]))
     return out, pts
 
 
 POV_MODES = ("第一视角POV", "自拍手持")
+
+
+def split_dialogue_windows(events, limit=2):
+    """Give the small director model a bounded contiguous source window, without rewriting it."""
+    out = []
+    for event in events:
+        lines, count = [], 0
+        for line in str(event).splitlines():
+            spoken = bool(re.match(r"^\s*【D\d+】", line))
+            if spoken and count >= limit:
+                out.append("\n".join(lines))
+                lines, count = [], 0
+            lines.append(line)
+            count += int(spoken)
+        if lines:
+            out.append("\n".join(lines))
+    return out
 
 
 def pov_clause(pov, owner):
@@ -191,11 +223,13 @@ def fit_dialogue_timing(director):
 
 def instruction(scene_names, char_items, pov="", owner=""):
     ch = "、".join("%s（%s%s）" % (n, s or "", (str(a) + "岁") if a and a > 0 else "") for n, s, a in char_items) or "剧本里的人"
-    return ("你是短剧导演。我给你这一话里的一件事（剧本的一段）、上一段结束时每个人的状态、可用的地点和人物。"
-            "把这件事按可见变化拍成 1～3 段视频：每段一个连续镜头，4～15 秒，一段一个目的，动作完成就切到下一件有变化的事。\n"
+    return ("你是短剧导演。我给你当前连续的一小段剧本、上一段结束时每个人的状态、可用的地点和人物。"
+            "按当前原文的先后顺序拍成视频：一个连续行动连同当场的问答可以在同一镜头中完成；信息焦点、地点改变或超过时长容量时再分段。每段一个连续镜头，4～15 秒。"
+            "镜头随新信息切换，把起因、依据、人物应对与结果拍清楚。\n"
+            "当前片段的最后一句就是本次拍摄终点。原文写准备就拍到准备，原文写完成才拍完成；台词中的打算配合当下的准备动作。\n"
             "每段固定写这几行（行首字样一字不改，<>里换成这一件事的内容）：\n"
             "【段】地点=<地点名>｜在场=<画面里的人名，顿号分开>｜秒=<4～15>｜机位=<景别，画面拍到的范围，机位高低，固定或推/拉/摇/跟>\n"
-            "目的=<这一段让观众知道的一件事，一句>\n"
+            "目的=<观众新知道的一项具体事实、线索或行动结果，20字以内>\n"
             "0-3秒=<谁从哪里做什么到哪里；这一块有台词就在句末写编号，如 D3>\n"
             "3-6秒=<接下来的动作或结果；这里用6秒示范，实际按动作和台词决定止点>\n"
             "结束=<人名>：<位置>，<面朝谁或哪边>，<手里什么>，<姿势：站/坐/蹲/躺/趴/走>，<画面左侧/右侧/中央>；<下一个人>：…\n"
@@ -203,13 +237,17 @@ def instruction(scene_names, char_items, pov="", owner=""):
             "1. 特写和短反应通常4～6秒，移动动作通常6～10秒，长对白按说完所需时间安排，最长15秒；换地点就换段。\n"
             "2. 一段一个机位，1～4个时间块，0秒开始动作，末块止点等于秒数。景别按任务选：面部或手部细节用特写，移动交锋用全景跟拍，空间变化用远景；近景是胸部以上，特写让脸或关键物占满画面。\n"
             "3. 每块一句话：谁做什么、对方什么反应，都是看得见的动作；心理、比喻、观众已经知道的事（报名字）不拍；同一种情绪只拍一次。\n"
-            "4. 台词已编号（D1、D2…），写在它该说的那一块句末；每个编号用一次、按顺序、不跳过；一段最多 3 个编号。\n"
+            "4. 台词已编号（D1、D2…），写在它该说的那一块句末；每个编号用一次、按顺序、不跳过。同一动作中的多句短对白可以同段，按实际说完所需时间安排，不按台词句数切镜头。\n"
             "对白时间：按清楚的普通话每秒约4～5个汉字安排，每次换人再留0.5秒；每块的台词都能在这一块内说完，长对白单独留足时间。人物可一边行动一边说话。\n"
             "5. 在场=只写这一段画面里的人；画面外的人只在动作里写「望向画外」。地点只从这些名字里选：%s。人只能是：%s。"
             "剧本里没在这个名单上的群众（村民、路人、几名女子）在时间块里按剧本里的称呼写（几名＋剧本的称呼＋从哪侧走过），在场栏不写他们；名单上的人没在这件事的剧本里出现就不要拉进画面。\n"
             "6. 结束=每个在场的人一条，实地位置、手中物和动作进度承接上一段；本段发生走动就写到达的位置。\n"
             "7. 姿势和地点相配：水里的人趴着或抱着木板漂，地上的人才站、坐、蹲。\n"
             "8. 每个机位独立构图；切机位可改变人物在画面中的左右和大小，实地位置与行动方向保持连贯。对白可伴随原文已有动作，其他人在同一时刻完成自己的动作。\n"
+            "9. 关键物件需要看清细节时用特写，也可在连续镜头中推近物件、同时听到人物判断；景别服务信息的可见性。开场从正在发生的异常或冲突切入。\n"
+            "10. 每段目的写这一段推进的具体事情；线索、当场判断和马上行动可以连续呈现。移动、交接、开门等连贯动作保持完整，反应与行动可同时发生。短确认附在结果镜头结尾。\n"
+            "11. 地点名单只供命名，行动与结果逐项取自当前原文。人物到达新地点后保持已完成的进度；对白在原文对应动作旁出现，确认结果的台词放在结果发生时。\n"
+            "12. 地点栏填写人物脚下正在行动的现场。原文到达石阶后就在石阶拍后续动作；望向、指向或敲击远处目标时，地点仍是人物所在处。换景以实际走动到达为依据。\n"
             + pov_clause(pov, owner) +
             "只输出段，不解释。") % ("、".join(scene_names or []) or "剧本里的地点", ch)
 
@@ -648,50 +686,20 @@ def fix_shots(shots, D, expect_dids, scene_names, char_names, prev_state, prev_p
         cand = flat_blocks[lo:hi + 1] or flat_blocks[-1:]
         _with = [b for b in cand if spk in b[2] or _os_.short_name(spk) in b[2]]
         _pool = _with or cand
+        # 原文相邻动作比“最早出现说话人”更能确定漏词的位置。
+        source_lines = str(ev_text or "").splitlines()
+        line_idx = next((i for i, line in enumerate(source_lines) if "【D%d】" % d in line), None)
+        if line_idx is not None:
+            before = next((line for line in reversed(source_lines[:line_idx]) if line.strip() and not re.match(r"^【D\d+】", line)), "")
+            after = next((line for line in source_lines[line_idx + 1:] if line.strip() and not re.match(r"^【D\d+】", line)), "")
+            words = _bigrams(before[-240:]) | _bigrams(after[:120])
+            scores = [len(words & _bigrams(b[2])) for b in _pool]
+            if scores and max(scores) >= 3:
+                _pool = [b for b, score in zip(_pool, scores) if score == max(scores)]
         tgt = next((b for b in _pool if len(b[3]) < 2), None) or min(_pool, key=lambda b: len(b[3]))      # P440：说话人在场、台词不到两句的最早那块
         tgt[3].append(d)
         seen.add(d)
-    # P455④：一段硬上限 4 句台词（给导演的规矩是 3，程序兜底 4）——超了按块拆段（块里超的，多的挪到下一块）
-    _out = []
-    for s in shots:
-        while sum(len(b[3]) for b in s["blocks"]) > MAX_DIDS and len(s["blocks"]) >= 1:
-            acc, k = 0, 0
-            for i, b in enumerate(s["blocks"]):
-                if acc + len(b[3]) > MAX_DIDS:
-                    if i == 0:
-                        extra = b[3][MAX_DIDS - acc:]
-                        b[3] = b[3][:MAX_DIDS - acc]
-                        if len(s["blocks"]) == 1:
-                            mid = round((b[0] + b[1]) / 2)
-                            s["blocks"] = [[b[0], mid, b[2], b[3]], [mid, b[1], b[2], extra]]
-                        else:
-                            s["blocks"][1][3] = extra + s["blocks"][1][3]
-                        k = 1
-                    else:
-                        k = i
-                    break
-                acc += len(b[3])
-            if k <= 0 or k >= len(s["blocks"]):
-                break
-            first = dict(s, blocks=[list(b) for b in s["blocks"][:k]], end_state={})
-            first["seconds"] = sum(b[1] - b[0] for b in first["blocks"])
-            rest = [list(b) for b in s["blocks"][k:]]
-            off = rest[0][0]
-            for b in rest:
-                b[0], b[1] = b[0] - off, b[1] - off
-            for part in (first,):
-                if part["seconds"] < MIN_SEC and part["blocks"]:
-                    _sc = MIN_SEC / max(1.0, part["seconds"])
-                    t0 = 0.0
-                    for b in part["blocks"]:
-                        d = round((b[1] - b[0]) * _sc)
-                        b[0], b[1] = t0, t0 + d
-                        t0 += d
-                    part["seconds"] = t0
-            _out.append(first)
-            s = dict(s, blocks=rest, seconds=sum(b[1] - b[0] for b in rest), purpose=s["purpose"] + "（续）")
-        _out.append(s)
-    shots = _out
+    # 说话时间由 fit_dialogue_timing 校验；多句短对白不再按句数机械拆段。
     # 台词按编号顺序：块里编号排序；跨块乱序的（后块编号小于前块）换到前块
     for s in shots:
         flat = [d for b in s["blocks"] for d in b[3]]
@@ -826,6 +834,22 @@ def _fallback_shot(place, cast, clauses, char_names, aliases):
     return {"place": place, "cast": who, "seconds": secs, "camera": "中景，平视，固定", "purpose": cl[0], "blocks": blocks, "end_state": {}}
 
 
+def dialogue_order_issues(shots, expected):
+    # Repeated markers are already removed by fix_shots without moving the first occurrence.
+    used = list(dict.fromkeys(d for s in shots for b in s.get("blocks", []) for d in b[3]))
+    if used == list(expected):
+        return []
+    return ["台词编号按原文依次出现一次：应为%s，当前为%s；各句放回原文对应的动作旁" % (list(expected), used)]
+
+
+def director_seam_brief(d):
+    """Camera cuts preserve story progress; a new scene does not imply a time jump."""
+    return ("\n【导演段衔接】\n当前骨架决定每块动作、机位和台词时机。上一段结束状态只提供已发生的事实与持物状态。"
+            "从骨架第一块的当前动作开始，换地点也按原文的连续时间推进；时间跳跃以骨架明写的内容为准。"
+            "场景参考只负责空间、材质与光线，门的开合、物品归属和人物进度按当前骨架呈现。"
+            "本段拍到最后一块的结果即结束。\n")
+
+
 def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=None, event_map=None, prev_ledger="", pov="", owner=""):
     """剧本 → 导演分段切片。scenes: 卡列表或名字；chars: 卡列表或名字。"""
     scene_items = _os_._scene_items(scenes)
@@ -835,7 +859,9 @@ def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=
     aliases = _os_.card_aliases(chars)                                        # P454⑨：人物类型词也认（精灵队长 → 瑟琳娜）
     script, D = _os_.numbered_script(pics)
     events = split_events(script, n_events=len(event_points or []), event_map=event_map)
-    events, event_points = split_long_events(events, event_points)            # P458：长事拆份
+    # 口述事件数与段落分组不是一一对应。导演只执行已确认剧本，口述覆盖由上游编剧核对。
+    events, _ = split_long_events(events)
+    # 保留连续行动的完整上下文；split_long_events 已限制输入长度。
     ins = instruction(scene_names, char_items, pov=pov, owner=owner)        # P461：视点规矩
     all_shots, state, prev_place, log = [], {}, "", []
     char_sex = {n: sx for n, sx, _a in char_items}
@@ -844,15 +870,18 @@ def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=
     for i, ev in enumerate(events):
         dids = sorted({int(x) for x in re.findall(r"【D(\d+)】", ev)})
         dl = "\n".join("D%d %s：%s" % (d, D[d - 1][0], D[d - 1][1]) for d in dids) or "无"
-        _kmin = max(1, -(-len(dids) // 3))
-        _tailrule = ("这是最后一件事：在事件完成的可见结果处收尾。" if i == len(events) - 1 else "这是中间事件：动作结果直接接下一件事；拉远用于交代空间变化。")
-        _cnt = ("【这件事有 %d 句台词 → 至少分 %d 段，每段最多 3 句台词】%s" % (len(dids), _kmin, _tailrule)) if dids else ("【这件事没有台词】" + _tailrule)
-        _pt = (event_points[i] if event_points and i < len(event_points) else "")
+        _tailrule = "本次收在当前原文最后一句的进度：" + ev.strip().splitlines()[-1]
+        _speech_sec = sum(len(re.findall(r"[一-龥A-Za-z0-9]", D[d - 1][1])) / 4.5 + .5 for d in dids)
+        _cnt = ("【本片段共%d句台词，预计说话约%.1f秒；可以边行动边说话。按连续行动和4～15秒容量分镜，短问答合在同一动作里】%s" % (len(dids), _speech_sec, _tailrule))
+        _pt = ""
         user = ("【这一件事的剧本】（第 %d 件，共 %d 件）\n%s\n%s%s\n【上一段结束时】%s\n\n【地点】%s\n【人物】%s\n【台词编号】\n%s"
                 % (i + 1, len(events), ev, ("\n【这件事的口述要点（要点里的每个动作至少占一个时间块）】" + str(_pt).strip() + "\n") if _pt else "", _cnt + "\n",
                    state_text(state) or (("（本话开头）" + str(prev_ledger).strip()) if (i == 0 and str(prev_ledger or "").strip()) else "（全片开头）"),
-                   "；".join("%s（%s）" % (n, d) if d else n for n, d in scene_items) or "、".join(scene_names),
+                   "、".join(scene_names),
                    "、".join(char_names), dl))
+        if all_shots:
+            _completed = "\n".join("%s：%s" % (s.get("purpose", ""), "；".join(b[2] for b in s["blocks"])) for s in all_shots[-2:])
+            user += "\n【此前已经拍完的动作】\n" + _completed + "\n从这些动作的完成状态向后继续，当前对白若提及已完成动作，拍人物对结果的回应。"
         if on_step:
             on_step("导演分段：第 %d/%d 件" % (i + 1, len(events)))
         raw = q(ins, user, mt=2200, temperature=0.35)
@@ -862,13 +891,42 @@ def shot_list(pics, scenes, chars, q, debug_path="", on_step=None, event_points=
             shots = parse(raw, scene_names, char_names, D, aliases)
         # P441：口述要点没拍到 → 带着漏的清单让导演把这件事重出一次；仍漏就程序补段
         _miss = missing_points(_pt, shots) if _pt else []
-        if _miss:
-            raw2 = q(ins, user + "\n\n【上一次分段漏了这些要点，这次每个要点至少占一个时间块，其余照旧】\n" + "\n".join("· " + x for x in _miss), mt=2200, temperature=0.4)
+        def plan_gaps(items):
+            issues = []
+            if not items:
+                issues.append("按当前事件输出完整镜头")
+            for k, shot in enumerate(items, 1):
+                ids = list(dict.fromkeys(d for b in shot.get("blocks", []) for d in b[3]))
+                needed = sum(len(re.findall(r"[一-龥A-Za-z0-9]", D[d - 1][1])) / 4.5 + .5
+                             for d in ids if 1 <= d <= len(D))
+                if needed > MAX_SEC:
+                    issues.append("第%d段对白约需%.1f秒，超过15秒；按行动进展拆分，台词原文保持完整" % (k, needed))
+            return issues
+        _order = dialogue_order_issues(shots, dids)
+        _gaps = plan_gaps(shots)
+        if _miss or _gaps or _order:
+            raw2 = q(ins, user + "\n\n【待修订的分镜】\n" + raw + "\n\n【本片段定向修订一次，输出完整修订稿】\n" + "\n".join("· " + x for x in (_order + _miss + _gaps)), mt=3000, temperature=0.35)
             shots2 = parse(raw2, scene_names, char_names, D, aliases)
-            if shots2 and len(missing_points(_pt, shots2)) <= len(_miss):
+            order2 = dialogue_order_issues(shots2, dids)
+            if shots2 and ((len(order2), len(plan_gaps(shots2))) < (len(_order), len(_gaps))):
                 shots, raw = shots2, raw + "\n\n===== 补要点重出 =====\n" + raw2          # P441b：不比原来差就用重出的
+                _order = order2
             _miss = missing_points(_pt, shots) if shots else _miss
         shots, state = fix_shots(shots, D, set(dids), scene_names, char_names, state, prev_place, aliases, ev_text=ev, char_sex=char_sex, prev_cast=prev_cast, char_type=char_type, cast_context=_pt)
+        for s in shots:
+            # 导演阶段就留足台词时间；只改时间，不改台词、动作、机位与顺序。
+            try:
+                timed = fit_dialogue_timing(s)
+            except ValueError:
+                import math
+                speech = dict(zip(dict.fromkeys(n for b in s["blocks"] for n in b[3]), s.get("says") or []))
+                required = sum(max(2., math.ceil(sum(len(re.findall(r"[一-龥A-Za-z0-9]", str(speech[n][1]))) for n in b[3] if n in speech) / 4.5 + .5 * len(b[3]))) for b in s["blocks"])
+                if required > MAX_SEC:
+                    raise ValueError("导演段对白超过15秒容量，请拆分该段台词后重新分段：" + str(s.get("purpose") or ""))
+                s["blocks"][-1][1] += max(0., required - s["seconds"])
+                s["seconds"] = s["blocks"][-1][1]
+                timed = fit_dialogue_timing(s)
+            s["blocks"] = timed["blocks"]
         shots = apply_pov(shots, pov, owner)                                 # P461：按视点钉死在场和机位行
         log.append({"event": i + 1, "raw": raw, "shots": shots, "missing": _miss, "cut_cast": list(getattr(fix_shots, "last_cut", []) or [])})
         if shots:

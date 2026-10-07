@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # 版本号：发布用。改功能就改这里，和 发布说明.md 对得上。
-_VERSION = "v1.0.0"
+_VERSION = "v1.02"
 PORT = int(os.environ.get("V41_PORT", "8853"))
 WEB = ROOT / "web"
 
@@ -716,6 +716,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self._dec_path()
+        if path == "/api/motion/upload":
+            # Videos are streamed as raw file bytes; ordinary APIs retain their JSON contract.
+            from cores.motion_upload import receive
+            try:
+                return _json_resp(self, {"ok": True, "data": receive(self)})
+            except Exception as e:
+                self.close_connection = True
+                return _json_resp(self, {"ok": False, "error": str(e)[:300]}, 400)
         # /legacy/* 直接转交 app.py（必须在读取 body 之前分流，否则 rfile 会被提前消费）
         if path == "/legacy" or path.startswith("/legacy/"):
             try:
@@ -763,7 +771,7 @@ def main():
     _decisions_selfcheck()
     runtime_core.start_worker()
     url = "http://127.0.0.1:%d/" % PORT
-    log("info", "AI视频工作台 V1.0 正式版 启动 " + url)
+    log("info", "AI视频工作台 v1.02 启动 " + url)
     try:
         # 公开发行版仅监听本机；当前服务没有多用户登录鉴权。
         srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)

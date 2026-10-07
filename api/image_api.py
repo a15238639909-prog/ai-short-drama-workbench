@@ -2,15 +2,72 @@
 """P401：🎨 出图词——一句话或整段提示词 → 超清图（和人设图 / 场景图同一条链）。"""
 import os
 from pathlib import Path
-from api import post
+from api import get, post
 from api._shared import _RESP
+import threading
 
 ROOT = Path(__file__).resolve().parent.parent
+_ANIMA_LOCK = threading.Lock()
+
+
+@get('/api/image/anima/config')
+def anima_config(h, path, q):
+    from models import anima_client
+    return _RESP({'ok': True, 'data': {'system': anima_client.SYSTEM.read_text(encoding='utf-8'),
+                                     'name': 'Anima·英文词组'}})
+
+
+@post('/api/image/anima/prompt')
+def anima_prompt(h, path, d):
+    from models import anima_client
+    if not _ANIMA_LOCK.acquire(blocking=False):
+        return _RESP({'ok': False, 'error': 'Anima任务正在进行，请稍后重试'}, 409)
+    try:
+        prompt = anima_client.write_prompt((d or {}).get('text'), (d or {}).get('system'))
+        return _RESP({'ok': True, 'data': {'prompt': prompt, 'model': 'anima'}})
+    except Exception as e:
+        return _RESP({'ok': False, 'error': str(e)[:240]}, 400)
+    finally:
+        _ANIMA_LOCK.release()
+
+
+def anima_image(d):
+    from models import anima_client
+    from cores import gen_history
+    if not _ANIMA_LOCK.acquire(blocking=False):
+        return _RESP({'ok': False, 'error': 'Anima任务正在进行，请稍后重试'}, 409)
+    try:
+        prompt = anima_client.english_prompt(d.get('text'))
+        res = anima_client.generate(prompt, base_w=d.get('base_w') or 1024,
+                                    base_h=d.get('base_h') or 1024, seed=d.get('seed'))
+        out = res['output_path']
+        import struct
+        with open(out, 'rb') as f:
+            header = f.read(24)
+        if header[:8] != b'\x89PNG\r\n\x1a\n':
+            raise RuntimeError('Anima返回的图片不是有效PNG')
+        width, height = struct.unpack('>II', header[16:24])
+        rel = Path(out).resolve().relative_to(ROOT).as_posix()
+        gen_history.record('image', out, prompt, source='出图词·Anima',
+                           extra={'model': 'anima', 'seed': res['seed'], 'width': width, 'height': height})
+        return _RESP({'ok': True, 'data': {'path': rel, 'url': '/files/' + rel, 'prompt': prompt,
+                                          'model': 'anima', 'seed': res['seed'], 'width': width, 'height': height}})
+    except (ValueError, TypeError) as e:
+        return _RESP({'ok': False, 'error': str(e)[:240]}, 400)
+    except Exception as e:
+        return _RESP({'ok': False, 'error': 'Anima出图失败：' + str(e)[:240]}, 500)
+    finally:
+        _ANIMA_LOCK.release()
 
 
 @post("/api/image/generate")
 def image_generate(h, path, d):
     """{text, kind: character|scene|free, story_id?, style?} → {path, url, prompt}。同步：出一张约 2～3 分钟。"""
+    model = str((d or {}).get('model') or 'krea2')
+    if model == 'anima':
+        return anima_image(d)
+    if model != 'krea2':
+        return _RESP({'ok': False, 'error': '不支持的出图模型'}, 400)
     from cores import story_core, project_settings, prompt_writer, gen_history
     from cores.authoring import _strip_neg
     from models import krea_client

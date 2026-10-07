@@ -761,6 +761,13 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
     except Exception as ex:
         _job_event(j, "error", "同步场景卡出错（不影响出图）：" + str(ex)[:120])
     cards = {c.get("name"): c for c in asset_core.list_assets(sid, "scenes")}
+    from cores import reference_ready as _rr
+    _used_scene_ids = _rr.scene_ids_for_episode(sid, no)
+    if _used_scene_ids is not None:
+        # 分段已确认时，只画实际出镜的场景；未使用的卡与已有图片仍保留。
+        heads = [{"location": c["name"], "interior": c.get("interior", ""), "space": c.get("space", "")}
+                 for c in cards.values() if c.get("scene_id") in _used_scene_ids]
+        _job_event(j, "info", "按本话分段出 %d 个实际使用的场景，其他场景卡保留" % len(heads))
     # 已有已采用图的场景（用户上传的也在内）——skip_existing 时不再重画
     try:
         _fx = _au_d.fix_scene_spaces(sid, no, on_step=lambda m: _set_step(j, m))      # P421：无效的空间描述先补写再出图
@@ -846,6 +853,8 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
     # P422：剧本场景头没点到、但这一话用得着的卡（美术指导拆出来的「浅滩/林缘」）也要有图——没图的卡全补一遍
     try:
         for _c in asset_core.list_assets(sid, "scenes") or []:
+            if _used_scene_ids is not None and _c.get("scene_id") not in _used_scene_ids:
+                continue
             if _c.get("scene_id") in done or _c.get("scene_id") in _has_img or _c.get("merged_into"):
                 continue
             if _c.get("episode") not in (None, "", int(no)):
@@ -2223,19 +2232,9 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     # 可实际只附了场景参考图——人物长相全靠模型现编，段与段之间必然换脸
     # （2026-08-30 实测 STORY_065：4 张人设卡全无图，成片人脸没有任何锚）。
     # 这条链原来只补场景图，人设图要靠「全部生成」，单点「🎥生视频」就留了这个缺口。
-    try:
-        from cores import authoring as _au, asset_core as _ac
-        if [c for c in _ac.list_assets(sid, "characters") if not c.get("visuals")]:
-            _set_step(j, "补出缺的人设图")
-            _r = _au.gen_char_images(sid, only_missing=True,
-                                     on_step=lambda m: _set_step(j, m))
-            if (_r.get("failed") or []):
-                _job_event(j, "error", "这几个人设图没出来：%s——成片里他们的长相"
-                           "会由模型自己编（可去设定页点「🎭 补出人设图」重试）"
-                           % "、".join(_r["failed"][:4]))
-    except Exception as ex:
-        _job_event(j, "error", "补人设图失败：%s——继续出片，但人物一致性没有锚"
-                   % str(ex)[:100])
+    from cores import reference_ready as _rr
+    if not text_only:
+        _rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
     # P166①：出片之前先对齐上游——正文改了先重出剧本，剧本改了这一趟必须重拆分镜，
     # 否则就是拿旧剧本的段接着烧片。已有的视频按段号保留，不重烧。
     _fresh = {}
@@ -2249,7 +2248,8 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                 _job_event(j, "info", _m)
         except Exception as _ex:
             _job_event(j, "error", "对齐上游失败：%s" % str(_ex)[:120])
-    _ep_scene_images(sid, ep, j)
+    if not text_only:
+        _ep_scene_images(sid, ep, j)
     if _whole:
         try:
             n = max(1, authoring.total_segments(sid, ep))
@@ -4057,13 +4057,9 @@ def saga_make(h, path, d):
                 _finish_job(j)
                 return
             from cores import authoring, asset_core as _ac
-            if [c for c in (_ac.list_assets(sid, "characters") or []) if not c.get("visuals")]:
-                _set_step(j, "出人设图")
-                _r = authoring.gen_char_images(sid, only_missing=True, on_step=lambda m: _set_step(j, m)) or {}
-                if _r.get("failed"):
-                    _job_event(j, "error", "这几个人设图没出来：%s" % "、".join(_r["failed"][:4]))
-            else:
-                _job_event(j, "info", "人设图都有了，跳过")
+            from cores import reference_ready as _rr
+            _set_step(j, "检查并补齐本话人设图")
+            _rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
             _complete_step(j)
             _set_step(j, "出场景图")
             _ep_scene_images(sid, ep, j)
