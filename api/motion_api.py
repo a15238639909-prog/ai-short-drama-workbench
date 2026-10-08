@@ -18,7 +18,9 @@ def status(h, path, q):
 def start(h, path, data):
     from models import anima_client
     from api import saga_api
-    with _LOCK:
+    if not _LOCK.acquire(blocking=False):
+        return _RESP({'ok': False, 'error': '正在识别图片或提交任务，请稍候'}, 409)
+    try:
         try:
             if any(t.get('status') in ('running', 'queued') for t in runtime_core.list_tasks(200)):
                 raise ValueError('已有任务运行或排队，请等任务结束')
@@ -31,6 +33,21 @@ def start(h, path, data):
             return _RESP({'ok': True, 'data': {'task': task}})
         except Exception as exc:
             return _RESP({'ok': False, 'error': str(exc)[:400]}, 400)
+    finally:
+        _LOCK.release()
+
+
+@post('/api/motion/describe')
+def describe(h, path, data):
+    from cores import motion_features
+    if not _LOCK.acquire(blocking=False):
+        return _RESP({'ok': False, 'error': '正在识别另一张图片，请稍候重试'}, 409)
+    try:
+        return _RESP({'ok': True, 'data': motion_features.describe(data or {})})
+    except Exception as exc:
+        return _RESP({'ok': False, 'error': str(exc)[:400]}, 400)
+    finally:
+        _LOCK.release()
 
 
 @post('/api/motion/cancel')

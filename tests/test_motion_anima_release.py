@@ -17,7 +17,7 @@ class MotionReleaseTests(unittest.TestCase):
                 self.assertEqual([n for p in plan for n in range(p['start_frame'], p['start_frame']+p['frames'])], list(range(total)))
                 for p in plan:
                     self.assertEqual((p['model_frames']-5) % 17, 0)
-                    self.assertTrue(107 <= p['model_frames'] <= 124)
+                    self.assertTrue(107 <= p['model_frames'] <= 158)
                     self.assertEqual(p['model_frames'], p['frames']+p['leading_frames']+p['padding_frames'])
                     self.assertGreaterEqual(p['context_start'], 0)
 

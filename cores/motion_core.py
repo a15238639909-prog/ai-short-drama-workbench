@@ -13,7 +13,8 @@ OUTPUT = ROOT / 'outputs' / 'motion'
 FPS = 24
 # Accepted full-video trials: 124 frames lie on H3's native 17n+5 grid.
 SEGMENT_FRAMES = 124
-PIPELINE_VERSION = 'short124-source-audio-v1'
+MIN_TAIL_FRAMES = FPS
+PIPELINE_VERSION = 'shot-aware-local-qwen-dual-person-v3'
 
 
 def frame_count(path):
@@ -24,13 +25,21 @@ def frame_count(path):
 def segment_plan(total_frames):
     """Exact, disjoint output intervals; short tails borrow preceding input context."""
     parts = []
-    for start in range(0, total_frames, SEGMENT_FRAMES):
-        count = min(SEGMENT_FRAMES, total_frames - start)
+    counts = [min(SEGMENT_FRAMES, total_frames-start)
+              for start in range(0, total_frames, SEGMENT_FRAMES)]
+    # A <=1-second remainder stays in the preceding generation, avoiding an
+    # independent re-render (and a possible hard jump) for only a few frames.
+    if len(counts) > 1 and counts[-1] <= MIN_TAIL_FRAMES:
+        tail = counts.pop()
+        counts[-1] += tail
+    start = 0
+    for count in counts:
         model_frames = 5 + math.ceil((max(96, count) - 5) / 17) * 17
         lead = min(start, max(0, 107 - count)) if count < 96 else 0
         parts.append(dict(index=len(parts) + 1, start_frame=start, frames=count,
                           context_start=start - lead, leading_frames=lead,
                           model_frames=model_frames, padding_frames=model_frames - count - lead))
+        start += count
     return parts
 
 
@@ -58,7 +67,7 @@ def probe(path):
 
 def validate(data):
     result = dict(data)
-    for k, video, optional in (('video', True, False), ('character', False, False), ('scene', False, True)):
+    for k, video, optional in (('video', True, False), ('character', False, False), ('character2', False, True), ('scene', False, True)):
         p = media_path(data.get(k), video, optional)
         result[k] = str(p) if p else ''
     result['range_mode'] = str(data.get('range_mode') or 'clip')
@@ -82,7 +91,7 @@ def validate(data):
     result['steps'] = int(data.get('steps', 10))
     if not 1 <= result['steps'] <= 50:
         raise ValueError('采样步数范围1～50')
-    result['seed'] = int(data.get('seed') or (uuid.uuid4().int % (2**31)))
+    result['seed'] = int(data['seed']) if data.get('seed') not in (None, '') else uuid.uuid4().int % (2**31)
     if not 0 <= result['seed'] < 2**63:
         raise ValueError('种子超范围')
     result['size_tier'] = str(data.get('size_tier', '0.4'))
@@ -92,15 +101,18 @@ def validate(data):
     result['character_layout'] = str(data.get('character_layout') or 'single')
     if result['character_layout'] not in ('single', 'four_panel'):
         raise ValueError('人物图类型须为单人全身图或四格设定图')
-    for key in ('character_details', 'scene_details'):
+    result['character2_layout'] = str(data.get('character2_layout') or 'single')
+    if result['character2_layout'] not in ('single', 'four_panel'):
+        raise ValueError('第二人物图类型须为单人全身图或四格设定图')
+    for key in ('character_details', 'character2_details', 'scene_details', 'source_person', 'source_person2'):
         result[key] = str(data.get(key) or '').strip()
         if len(result[key]) > 2000:
             raise ValueError('外观说明请控制在2000字以内')
-    if not result['prompt']:
-        if not result['character_details']:
-            raise ValueError('请写一句新人物特征（如发型、衣服款式和体型）。仅给图片的迁移效果未通过验证，暂不启动生成。')
-        if result['scene'] and not result['scene_details']:
-            raise ValueError('请写一句新场景特征（如石桥、峡谷和吊钟）。要换场景时，图片和说明需一起填写。')
+    if result['character2'] and not result['prompt']:
+        if not result['source_person'] or not result['source_person2']:
+            raise ValueError('替换两个人时，请分别写明原片中的哪个人（如金发的人、灰衣服的人）')
+        if result['source_person'].casefold() == result['source_person2'].casefold():
+            raise ValueError('两个人物的原片对应说明不能相同')
     return result
 
 
@@ -136,15 +148,15 @@ non_diegetic_music:
 N/A'''
 
 
-def prepare_character(data, folder):
+def prepare_character(data, folder, key='character'):
     """Explicit layout choice: deterministically crop the first of four panels.
 
     Never guess a layout from aspect ratio; keep the original asset unchanged.
     """
-    if data.get('character_layout', 'single') == 'single':
-        return data['character']
-    target = folder / 'character_front.png'
-    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', data['character'],
+    if data.get(key+'_layout', 'single') == 'single':
+        return data[key]
+    target = folder / (key+'_front.png')
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', data[key],
         '-vf', 'crop=iw/4:ih:0:0', '-frames:v', '1', str(target)],
         check=True, timeout=30, creationflags=0x08000000)
     return str(target)
@@ -182,7 +194,7 @@ def restore_source_audio(generated, source, target, start, frames):
 
 def run(handle, task):
     from models import anima_client, h3_client, gpu_manager
-    from cores import gen_history
+    from cores import gen_history, motion_timeline, motion_prompts
     data = validate(task['inputs'])
     handle.check_pause()
     anima_client.local_guard()
@@ -203,23 +215,33 @@ def run(handle, task):
     save('pipeline.json', {'version': PIPELINE_VERSION, 'segment_frames': SEGMENT_FRAMES})
     save('request.json', data)
     handle.set(checkpoint={'motion_folder': str(folder)})
-    handle.step('准备原视频：24帧/秒，约5秒自动分段', 0, 1)
+    handle.step('准备原视频：识别切镜、24帧完整时间轴', 0, 1)
     original = folder / 'original.mp4'
+    expected = math.ceil(data['seconds'] * FPS - 1e-6)
     ffmpeg(['-ss', data['start'], '-i', data['video'],
-        '-t', data['seconds'], '-vf', "fps=24,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
-        '-an', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', str(original)],
+        '-vf', "fps=24,scale=1280:1280:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,tpad=stop_mode=clone:stop_duration=1",
+        '-frames:v', expected, '-an', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', str(original)],
         timeout=max(120, int(data['seconds'] * 4)))
     character = prepare_character(data, folder)
-    images = [character] + ([data['scene']] if data['scene'] else [])
+    images = [character] + ([prepare_character(data, folder, 'character2')] if data['character2'] else []) + ([data['scene']] if data['scene'] else [])
     source_probe = probe(original)
     source_video = next(s for s in source_probe['streams'] if s['codec_type'] == 'video')
     ratio = '9:16' if source_video['height'] > source_video['width'] else '16:9'
     width, height = h3_client._sized(ratio, data['size_tier'])
     assert source_probe['streams'][0]['r_frame_rate'] == '24/1'
-    parts = segment_plan(frame_count(original))
+    if frame_count(original) != expected:
+        raise RuntimeError('原片时间轴未覆盖完整范围，已停止')
+    cuts = motion_timeline.detect_cuts(original)
+    parts = motion_timeline.plan(expected, cuts)
     if not parts:
         raise ValueError('所选范围没有可处理的视频帧')
     save('segments.json', parts)
+    save('cuts.json', cuts)
+    targets, source_binding = {}, ''
+    if not data['prompt']:
+        targets = motion_prompts.records(data, folder, handle)
+        handle.step('本地AI确认原片人物对应', 0, len(parts)+1)
+        source_binding = motion_prompts.binding(data, original, folder, handle)
     results = []
     for part in parts:
         handle.check_pause()
@@ -227,15 +249,9 @@ def run(handle, task):
         seg = folder / ('segment_%03d' % index)
         seg.mkdir(exist_ok=True)
         source = seg / 'reference.mp4'
-        # Exact H3 grid: source and target have identical lengths. Short tails use
-        # preceding source context, then only their new frames enter the final film.
-        ffmpeg(['-i', original, '-vf',
-            f"trim=start_frame={part['context_start']}:end_frame={part['start_frame'] + part['frames']},setpts=PTS-STARTPTS,scale={width}:{height},setsar=1,tpad=stop_mode=clone:stop={part['padding_frames']},setpts=N/(24*TB)",
-            '-an', '-r', FPS, '-frames:v', part['model_frames'], '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', source])
-        if frame_count(source) != part['model_frames']:
-            raise RuntimeError('参考片段帧数不匹配，已停止，避免错位生成')
-        prompt = data['prompt'] or reference_prompt(part['model_frames'] / FPS, bool(data['scene']),
-            data['character_details'], data['scene_details'])
+        motion_timeline.prepare_reference(original, source, part, width, height)
+        handle.step('本地AI逐段观察并写提示词', index-1, len(parts)+1, f'第{index}/{len(parts)}段')
+        prompt = data['prompt'] or motion_prompts.write(data, source, part, seg, targets, source_binding, handle)
         (seg / 'prompt.txt').write_text(prompt, encoding='utf-8')
         generation_file = seg / 'generation.json'
         raw = json.loads(generation_file.read_text(encoding='utf-8')) if generation_file.exists() else None
@@ -260,13 +276,13 @@ def run(handle, task):
         if frame_count(raw['output_path']) < part['model_frames']:
             raise RuntimeError('模型输出缺帧，已保留分段结果，请重试')
         cleaned = seg / 'clip.mp4'
-        trim_generation(raw['output_path'], cleaned, part)
+        motion_timeline.clean(raw['output_path'], cleaned, part)
         results.append(dict(part, output_path=str(cleaned), raw_output_path=raw['output_path']))
         handle.set(checkpoint={'motion_folder': str(folder), 'completed_segments': index})
     handle.check_pause()
     handle.step('自动拼合、保留原声与左右对比', len(parts), len(parts) + 1)
     joined = folder / 'joined_model_audio.mp4'
-    concat_segments(results, joined)
+    motion_timeline.join(results, joined)
     generated = folder / 'transferred.mp4'
     audio_mode = restore_source_audio(joined, data['video'], generated, data['start'], frame_count(original))
     if frame_count(generated) != frame_count(original):
@@ -277,7 +293,7 @@ def run(handle, task):
             f'[1:v]fps=24,scale={box}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={box}:(ow-iw)/2:(oh-ih)/2,setsar=1[b];'
             '[a][b]hstack=inputs=2:shortest=1[v]')
     ffmpeg(['-i', str(original), '-i', generated,
-        '-filter_complex', filt, '-map', '[v]', '-map', '1:a:0?', '-c:a', 'copy', '-c:v', 'libx264', '-crf', '18',
+        '-filter_complex', filt, '-map', '[v]', '-map', '1:a:0?', '-r', FPS, '-frames:v', expected, '-c:a', 'copy', '-c:v', 'libx264', '-crf', '18',
         '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(comparison)],
         timeout=max(120, int(data['seconds'] * 4)))
     if frame_count(comparison) != frame_count(original):
@@ -288,7 +304,7 @@ def run(handle, task):
                   prompt=prompt, probe=probe(generated), source_probe=source_probe, segments=results,
                   frames=frame_count(generated), seconds=frame_count(generated) / FPS,
                   audio_mode=audio_mode, pipeline_version=PIPELINE_VERSION,
-                  review='约5秒短段自动拼合；有原声则保留原声，无原声则保持静音。动作近似跟随，分段接缝可能跳变，偶有背景替换不完整。')
+                  review='按切镜和约5秒短段自动拼合，24fps并保留完整原声。本地千问写词，H3近似迁移；双人交叉、遮挡和翻滚仍可能偏差，接缝可能跳变。')
     save('result.json', result)
     gen_history.record('video', str(generated), prompt, source='动作迁移', extra={'comparison': str(comparison)})
     handle.step('完成，等待用户看效果', len(parts) + 1, len(parts) + 1)
