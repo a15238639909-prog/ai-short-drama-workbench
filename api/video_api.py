@@ -2,6 +2,7 @@
 """video_api 域路由（由 server.py 的 do_POST 拆分而来）。"""
 from api import post
 from api._shared import _RESP, ctx
+import threading
 globals().update(ctx())
 
 
@@ -9,6 +10,7 @@ globals().update(ctx())
 # 原来只 create_task 排个队就返回，而这个队列**没有执行器**——
 # 任务永远 queued，图永远不出来，前端也没有进度可显示：点了就是没反应。
 _PRODUCE_JOBS = {}
+_CHAR_PROMPT_LOCK = threading.Lock()
 
 
 def _pjob(key):
@@ -73,7 +75,8 @@ def asset_prompt(h, path, d):
 
     用户要求：能看见提示词、能直接改、改完点出图看效果。
     改过的会存在卡上（prompt_override），下次出图默认沿用；
-    传 reset=true 就丢掉改动，回到编译器生成的那份。
+    人物默认稿只来自 Qwen；显式 generate=true 才在缺稿时生成文字。
+    reset=true 只清除手动覆盖，不运行模型。场景入口沿用现有逻辑。
     """
     from cores import asset_core, quality_core, project_settings
     sid = str(d.get("story_id") or "")
@@ -93,18 +96,24 @@ def asset_prompt(h, path, d):
         asset_core.save_asset(sid, "scenes" if is_scene else "characters", card)
     c = dict(card)
     c["_project"] = ps
+    manual = str(card.get("prompt_override") or "").strip()
     default = (quality_core.compile_scene_prompt(c, style=style) if is_scene
-               else quality_core.compile_character_prompt(c, None, style=style))
-    if not is_scene:
-        default = default.rstrip("。 ") + "。人物穿戴整齐，全套服装完整地穿在身上。"
-        # 卡上 image_prompt 是上一次真正出图用的那份（authoring.write_char_sheet 写的）。
-        # quality_core 这份只是没出过图时的兜底——拿它当"默认"会让编辑框里显示的
-        # 和实际用的不是同一段，用户改了半天改的是另一份（2026-08-27 发现）。
-        default = str(card.get("image_prompt") or "").strip() or default
+               else str(card.get("image_prompt") or "").strip())
+    if not is_scene and not manual and not default and d.get("generate") and not d.get("reset"):
+        if _pjob(sid + ":" + oid).get("running"):
+            return _RESP({"ok": False, "error": "这一张正在生成，请完成后再查看提示词"}, 409)
+        if not _CHAR_PROMPT_LOCK.acquire(blocking=False):
+            return _RESP({"ok": False, "error": "正在整理人物提示词，请稍后再试"}, 409)
+        try:
+            from cores import authoring
+            default = authoring.write_char_sheet(sid, card, ps)
+        finally:
+            _CHAR_PROMPT_LOCK.release()
     return _RESP({"ok": True, "data": {
-        "prompt": str(card.get("prompt_override") or default),
+        "prompt": manual or default,
         "default_prompt": default,
-        "edited": bool(str(card.get("prompt_override") or "").strip())}})
+        "edited": bool(manual),
+        "needs_generation": not bool(manual or default)}})
 
 
 @post("/api/asset/prompt/save")

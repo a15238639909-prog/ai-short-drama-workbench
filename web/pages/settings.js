@@ -2186,10 +2186,12 @@ window.Pages.settings = (function () {
         if (!box) return;
         if (!box.hidden) { box.hidden = true; return; }
         box.hidden = false;
-        box.innerHTML = '<div class="sub">读取中…</div>';
         var pkind = b.getAttribute("data-pkind") || "character_master";
+        box.innerHTML = '<div class="sub">' + (pkind === "character_master"
+          ? '读取中…尚无提示词时由本地千问整理文字，此处只写词、不出图。' : '读取中…') + '</div>';
         window.api.post("/api/asset/prompt",
-                        { story_id: st.storyId, owner_id: oid, kind: pkind })
+                        { story_id: st.storyId, owner_id: oid, kind: pkind,
+                          generate: pkind === "character_master" })
           .then(function (j) {
             /* api.post 已经把 {ok,data} 拆成 data 了，这里不要再拆一层 */
             var d0 = j || {};

@@ -350,6 +350,30 @@ def style_tail(settings):
         return ""
 
 
+def prepare_character_facts(one_line):
+    """Qwen 整理临时出图资料；只返回结构化事实，既不改人物卡也不拼最终稿。"""
+    import json
+    instruction = (INS_DIR / "人设图_资料整理_指令词.txt").read_text(encoding="utf-8")
+    raw = _call(instruction, one_line, max_tokens=2000, temperature=0.1).strip()
+    if raw.startswith("```") and raw.endswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    try:
+        facts = json.loads(raw)
+        assert isinstance(facts, dict)
+        assert isinstance(facts.get("appearance"), dict)
+        assert all(isinstance(k, str) and isinstance(v, str) for k, v in facts["appearance"].items())
+        assert isinstance(facts.get("expression"), str)
+        assert isinstance(facts.get("clothing"), list)
+        categories = {"上装", "下装", "鞋靴", "腰带", "佩戴饰物", "护具"}
+        for item in facts["clothing"]:
+            assert isinstance(item, dict) and item.get("类别") in categories
+            assert isinstance(item.get("名称"), str) and item["名称"].strip()
+            assert all(isinstance(v, str) for v in item.values())
+    except (ValueError, AssertionError, TypeError) as exc:
+        raise ValueError("本地千问的人设资料整理格式不完整，请重试；尚未生成图片") from exc
+    return facts
+
+
 def write_character(one_line, settings, extra_rules=""):
     """人物设定图：一次 Qwen 调用，返回 (出图提示词, 通用人物外观)。
 

@@ -88,5 +88,5 @@ def load_all():
     """导入所有域模块，触发注册。新增域模块记得加到这里。"""
     from . import (story, settings_api, chain_api, video_api, system_api,  # noqa: F401
                    assets_api, recovered, timeline, segment_api, gpu_api,
-                   saga_api, history_api, config_api, image_api, motion_api)
+                   saga_api, history_api, config_api, image_api, motion_api, download_api)
     return len(GET_ROUTES), len(POST_ROUTES)

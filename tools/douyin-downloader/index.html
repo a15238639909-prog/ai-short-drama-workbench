@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抖音视频下载</title>
+<style>
+:root{color-scheme:light;--bg:#f4f5f2;--paper:#fff;--ink:#23372f;--muted:#748178;--line:#e1e7df;--brand:#24664b;--soft:#edf4ed}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 "Microsoft YaHei",system-ui,sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus,textarea:focus,a:focus-visible{outline:3px solid #b1d3bd;outline-offset:2px}button{border:1px solid var(--line);border-radius:10px;background:white;color:var(--ink);padding:8px 15px}button:hover{background:var(--soft)}.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600;padding:12px 25px}.primary:hover{background:#19563d}a{color:var(--brand)}.wrap{width:min(960px,calc(100% - 40px));margin:0 auto}header{display:flex;justify-content:space-between;align-items:center;padding:28px 0 22px}.brand{display:flex;align-items:center;gap:10px;font-weight:700}.mark{background:var(--brand);color:white;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:24px}.tag{font-size:12px;color:var(--brand);background:var(--soft);padding:3px 10px;border-radius:20px}.hero{padding:10px 0 23px}h1{font-size:32px;letter-spacing:-1px;margin:0 0 6px}.sub{margin:0;color:var(--muted)}.card{background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:25px;box-shadow:0 4px 20px #26382e04}.labelrow{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.labelrow label{font-weight:600}.hint{color:var(--muted);font-size:12px}textarea{resize:vertical;min-height:155px;width:100%;padding:14px 16px;line-height:1.7;background:#fafbf9;border:1px solid var(--line);border-radius:12px;color:var(--ink)}textarea::placeholder{color:#9aa59c}.folder{display:flex;gap:8px;margin:8px 0 21px;align-items:center}.folder input{width:100%;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fafbf9}.folder button{white-space:nowrap}.folderlabel{display:block;font-size:13px;color:var(--muted);margin-top:20px}.action{display:flex;align-items:center;gap:18px;justify-content:space-between}.promise{font-size:13px;color:var(--muted)}.promise b{color:var(--brand);font-weight:500}.message{font-size:14px;min-height:24px;margin:12px 0 0}.message.error{color:#b14236}.sectionhead{display:flex;justify-content:space-between;align-items:center;margin:28px 0 13px}h2{font-size:18px;margin:0}.empty{text-align:center;padding:38px;color:var(--muted);border:1px dashed #cad6c9;border-radius:15px}.empty strong{display:block;font-size:16px;font-weight:500;color:#596f60;margin-bottom:5px}.job{background:#fff;border:1px solid var(--line);border-radius:13px;margin:10px 0;padding:18px 20px;display:grid;grid-template-columns:1fr auto;gap:8px 18px}.job h3{font-size:15px;margin:0;overflow-wrap:anywhere}.meta,.note{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.note{margin-top:4px}.note.error{color:#b14236}.jobactions{display:flex;align-items:center;gap:10px;grid-row:1/4;grid-column:2}.jobactions button,.jobactions a{font-size:12px}.status{font-size:12px;color:#578163;font-weight:500;margin-left:8px}.status.failed{color:#b14236}.bar{height:4px;background:#edf0e9;border-radius:3px;overflow:hidden;margin-top:9px}.bar span{display:block;height:100%;background:#559474;transition:width .2s}.queueCount{font-size:12px;color:var(--muted)}footer{font-size:12px;color:var(--muted);padding:25px 0 35px;border-top:1px solid var(--line);margin-top:30px}footer p{margin:5px 0}.offline{color:#b14236!important}.small{font-size:12px;padding:6px 12px}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@media(max-width:640px){.wrap{width:calc(100% - 24px)}header{padding:18px 0}h1{font-size:26px}.card{padding:18px}.action{align-items:flex-start;flex-direction:column;gap:10px}.action .primary{width:100%}.folder{flex-wrap:wrap}.folder input{flex-basis:100%}.job{display:block}.jobactions{margin-top:12px}.tag{display:none}.promise{font-size:12px}}
+</style>
+</head>
+<body><div class="wrap">
+<header><div class="brand"><span class="mark" aria-hidden="true">↓</span> 抖音视频下载 <span class="tag">独立本地工具</span></div><button class="small" id="quit">退出工具</button></header>
+<section class="hero"><h1>粘贴链接，保存视频。</h1><p class="sub">整段分享文字直接粘贴，多个视频也可以一起下载。</p></section>
+<main><form id="downloadForm" class="card">
+<div class="labelrow"><label for="links">视频链接 / 分享文字</label><span class="hint">一次最多 20 条</span></div>
+<textarea id="links" placeholder="把抖音的“复制链接”内容粘贴到这里…&#10;&#10;例如：https://v.douyin.com/…&#10;支持多条分享文字，一起粘贴即可。" maxlength="30000" required></textarea>
+<label for="folder" class="folderlabel">保存到</label><div class="folder"><input id="folder" aria-label="视频保存文件夹" required><button type="button" id="choose">选择文件夹</button><button type="button" id="openFolder">打开文件夹</button></div>
+<div class="action"><span class="promise"><b>优先无平台水印 · 最高可用画质</b><br>不转码、不裁剪、不做虚假高清放大</span><button type="submit" id="start" class="primary">↓ 下载视频</button></div>
+<div class="message" id="message" role="status" aria-live="polite"></div>
+</form>
+<div class="sectionhead"><h2>下载记录</h2><span id="summary" class="queueCount">正在连接…</span></div>
+<section id="jobs" aria-label="下载记录"><div class="empty"><strong>还没有下载任务</strong>视频下载完成后，会保存在上方文件夹中。</div></section>
+</main>
+<footer><p>1.0 · 本机运行，只连接抖音官方页面与媒体服务器；不调用AI，不读取浏览器登录信息，不使用第三方解析网站。</p><p>清晰度以平台提供的实际版本为准，不保证每条都有1080P或4K。“无水印”指平台播放版本；作者剪进画面的文字、标志不会被抹除。仅下载你有权保存的内容。</p><p id="connection">正在连接本地下载服务…</p></footer>
+</div>
+<script>
+const token='__APP_TOKEN__';
+const embedded=location.pathname.startsWith('/download-tool/');
+const apiPrefix=embedded?'/download-tool':'';
+const $=id=>document.getElementById(id);
+if(embedded){$('quit').hidden=true;document.querySelector('.tag').textContent='工作台工具';}
+let initialized=false, refreshBusy=false, stopped=false, lastJobs='';
+const active=new Set(['queued','resolving','downloading']);
+const labels={queued:'排队中',resolving:'解析中',downloading:'下载中',completed:'已完成',failed:'失败',cancelled:'已停止',interrupted:'已中断'};
+function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error);}
+async function api(path,body){const res=await fetch(apiPrefix+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':token},body:JSON.stringify(body)});const d=await res.json();if(!res.ok)throw Error(d.error||'请求失败');return d;}
+function el(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
+function bytes(n){return n?(n/1048576).toFixed(1)+' MB':'0 MB';}
+function btn(text,action){const b=el('button',text);b.type='button';b.onclick=async()=>{b.disabled=true;try{await action();}catch(e){message(e.message,true);}finally{b.disabled=false;}};return b;}
+function render(jobs){
+ const snapshot=JSON.stringify(jobs);if(snapshot===lastJobs)return;lastJobs=snapshot;
+ const list=$('jobs');list.replaceChildren();
+ if(!jobs.length){const box=el('div',undefined,'empty');box.append(el('strong','还没有下载任务'),el('span','视频下载完成后，会保存在上方文件夹中。'));list.append(box);return;}
+ for(const job of [...jobs].reverse()){
+  const row=el('article',undefined,'job');const heading=el('h3',job.title||'等待解析视频');heading.append(el('span',labels[job.status]||job.status,'status '+job.status));row.append(heading);
+  const details=[];if(job.author)details.push(job.author);if(job.width&&job.height)details.push(job.width+' × '+job.height);if(job.duration)details.push(job.duration.toFixed(2)+' 秒');if(job.size)details.push(bytes(job.size));else if(job.received)details.push(bytes(job.received)+(job.total?' / '+bytes(job.total):''));row.append(el('div',details.join(' · ')||'等待处理','meta'));
+  row.append(el('div',job.error||job.note||'',job.error?'note error':'note'));
+  if(job.status==='completed'&&job.path){const p=el('div',job.path,'meta');p.title=job.path;row.append(p);}
+  if(active.has(job.status)){const bar=el('div',undefined,'bar');const fill=el('span');fill.style.width=(job.total?Math.min(100,job.received/job.total*100):job.status==='queued'?0:8)+'%';bar.append(fill);row.append(bar);}
+  const actions=el('div',undefined,'jobactions');const source=el('a','原视频');source.href=job.source;source.target='_blank';source.rel='noopener noreferrer';actions.append(source);
+  if(job.status==='completed')actions.append(btn('打开视频',()=>api('/api/open-file',{id:job.id})));
+  else if(active.has(job.status))actions.append(btn('停止',async()=>{await api('/api/cancel',{id:job.id});await refresh();}));
+  else actions.append(btn('重试',async()=>{await api('/api/retry',{id:job.id});message('已加入重试队列。');await refresh();}));
+  row.append(actions);list.append(row);
+ }
+}
+async function refresh(){if(refreshBusy||stopped)return;refreshBusy=true;try{const data=await api('/api/state');if(!initialized){$('folder').value=data.folder;initialized=true;}$('summary').textContent='进行中 '+data.jobs.filter(j=>active.has(j.status)).length+' · 已完成 '+data.jobs.filter(j=>j.status==='completed').length;$('connection').textContent=embedded?'● 本地服务已连接 · 与桌面下载器共用目录和记录；切换栏目不会中断下载。':'● 本地服务已连接 · 关闭页面不会中断下载；“退出工具”会关闭服务。';$('connection').classList.remove('offline');render(data.jobs);}catch(e){$('connection').textContent=embedded?'下载器连接中断，请重新打开左侧“视频下载”。':'本地服务未连接，请双击“启动下载器”后刷新。';$('connection').classList.add('offline');}finally{refreshBusy=false;}}
+$('downloadForm').onsubmit=async e=>{e.preventDefault();$('start').disabled=true;message('正在加入下载队列…');try{const d=await api('/api/download',{text:$('links').value,folder:$('folder').value});message('已加入 '+d.added.length+' 个视频。'+(d.skipped?'已跳过 '+d.skipped+' 个正在处理的重复链接。':''));await refresh();}catch(error){message(error.message,true);}finally{$('start').disabled=false;}};
+$('choose').onclick=async()=>{$('choose').disabled=true;try{const d=await api('/api/choose-folder',{});if(d.folder)$('folder').value=d.folder;}catch(e){message(e.message,true);}finally{$('choose').disabled=false;}};
+$('openFolder').onclick=async()=>{try{await api('/api/open-folder',{folder:$('folder').value});}catch(e){message(e.message,true);}};
+$('quit').onclick=async()=>{try{await api('/api/shutdown',{});stopped=true;message('工具已退出，可以关闭此页面。');$('start').disabled=true;$('connection').textContent='服务已退出。下次双击启动下载器即可重新打开。';}catch(e){message(e.message,true);}};
+refresh();setInterval(refresh,1200);
+</script></body></html>

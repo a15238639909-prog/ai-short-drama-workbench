@@ -279,16 +279,7 @@ def generate_character_master(story_id, character_id, style_profile="电影级�
     wardrobe = None
     if c.get("default_wardrobe_id"):
         wardrobe = get_asset(story_id, "wardrobes", c["default_wardrobe_id"])
-    anchor_text = " ".join(x for x in [str(c.get("identity_anchor") or ""),
-                                       str(c.get("build") or ""), str(c.get("clothing") or "")] if x)
-    laterality = ""
-    if "左臂" in anchor_text:
-        laterality = ("；断肢方向（关键）：正面全身图中，人物左臂（观众视角画面右侧）肘下缺失、袖管空荡，"
-                      "右臂（观众视角画面左侧）完整；侧面与背面图保持同一侧断肢")
-    elif "右臂" in anchor_text:
-        laterality = ("；断肢方向（关键）：正面全身图中，人物右臂（观众视角画面左侧）肘下缺失、袖管空荡，"
-                      "左臂（观众视角画面右侧）完整；侧面与背面图保持同一侧断肢")
-    # 把项目设定（世界类型/视觉强度）带给编译器，让选项背后的定义真正生效
+    # 项目设定与人物卡原始事实统一交给人设图文字入口。
     try:
         from cores import story_core as _sc, project_settings as _pset
         c = dict(c)
@@ -298,27 +289,13 @@ def generate_character_master(story_id, character_id, style_profile="电影级�
             style_profile = c["_project"]["style"]
     except Exception:
         pass
-    # 四视图、构图、背景、统一光照这些现在全由编译器的 2.摄影构图 段负责，
-    # 这里再追加一份只会重复，而且旧文案写的是"浅灰背景"，和编译器的"纯白背景"直接打架。
-    # 断肢方向是这个人物独有的、编译器拿不到的信息，只留它。
-    # 【不再用 _thicken_outfit 补服装】那是旧流程（代码套服装模板把描述补厚）的
-    # 补丁。新流程 Qwen 会自己把"黑色修身长裤"补全，不需要代码套模板。
-    # 而且它正是"男主穿裙子"的元凶：给男主分了 outfit_preset=夏季校园装，
-    # 模板里的"过膝百褶裙"（女生的）被无视性别地套到了男主身上。
-    # 现在提示词统一由 authoring.write_char_sheet 写，性别和服装都由卡决定。
-    # 用户在页面上改过提示词就直接用他那份——他改的就是最终稿。
+    # 手动稿直接使用；自动稿与批量、提示词窗口共用同一文字入口。
+    # “左臂戴护腕”等衣物位置不是伤残事实；此处不再从左右部位词推断断肢。
     if str(custom_prompt or "").strip():
         prompt = str(custom_prompt).strip()
     else:
-        # 【新流程：Qwen 写，不再代码拼】把人物卡压成一句话，交给 prompt_writer。
-        # Qwen 一次输出两段：出图提示词 + 通用人物外观。外观存回卡（look_full），
-        # 场景图引用这个人物时就用它，人物才不会飘。
-        # 【唯一入口】提示词怎么写、否定句怎么剥、look_full 怎么存，
-        # 全在 authoring.write_char_sheet 里。这里只负责把断肢方向这条
-        # 人物独有的硬信息传进去——两条出图链必须用同一份提示词。
         from cores import authoring as _au
-        prompt = _au.write_char_sheet(story_id, c, c.get("_project") or {},
-                                      extra_rules=laterality.lstrip("；"))
+        prompt = _au.write_char_sheet(story_id, c, c.get("_project") or {})
    
 
     # Turbo 检查点 + 两段式：7 步 / cfg 1.0。尺寸是**出底**，成品是它的 1.5 倍。

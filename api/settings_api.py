@@ -370,13 +370,16 @@ _T_SCALE = "内容尺度·每种的影响（分层）"
 _LAYER_CN = {
     "story": "决定故事怎么写",
     "figure": "普通人设外观补充",
-    "figure_pose_male": "人设图·男性姿势替换",
-    "figure_pose_female": "人设图·女性姿势替换",
+    "figure_pose_male": "人设图·男性姿势＋版式",
+    "figure_pose_female": "人设图·女性姿势＋版式",
     "figure_clothing_male": "人设图·男性服装替换",
     "figure_clothing_female": "人设图·女性服装替换",
     "shot": "决定画面怎么拍",
 }
 _LAYER_EN = {v: k for k, v in _LAYER_CN.items()}
+# 已打开的旧设置页仍可按旧显示名称保存到相同字段。
+_LAYER_EN.update({"人设图·男性姿势替换": "figure_pose_male",
+                  "人设图·女性姿势替换": "figure_pose_female"})
 
 
 def _styles_root():

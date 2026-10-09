@@ -60,3 +60,8 @@ venv/
 *.jpg
 *.jpeg
 *.zip
+
+# 下载器运行数据与临时验收文件
+/tools/douyin-downloader/data/
+/tools/douyin-downloader/validation/
+/tools/douyin-downloader/下载的视频/

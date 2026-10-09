@@ -51,6 +51,7 @@ window.Pages.history = (function () {
     return '<div class="card" id="hist' + i + '" style="padding:10px">' + media(it) +
       '<div style="margin-top:6px">' + srcTag + '</div>' + promptBox +
       '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">' +
+      '<button class="btn small" data-open-folder="' + i + '"' + (it.path ? '' : ' disabled') + ' title="打开这张图片或视频所在的文件夹">📂 打开文件夹</button>' +
       (it.prompt ? '<button class="btn small" data-copy="' + i + '">📋 复制提示词</button>' : '') +
       '<button class="btn small primary" data-save="' + i + '"' + (it.saved ? ' disabled' : '') + '>' +
       (it.saved ? '✓ 已存到项目' : '💾 保存到项目') + '</button></div></div>';
@@ -100,6 +101,17 @@ window.Pages.history = (function () {
     var rf = document.getElementById("hrefresh"); if (rf) rf.onclick = function () { load(); };
     var pv = document.getElementById("hprev"); if (pv) pv.onclick = function () { if (page > 0) { page--; load(); window.scrollTo(0, 0); } };
     var nx = document.getElementById("hnext"); if (nx) nx.onclick = function () { page++; load(); window.scrollTo(0, 0); };
+    [].forEach.call(main.querySelectorAll("[data-open-folder]"), function (b) {
+      b.onclick = function () {
+        var it = items[+b.getAttribute("data-open-folder")];
+        if (!it || !it.path) { UI.toast("这条记录没有文件路径", "err"); return; }
+        b.disabled = true;
+        window.api.get("/api/open-folder?path=" + encodeURIComponent(it.path))
+          .then(function () { UI.toast("已打开所在文件夹"); })
+          .catch(function (e) { UI.toast(e.message, "err"); })
+          .finally(function () { b.disabled = false; });
+      };
+    });
     [].forEach.call(main.querySelectorAll("[data-copy]"), function (b) {
       b.onclick = function () {
         var it = items[+b.getAttribute("data-copy")];

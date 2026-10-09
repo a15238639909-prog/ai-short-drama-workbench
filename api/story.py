@@ -346,7 +346,8 @@ def r_033(h, path, d):
         _hair = style_presets.hair_def(_sex, c.get("hair_preset"))
         if _hair:
             c["hair"] = _hair
-    if any(k in patch for k in ("sheet_body_ratio", "build", "face_type", "hair_preset", "hair", "sex",
+    if any(k in patch for k in ("name", "age", "char_type", "behavior_anchor", "personality",
+                                "sheet_body_ratio", "build", "face_type", "hair_preset", "hair", "sex",
                                 "outfit_preset", "clothing_requirement", "clothing", "appearance_details")):
         c["image_prompt"] = ""       # 卡已改，不能再把旧提示词当成当前提示词展示
     asset_core.refresh_character_anchors(c)

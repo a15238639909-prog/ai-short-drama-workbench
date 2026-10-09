@@ -12,7 +12,7 @@ window.Pages.config = (function () {
     ["身材·每种的定义", "男女身材"],
     ["脸型·每种的定义", "男女五官"],
     ["发型·每种的定义", "男女发型"],
-    ["人设图普通姿势·按性别", "人设图姿势"],
+    ["人设图普通姿势·按性别", "普通姿势＋版式"],
     ["人物种族·每种的骨骼特征", "人物种族"],
     ["服装预设·按世界", "服装预设"],
     ["内容尺度（选项和内容）", "尺度人设图"]
@@ -212,7 +212,7 @@ window.Pages.config = (function () {
         body + '</div>';
     }
     return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
-      '<b style="font-size:15px">' + esc(presetKey) + '</b>' +
+      '<b style="font-size:15px">' + esc(presetKey === "人设图普通姿势·按性别" ? "普通人设图·姿势＋版式（按性别）" : presetKey) + '</b>' +
       '<span class="note-gray" style="margin:0;font-size:12.5px">' + esc(presetNote(presetKey)) + '</span>' +
       '<span style="flex:1"></span>' +
       '<button class="btn small" id="ppReload" type="button">↩ 放弃改动</button>' +

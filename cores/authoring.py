@@ -10985,9 +10985,11 @@ def _face_diff(a, b):
 
 
 def _face_fix(specs, log=None, locked=()):
-    """核对 + 修：空项按顺序补第一个没人用的选项；两人差异不足三项，
-    就给**没锁住**的那个换项，直到够三项。确定性，不再叫模型。
-    locked：这些下标的人已经定过脸（可能已出过图），一项都不动。"""
+    """只补缺项；已有结构由人物卡和脸部设计师确定，保留原值。
+
+    组内差异交给设计指令，在尚未指定的结构中实现。
+    locked：这些下标的人已经定过脸，一项都不动。
+    """
     keys = list(_FACE_OPTS)
     locked = set(locked or ())
     for i, sp in enumerate(specs):
@@ -10999,27 +11001,6 @@ def _face_fix(specs, log=None, locked=()):
                 sp[k] = next((o for o in _FACE_OPTS[k] if o not in used), _FACE_OPTS[k][0])
                 if log is not None:
                     log.append("%s 的%s空着，补成「%s」" % (sp.get("name"), _FACE_CN[k], sp[k]))
-    for i in range(len(specs)):
-        for j in range(len(specs)):
-            if i == j:
-                continue
-            # 谁来让步：i 没锁就动 i；i 锁了 j 没锁就动 j；都锁了不动
-            mover = i if i not in locked else (j if j not in locked else None)
-            if mover is None:
-                continue
-            other = j if mover == i else i
-            guard = 0
-            while _face_diff(specs[mover], specs[other]) < _FACE_MIN_DIFF and guard < 12:
-                k = next((k for k in keys if specs[mover][k] == specs[other][k]), None)
-                if k is None:
-                    break
-                cur = specs[mover][k]
-                specs[mover][k] = next(o for o in _FACE_OPTS[k] if o != cur)
-                guard += 1
-                if log is not None:
-                    log.append("%s 和 %s 太像，把 %s 的%s换成「%s」" % (
-                        specs[mover].get("name"), specs[other].get("name"),
-                        specs[mover].get("name"), _FACE_CN[k], specs[mover][k]))
     return specs
 
 
@@ -11179,7 +11160,7 @@ def default_height(c):
     return None
 
 
-def body_text(c):
+def body_text(c, include_label=True):
     """给出图的纯身材句，只描述骨架、肌肉、脂肪与曲线，不夹带身高。"""
     from . import style_presets as sp
     sex = card_sex(c) or "女"
@@ -11190,11 +11171,11 @@ def body_text(c):
     d = sp.body_def(sex, build) or ""
     # 年龄与性别已有独立字段；体型正文不再额外指定“成年”身份。
     d = re.sub(r"^成年(?:男性|女性|肌肉女性)[，,、 ]*", "", d)
-    return "%s（%s）" % (build, d) if d else build
+    return ("%s（%s）" % (build, d) if include_label else d) if d else build
 
 
 
-def _char_one_line(c, settings=None):
+def _char_one_line(c, settings=None, visual_facts=None):
     """人物卡 → 喂给出图指令词的一句话。
 
     【两个坑，都踩过】
@@ -11229,10 +11210,10 @@ def _char_one_line(c, settings=None):
             ratio_name = str((sp.resolve_auto_character(c, settings or {}) or {}).get("sheet_body_ratio") or "").strip()
         except Exception:
             ratio_name = ""
-    ratio_text = _with_def(ratio_name, sp.body_ratio_def, ratio_name)
+    ratio_text = str(sp.body_ratio_def(ratio_name) or ratio_name).strip() if ratio_name else ""
 
-    # 人设图姿势是独立层：普通男女各自读取可编辑预设；成人尺度有姿势时按性别覆盖。
-    # 主指令本身不再写固定动作，五官、比例、身材、发型继续来自同一张人物卡。
+    # 展示模板包含姿势和版式：普通男女读取可编辑预设；尺度模板按性别整份覆盖。
+    # 主指令只引用所选模板，五官、比例、身材、发型继续来自同一张人物卡。
     scale_pose = ""
     scale_clothing = ""
     gated = _scale_gate(settings or {}, c)
@@ -11243,26 +11224,29 @@ def _char_one_line(c, settings=None):
     except Exception:
         pass
     sheet_pose = scale_pose or sp.sheet_pose_def(sex)
+    # 已有九项结构时只提供这一份；缺失时才用骨相预设正文补齐。
+    # 具体外貌文字的瞳色、肤色、疤痕等仍独立完整传入，由指令明确优先级。
+    face_reference = face_line(c) or _with_def(face, sp.face_def, sex, face)
 
     bits = [
+        ("人设图展示模板（姿势＋版式）：" + sheet_pose) if sheet_pose else "",
         "%s（%s%s%s）" % (c.get("name"), (sex + "，") if sex else "",
                          ((str(c.get("age")).strip() + ("岁" if str(c.get("age")).strip().isdigit() else "")) + "，") if str(c.get("age") or "").strip() else "", c.get("char_type") or ""),
-        # 脸的骨架（九项可数填空）排在标签前面——标签定义是一句模板，
-        # 同标签的人会是同一张脸；骨架才是把人和人分开的东西
-        ("脸部结构：" + face_line(c)) if not is_nonhuman(c) else "",
-        ("骨相：" + _with_def(face, sp.face_def, sex, face)) if not is_nonhuman(c) else "",
+        ("已合并外貌事实：" + json.dumps(visual_facts["appearance"], ensure_ascii=False)) if visual_facts is not None else
+        (("脸部结构参考（补充）：" + face_reference) if not is_nonhuman(c) else ""),
+        ("具体外貌事实（以此确定对应部位）：" + str(c.get("appearance_details") or "")) if visual_facts is None else "",
         ("头身比例：" + ratio_text) if ratio_text and not is_nonhuman(c) else "",
-        ("身材：" + body_text(c)) if not is_nonhuman(c) else body_scale_line(c),
-        "神态：" + _with_def(pose, sp.pose_def, pose),
+        ("身材：" + body_text(c, include_label=False)) if not is_nonhuman(c) else body_scale_line(c),
+        ("面部表情：" + visual_facts["expression"]) if visual_facts is not None else
+        ("神态取意素材（只转成面部表情）：" + _with_def(pose, sp.pose_def, pose)),
         "发型：" + str(c.get("hair") or ""),
         # P354：有具体服装时款式只给名字（库定义是整套衣服，两套并列会画成两身）
-        ("服装款式：" + (cloth if str(c.get("clothing") or "").strip() else _with_def(cloth, sp.cloth_def, cloth))),
-        "具体服装：" + str(c.get("clothing") or ""),
-        "外貌识别特征：" + str(c.get("appearance_details") or ""),
-        ("人设图姿势：" + sheet_pose) if sheet_pose else "",
+        ("服装款式：" + (cloth if str(c.get("clothing") or "").strip() else _with_def(cloth, sp.cloth_def, cloth))) if visual_facts is None else "",
+        ("静态穿搭清单：" + json.dumps(visual_facts["clothing"], ensure_ascii=False)) if visual_facts is not None else
+        ("服装原始素材（改写成静态穿搭清单）：" + str(c.get("clothing") or "")),
         ("成人设定图服装：" + scale_clothing) if scale_clothing else "",
     ]
-    return "，".join(x for x in bits if x.split("：")[-1].strip())
+    return "\n".join(x for x in bits if x.split("：")[-1].strip())
 
 
 def style_kind(settings):
@@ -11673,7 +11657,7 @@ def write_char_sheet(sid, card, settings=None, extra_rules=""):
 
     程序只汇总人物卡事实，不再自行拼一篇最终提示词。比例、身材、五官、发型、
     服装和成人姿势一次性交给 Qwen；Qwen 负责去重、消除冲突并写成纯正向最终稿。
-    本函数只做必要清理，不在 Qwen 结果后追加第二套长提示词。
+    本函数只清理首尾空白；最终正文保留 Qwen 原稿。
     """
     from . import asset_core, prompt_writer as pw
     render_card = sanitize_card_fields(dict(card or {}))
@@ -11681,11 +11665,15 @@ def write_char_sheet(sid, card, settings=None, extra_rules=""):
 
     nude = is_nude(render_card, settings)
     qwen_card = nude_card(render_card) if nude else render_card
+    # 原卡不动。先让本地 Qwen 把重叠外貌与混有动作的服装资料归类，再写最终词。
+    visual_facts = pw.prepare_character_facts(_char_one_line(qwen_card, settings or {}))
     sheet, _look = pw.write_character(
-        _char_one_line(qwen_card, settings or {}),
+        _char_one_line(qwen_card, settings or {}, visual_facts=visual_facts),
         _scale_gate(settings or {}, render_card),
         extra_rules=str(extra_rules or "").strip())
-    sheet = _strip_neg(sheet)
+    sheet = str(sheet or "").strip()
+    if not sheet:
+        raise ValueError("本地模型没有返回人设图提示词，请稍后重试")
     assert_allowed(cards=(render_card,), settings=settings, text=sheet, media="image_prompt")
     saved = asset_core.get_asset(sid, "characters", card.get("character_id"))
     if saved:
