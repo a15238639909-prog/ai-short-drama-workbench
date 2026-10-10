@@ -1,0 +1,1202 @@
+[
+  {
+    "path": ".gitignore",
+    "sha256": "c4052a8368516428d1987498531182bf158406303434785368063fd924e69041"
+  },
+  {
+    "path": "CHANGELOG.md",
+    "sha256": "024b0138f31ab4432da08d0e74371ab8a8c40612b58f47bfb982b6a0903af7e7"
+  },
+  {
+    "path": "LICENSE",
+    "sha256": "4f5d36e42fb4260449c78e037ccedc1644f283c7a05dd979fd5cd243812bc6aa"
+  },
+  {
+    "path": "README.md",
+    "sha256": "2d1d8dc391986b6db7c1e6605f556cd4f277b7d13353afac3ba88817da6eb89f"
+  },
+  {
+    "path": "VERSION.txt",
+    "sha256": "a31a251d607f589d56bfe5484e1b01c5dfd1733369419b00cc6c46638cb64441"
+  },
+  {
+    "path": "_legacy_8848/album_v3_core.py",
+    "sha256": "2a4e367296e9a503dba37c05827bc530bc88cef754bde07888a5a69574ac3e50"
+  },
+  {
+    "path": "_legacy_8848/app.py",
+    "sha256": "f10f123ae0976004a84a71470a6862b30b12da8ad9eeae8f8abb56d3ffacd2df"
+  },
+  {
+    "path": "_legacy_8848/character_asset_lib.py",
+    "sha256": "2f35cb5a8c1a3a97b19f123933beea769e33fddee48f0a81ccf087eaf893bba3"
+  },
+  {
+    "path": "_legacy_8848/character_design_core.py",
+    "sha256": "e5b728402d00d657b6a9192b24f66ba81de8eda7d63086948e2a31984098904b"
+  },
+  {
+    "path": "_legacy_8848/krea2_workflow.json",
+    "sha256": "e8c74cc80bc7f269dd018d8e14f9861dce92d93b97e45bbdce461dfe47aa6e3a"
+  },
+  {
+    "path": "_legacy_8848/photo_v1_ui.js",
+    "sha256": "820608641ee3c648b025f7f88259d7c39ffe4374ccea6709bc8bd33a09dcd87e"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/__init__.py",
+    "sha256": "dba71ba38e0a9ca15f60103316ef94ebde92483ee9fcb2c195af2fd21303dec0"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/album_planner.py",
+    "sha256": "57f861c233d1b92d8f1981a9761936cb2ce3e7969db0bd145185f1f2ae04c8b0"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/models.py",
+    "sha256": "a3b0850925d69019aac679d444f3b5fd0ffacc138f95d52b0d6964b4adf39c23"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/photography.py",
+    "sha256": "f611210b1ec6cb6fe3668f45bb8e479c4169b9f17aa5324d5d4e8f561fa32994"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/prompt_builder.py",
+    "sha256": "ca2fed513d825e62dce6c8d483d588ffadddaab96c907d0a38dfa355edcddc7f"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/scene_pool.py",
+    "sha256": "3d38cf07181314a281be5e2861fa89ea6bed717dfb5843140a07de96340bfcf0"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/wardrobe_pool.py",
+    "sha256": "bfa62b84641189ac7872f8e23dd38effdb8441a870cc67470e76cf584bfee436"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/domains/__init__.py",
+    "sha256": "4f132853f4b71c6e3aba6e4f18a287f3f99e0eb1d1d4c4c93b771c87207f67bf"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/domains/real_world.py",
+    "sha256": "3c32e689d6c505d42dea97c88e154ba489c9a71a8922f3ea36828fe588eda329"
+  },
+  {
+    "path": "_legacy_8848/portrait_kernel_v1/domains/space_life.py",
+    "sha256": "789e067d704f432ad0ddbae473c5e4ea6896b01c2fea276ab4fb7c57685e7b0e"
+  },
+  {
+    "path": "_legacy_8848/portrait_v1_core.py",
+    "sha256": "eb791531796d31f5f2b326090ec581235d4a8631b2b0884c3393590bbe201da9"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/__init__.py",
+    "sha256": "6d087f2b474f74427bb082af056089702699eb4dedfe4af88a6395ad679a6c08"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/audit.py",
+    "sha256": "003eed4803dcef1efed9f154e9f93e72aa6b063986d1ed89e4d4ee4676da366b"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/contracts.py",
+    "sha256": "a3afa5e140cc264159460ccf3a2d8d0dce4642f38faa49845ce9d6db850e1bab"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/models.py",
+    "sha256": "ff63d8ae9857a4483b7e1b34214cad1456974cf391a087a3c1c9717a72010fbf"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/pipeline.py",
+    "sha256": "51ae6ada9f649098d0ff0bd422bdeb6f4e763edfa942c5cb7eafee46c4e8d35b"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/planning.py",
+    "sha256": "f684bb24fac24bcf26d905c055658339c899ad585fe77ce81ea59f42774e0955"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/prompt_compiler.py",
+    "sha256": "f5965935494cff9690ab5d4688b636f513369139d6dfafa461c283dd94dafcbd"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/slim_planning.py",
+    "sha256": "8edd407e64e11098d47c902a7cc36210a47a61f50d091b503b0d4ed16dce6dd3"
+  },
+  {
+    "path": "_legacy_8848/stable_fullpage_core/storage.py",
+    "sha256": "6d5c17bdb583a567be749873ddfe4f8945980db44d021a1471d6cb45da1ffd80"
+  },
+  {
+    "path": "_legacy_8848/video-presets/minimaxH3官方提示词模版.txt",
+    "sha256": "ced8fa0903a3a79b6073835f9f35bfee9befb4a804a69fe365ed0c7794b483b8"
+  },
+  {
+    "path": "_legacy_8848/video_gen_core.py",
+    "sha256": "14b63e5d2f5488610eddee5689829a9455281a7ae9df633a4e9033668660d27b"
+  },
+  {
+    "path": "_legacy_8848/video_gen_workflows/i2va_fl2va.json",
+    "sha256": "5c306411d69520ed3bca07144306ce9f38c8cfc96b50009657f40864be9db57a"
+  },
+  {
+    "path": "_legacy_8848/video_gen_workflows/ref2va.json",
+    "sha256": "608b742138d183ed517b1a6239c66918351d72aefa303db5b2e2eb59d12d80cf"
+  },
+  {
+    "path": "_legacy_8848/video_gen_workflows/t2va.json",
+    "sha256": "d78af7319aef2a21d6f1eb13ad44152c43b8ad7efc330e0ae9910eb7dc2750fe"
+  },
+  {
+    "path": "api/__init__.py",
+    "sha256": "fe626e90d6a6817aa8382fe93d50b16ab43e6900366eb55209a266daa72f6c70"
+  },
+  {
+    "path": "api/_shared.py",
+    "sha256": "a4afed9d5676c622a362bf22a5a8e903dd22e46552bd2304819867060f64e496"
+  },
+  {
+    "path": "api/assets_api.py",
+    "sha256": "69f90ef80db1039a2715f03b2d33eca00d7acceb7036370dae667eb771293f0a"
+  },
+  {
+    "path": "api/chain_api.py",
+    "sha256": "315ff4db484dfa5b29dc6feda816f24cda57d05b5b6195749b8bfc612653724f"
+  },
+  {
+    "path": "api/config_api.py",
+    "sha256": "2498d3f431d3349d4990bb2d5ddb2490f60755f789af35121e1639d982aabe16"
+  },
+  {
+    "path": "api/download_api.py",
+    "sha256": "635dd76d0a0ff51748d622b8a3bc51602d2e4ac9b0e60b826f11ca280589c224"
+  },
+  {
+    "path": "api/gpu_api.py",
+    "sha256": "3c2d17b667ac0fc22be37066ed64fa72c63c8688fcc8e6b02ed4609b4a509b73"
+  },
+  {
+    "path": "api/history_api.py",
+    "sha256": "23d8cff28117899ea8033a46a43ad21f7fa6324e86c46c259b7d48a43787b304"
+  },
+  {
+    "path": "api/image_api.py",
+    "sha256": "4f074cdde89f7906f25093c074a0e22d5403e590b05f5e8aacdf4ee7891b5c5e"
+  },
+  {
+    "path": "api/motion_api.py",
+    "sha256": "ac3425acf2ea3ad3f2a5690b6a45193844f22aff1deaa322fb088a90eb727312"
+  },
+  {
+    "path": "api/recovered.py",
+    "sha256": "02277e03a592f9eb1340e1e800356edddba93c90340496b3f9ee0707c7b079fb"
+  },
+  {
+    "path": "api/saga_api.py",
+    "sha256": "ee067fb37af722f61223b9fe3efe259518978dad20628d590438d2fb209f50a6"
+  },
+  {
+    "path": "api/segment_api.py",
+    "sha256": "9603cebb5f072c53b976838a011b646dce3ced93059a3c1ed7739c1ead9ab569"
+  },
+  {
+    "path": "api/settings_api.py",
+    "sha256": "1bac52c374d6385212a4817c89da5a22aed4ed0e2c25c20ec46f07dbc562cd0c"
+  },
+  {
+    "path": "api/story.py",
+    "sha256": "6cccc53408a21a5aa55a361c8afc34063e74fc78465144a71a13dc06bdd3cf25"
+  },
+  {
+    "path": "api/system_api.py",
+    "sha256": "06e208b2a64b0968690312fd885d6aede0b21c08fc52b5d1735b3cbb5521d518"
+  },
+  {
+    "path": "api/timeline.py",
+    "sha256": "236ebada5cc4c35a76c8d0b895ea96f0d4d586a8fcfc07cd83f418a91c6dbe2e"
+  },
+  {
+    "path": "api/video_api.py",
+    "sha256": "0d9bf1194918afc37707f56ca34b6051bf7ebcd623f6fe89ac1c263eaec39364"
+  },
+  {
+    "path": "config.example.json",
+    "sha256": "9c4796082f5c48581f5f417170180110ea635f48fe8991dfafa3480631413bf6"
+  },
+  {
+    "path": "cores/__init__.py",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cores/age_policy.py",
+    "sha256": "f5a868b8c784168524f31b6af832ed9018ccecdbf2b007649d7bd954ab45136a"
+  },
+  {
+    "path": "cores/arrangement.py",
+    "sha256": "d9508ad1e8d332b9537b5a0575e7a9054f8da55900ca6ea9ab4e100a6e9a98be"
+  },
+  {
+    "path": "cores/arrangement_ops.py",
+    "sha256": "24e814a0098dc4589f25d3d886ab2e6b8d4d262e344ac85af3ff98d344203ecd"
+  },
+  {
+    "path": "cores/asset_core.py",
+    "sha256": "388d8592d0c83ff2858b826238f49ec40f817875f718e8035c223c06da82809d"
+  },
+  {
+    "path": "cores/authoring.py",
+    "sha256": "3ba305ed5eb9efb127c817913f469badabd46eefd59c01204f33247c182ebe64"
+  },
+  {
+    "path": "cores/auto_repair.py",
+    "sha256": "1542cebe4072c723f2d4b65d7338c71fc60ec027283c3b5f6e9fcccc821fb2d0"
+  },
+  {
+    "path": "cores/camera_view.py",
+    "sha256": "44cc58c6b35d1b550db759641bd19c836a16623b36b2c2c1c4382724835bbda5"
+  },
+  {
+    "path": "cores/canon_core.py",
+    "sha256": "4cbc0fe4f71023c7944e6dfe3415c27a7fa65c6815711b54df87ed05101a186b"
+  },
+  {
+    "path": "cores/canon_guard.py",
+    "sha256": "ad1326643b5a3b7ad7151cba5272c2e08e2208f7fcc729b4372c30ebbb4a2312"
+  },
+  {
+    "path": "cores/chain_core.py",
+    "sha256": "955a340e74cf2d1da736ea441862cefd4447630819dad227dbdf182443b0c93e"
+  },
+  {
+    "path": "cores/character_setup.py",
+    "sha256": "da90eb0aa49fbc09f944d41efc5984747823f438453271341461c38fc3473b5e"
+  },
+  {
+    "path": "cores/consistency.py",
+    "sha256": "88b9f81f841515c4f3d6c0e11732a9188418c3f5ed47659f5a8bb58be900ce92"
+  },
+  {
+    "path": "cores/context_engine.py",
+    "sha256": "c4d0f80251fe7fdac8f085f4a38edb8cad60b2de0688a9c3b8b64dc13a085b84"
+  },
+  {
+    "path": "cores/decisions.py",
+    "sha256": "53fe0e935e59804eb550793a2e12b4686054e776d2de09f102ff33ac3169dacb"
+  },
+  {
+    "path": "cores/dialogue_ledger.py",
+    "sha256": "c4c335754850b4a462fc3eacc570569aa54ae049bd0f8f294440607923b7a2c8"
+  },
+  {
+    "path": "cores/director.py",
+    "sha256": "96efbbfd25b8cc413a76400a159cd847c757dc7c5610a905054f329c36c134a8"
+  },
+  {
+    "path": "cores/director_layer.py",
+    "sha256": "bc39c1dde286fe5077d6d45d85a9a85ebd7679e55cfa8b08acdf34ad8eaf6af2"
+  },
+  {
+    "path": "cores/director_shots.py",
+    "sha256": "9140515f29b195751c0262db39e0b61b28c4eef2858af8c93e8fdc9e09259744"
+  },
+  {
+    "path": "cores/doctor.py",
+    "sha256": "8364ad17b62d329ee0cad0174ecd94e60fb49c02dc08274efa31a6298b2ce6fa"
+  },
+  {
+    "path": "cores/episode_ledger.py",
+    "sha256": "273f82703f1a907a62914516d9df8e184a0deca090cf5c4794e170011d600a3b"
+  },
+  {
+    "path": "cores/episode_merge.py",
+    "sha256": "f5a2cde9a5df58c93f42520ac229de712f99e6aba3ad6f0ce194560495cc62aa"
+  },
+  {
+    "path": "cores/expand_core.py",
+    "sha256": "e2bcd0fd909398509f7b8cc849c3bcb4d3f94b218c9914ef5cb83215a77039a1"
+  },
+  {
+    "path": "cores/gen_history.py",
+    "sha256": "86291e888952f951bde20901cadc45b0e0e62a9f542598428cde94b7ffbed87b"
+  },
+  {
+    "path": "cores/graph_core.py",
+    "sha256": "5300b0163bf878d124f75efa8d73e8163d3afe721024e48b08ddeacb80cf8731"
+  },
+  {
+    "path": "cores/h3_format.py",
+    "sha256": "53d3f4c710ee96d9c044813a8d7fdd10a0c09f268ffdbb553934fd22eec76fdf"
+  },
+  {
+    "path": "cores/health.py",
+    "sha256": "4ba0ee8156ca1b19dd7bcd174ac11faf11c62a4227f0fa8a17e270a8e30031ac"
+  },
+  {
+    "path": "cores/kits.py",
+    "sha256": "ddc59ff1930a896356f261e66d54128629becb9405c258562f989aa1811b628c"
+  },
+  {
+    "path": "cores/manual_story.py",
+    "sha256": "dca40ffe8e0271b5b0a23c07fc427dd1e14c27515b6a8da14ba76c0cb8ff0e5a"
+  },
+  {
+    "path": "cores/model_json.py",
+    "sha256": "9772a85f1d4dfcb822db5c0ef93931866a6b91fe6088bfc6d707809d90740e26"
+  },
+  {
+    "path": "cores/motion_core.py",
+    "sha256": "0963d4e97b063f28f871419d359fb348d6047aaefea55385187d21ea938a534e"
+  },
+  {
+    "path": "cores/motion_features.py",
+    "sha256": "3250e2b7dae93fc503d12338795678b6a765e8fe1e5a64831b201776f902b8a8"
+  },
+  {
+    "path": "cores/motion_prompts.py",
+    "sha256": "096be547693c04488d77f4ca26e86f685078d3cdd7f2e7b69fdb3ccd1453d8f0"
+  },
+  {
+    "path": "cores/motion_timeline.py",
+    "sha256": "2990bfe708eec53da0b771234d4a1ac8036ccf512be07fd1a1c0a8583e05fb36"
+  },
+  {
+    "path": "cores/motion_upload.py",
+    "sha256": "4abe0ac12a7488bfa291aaf8396304ff1ca726bfb526beb3c286243af09d3b16"
+  },
+  {
+    "path": "cores/narrative_core.py",
+    "sha256": "6d04f2d3c850253beb766733fcbdb90cbf1d98baec7bf4b94563af3ae092327b"
+  },
+  {
+    "path": "cores/one_shot_setup.py",
+    "sha256": "3770f9b4afdd092d65e39d9f859eda920eecfe5597b676e7e5d1329d28230f40"
+  },
+  {
+    "path": "cores/opening.py",
+    "sha256": "7d1856f3bb469d7f7e0cc8c318294b682c058c4245c3ae4c209264c93b6614b7"
+  },
+  {
+    "path": "cores/oral_story.py",
+    "sha256": "62d0526349d6daa2829405bfc1c0d1e0415aa8692a7732fd04c5277a236fa2cd"
+  },
+  {
+    "path": "cores/pace.py",
+    "sha256": "1d58557720f6ce420265501055f932990dcc759d4452ecb85e8946755be733eb"
+  },
+  {
+    "path": "cores/paths.py",
+    "sha256": "fdcb7219e5861798c24530ce5a54af8478dba5a8cc349129266a54ec8650c219"
+  },
+  {
+    "path": "cores/premise_guard.py",
+    "sha256": "44461154c264d866197c85b1d035fa2d9d526e4feafef128f0e74b858d476715"
+  },
+  {
+    "path": "cores/profile_core.py",
+    "sha256": "967fc49af2ea1c5ece3e712c8fed44c445330349f9434bf8c0d04c136cf24bb8"
+  },
+  {
+    "path": "cores/project_prompt.py",
+    "sha256": "a52609aa7feb94063e1c7fb2c3fdba88b490065305b40674e284c489a620e079"
+  },
+  {
+    "path": "cores/project_settings.py",
+    "sha256": "c3f76b46873367791123476273055b4edba93fc59986dd1979cf70725795963e"
+  },
+  {
+    "path": "cores/prompt_hygiene.py",
+    "sha256": "ea80b06c7b7a06fc6d279e981e1c05b28dad5fba52c0fb34618e2b0610b74978"
+  },
+  {
+    "path": "cores/prompt_writer.py",
+    "sha256": "eaab5bdb5b0e2e145b3df2361cef9db989e78dfe10e42409c2804f36d41896d8"
+  },
+  {
+    "path": "cores/prose_edit.py",
+    "sha256": "38319f43025d88d5e75b5e3f1d5ff0737a068e6bad9e6b2abf0d96e639acf306"
+  },
+  {
+    "path": "cores/quality_core.py",
+    "sha256": "caa52dfb5b2e8183912501fcc1f0f8d1e31bac061c36827fcab8568b6b6dd0d4"
+  },
+  {
+    "path": "cores/reasoning_policy.py",
+    "sha256": "ebae9ae9836dbdf5c7a4b89b55c56c6fd3a0f85fd1c4f89f3125cc245de4ca58"
+  },
+  {
+    "path": "cores/reference_budgeter.py",
+    "sha256": "f40026f97a0d12c57cc4387561aacf67ca6675e6697c870629f6deb2f69475d2"
+  },
+  {
+    "path": "cores/reference_ready.py",
+    "sha256": "30cbb04d7a0bad5ccf6bed4b8545650463862c3e4b9ab12437c34df69fc30ff7"
+  },
+  {
+    "path": "cores/runtime_core.py",
+    "sha256": "22c2d973d56c5120d60dcdd01d1537bb5f73d50b71432f606cd6770cf65cc2a9"
+  },
+  {
+    "path": "cores/saga_core.py",
+    "sha256": "f374ed39b1d136c6ad70678a00ac0f94ca9c71d70e3a383d3be540ce8e17d20b"
+  },
+  {
+    "path": "cores/scene_layer.py",
+    "sha256": "a786c9982755a3285f37dcd02fb128e8fe5bb965d5ac7899a24c035c9d3c90f5"
+  },
+  {
+    "path": "cores/screenplay_norm.py",
+    "sha256": "2d440f0135c4168a7db7eabda0f93cbb04976ec3d44a8f02c35e6c2f272ec479"
+  },
+  {
+    "path": "cores/script_text.py",
+    "sha256": "78c45b85c8a1c325ce6da8b43391716d621f31cd6e273e94f2ceeb14a654cda2"
+  },
+  {
+    "path": "cores/seam_v2.py",
+    "sha256": "0fb84226f6643e25b73cc78af604cc5dc6c78eb69b1639d4f5416069f8a0d812"
+  },
+  {
+    "path": "cores/shot_edit.py",
+    "sha256": "e48166f6c8e64f7d96321420bc2ce004915ebd74371299dcf383e72d2ee9b14a"
+  },
+  {
+    "path": "cores/shotlist.py",
+    "sha256": "270bb5ef5b7215b01637095887a4457e0ba16aaf32892ef077595aa5a08c40fa"
+  },
+  {
+    "path": "cores/stage1_core.py",
+    "sha256": "694cdb2e3f3171dfa532f866e93a532308d12c5f4d0ab23eec064696fc557fba"
+  },
+  {
+    "path": "cores/state_core.py",
+    "sha256": "8ec162027ce47ffea68a13511fe31b0e26aa3d18dcfcbbb73d600a389bbab49b"
+  },
+  {
+    "path": "cores/store.py",
+    "sha256": "3d6374f814b75b5bdd29d02e735215c8b9689b9af6f7ca74b983d1433bdb170b"
+  },
+  {
+    "path": "cores/story_core.py",
+    "sha256": "52650f6efa7d58d7bd4dfb635c475443a8ecb0abf94ec7e042421d5ac9740dde"
+  },
+  {
+    "path": "cores/story_gen.py",
+    "sha256": "b86497c0d8719100bdf33f7a00abb4d58be574be771ddbe1503fa11d382b3466"
+  },
+  {
+    "path": "cores/story_layer.py",
+    "sha256": "6faccd6381680d5dc6122d8f8cac02a32daf24cabd9f12fa89a0e646ef90c54d"
+  },
+  {
+    "path": "cores/story_plan.py",
+    "sha256": "6f1e521a38e89f92a48d8aae3d86b9827eb36fcbb9f5c1816a7b31e240c33d10"
+  },
+  {
+    "path": "cores/story_profile.py",
+    "sha256": "8d6c1e87da37e341e578102cde0f7196de443ea7438546b3c7a49514d95aa4f9"
+  },
+  {
+    "path": "cores/story_shape.py",
+    "sha256": "18135d315affc46654d862eb0a5462b6d3a103a2ef4ca7d4731f62137e3893ff"
+  },
+  {
+    "path": "cores/style_instruction.py",
+    "sha256": "36679d23df158ccd47c7587422b72afc39d770cd48d043814ffe1910202c9120"
+  },
+  {
+    "path": "cores/style_presets.py",
+    "sha256": "c0df0ab5a3788b83ce26c621c22bc2d3dfd2bf96c3c74283f686c29e5b2cb80f"
+  },
+  {
+    "path": "cores/text_checks.py",
+    "sha256": "cbcdef790c58e0aad0a341e48bce2222ae520ec71ed70a422e2f5671b9558599"
+  },
+  {
+    "path": "cores/textchain.py",
+    "sha256": "eac71815f1e96cefedab9df15d8b1e1ac1ed798734de35f7225259d03ff0189f"
+  },
+  {
+    "path": "cores/universal_writer.py",
+    "sha256": "dae5d2fda5d0947901a69b464cdd5652f11f94737be1aa5aa8faadf7b10d180b"
+  },
+  {
+    "path": "cores/video_layer.py",
+    "sha256": "be0cfa9054ad4751e6b992a8cf7557f699c54560e1ddbec48b392ef04da167ec"
+  },
+  {
+    "path": "cores/wardrobe.py",
+    "sha256": "10986200cc2585225d0fa15b79c3c0192eec38caf68f223e29cb64825739c828"
+  },
+  {
+    "path": "cores/whole_plan.py",
+    "sha256": "0ef035c67ae55efde114b7dbc0588b43ef4eed9fdedc3bd35f9dc22127303954"
+  },
+  {
+    "path": "docs/ARCHITECTURE.md",
+    "sha256": "0ccf272bd82a27d8366297a29f3f2bff06daa4922ca68b6927aa4ed973691448"
+  },
+  {
+    "path": "docs/BUNDLED_TOOLS.md",
+    "sha256": "2d5cfaa4ff4e82f8998dfb65d4bc2014f57bb83bb45abb8b7a65e1899cebd9d3"
+  },
+  {
+    "path": "docs/MOTION_AND_ANIMA.md",
+    "sha256": "e739407145e38d24950c67eb6c0ca0b61f36f4e9530718764430220fcd69ff0f"
+  },
+  {
+    "path": "docs/RELEASE_v1.02.md",
+    "sha256": "826707906933c129296cb7a2e32a172f07d14bb242e74932c629c4cf22c66667"
+  },
+  {
+    "path": "docs/data_schema.md",
+    "sha256": "52c4147fd4d70aaf8c40576143e2570199b5ddb92f782ee87164f5090fc2da9f"
+  },
+  {
+    "path": "docs/id_relations.md",
+    "sha256": "dc40c1561ec6fd0228e61c2e85cf02b98757a91563dff1b9d8de17ab66aad9d1"
+  },
+  {
+    "path": "models/__init__.py",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "models/anima_client.py",
+    "sha256": "e6f7597f833a0448b9800052fb035e09960431614a15c4b081ddfce1da05649d"
+  },
+  {
+    "path": "models/anima_workflow.json",
+    "sha256": "fdabd8b8d1c363e38fb0eef5f2bcc65df01ebdc1cb683ea1295367682fc0223d"
+  },
+  {
+    "path": "models/gpu_manager.py",
+    "sha256": "972050776c1f869b71cb2e2d3ac725554625a112064d9ff0e8813bff5ab6e069"
+  },
+  {
+    "path": "models/h3_client.py",
+    "sha256": "d60b63f674e6ad2fb5e899203b1d43ff1196cec4bb4f5d84197b2bc088f09554"
+  },
+  {
+    "path": "models/krea2_2stage_workflow.json",
+    "sha256": "4c4339c905e659c6fe35dde4dc8455d89ab0bed200ca47467f66fd2ef75b982c"
+  },
+  {
+    "path": "models/krea2_workflow.json",
+    "sha256": "e8c74cc80bc7f269dd018d8e14f9861dce92d93b97e45bbdce461dfe47aa6e3a"
+  },
+  {
+    "path": "models/krea_client.py",
+    "sha256": "3f0ce7d267e4eed5129184664fd8908347b427aca20d151fee0b75819a477178"
+  },
+  {
+    "path": "models/krea_edit_client.py",
+    "sha256": "bfca0a1c0388357020448d459a3fbf0100ae8f65ebe85333593e0ff2c1c579bc"
+  },
+  {
+    "path": "models/qwen_client.py",
+    "sha256": "465818a92f22e0474e04f144181677afd375f001130c56d04ef9eef09c51f5ce"
+  },
+  {
+    "path": "models/video_workflows/i2va_fl2va.json",
+    "sha256": "5c306411d69520ed3bca07144306ce9f38c8cfc96b50009657f40864be9db57a"
+  },
+  {
+    "path": "models/video_workflows/ref2va.json",
+    "sha256": "608b742138d183ed517b1a6239c66918351d72aefa303db5b2e2eb59d12d80cf"
+  },
+  {
+    "path": "models/video_workflows/t2va.json",
+    "sha256": "d78af7319aef2a21d6f1eb13ad44152c43b8ad7efc330e0ae9910eb7dc2750fe"
+  },
+  {
+    "path": "presets/8848_底层定义原文.js",
+    "sha256": "14aad616faf7b8a5f386237222ee28fb865fbc4557b880956f5c9f03c709e391"
+  },
+  {
+    "path": "presets/_指令词清单.json",
+    "sha256": "1f85bbcb9d5c8d60d6ad2fea3a2799057cde1935353a91d8f0c49d809efbd6fc"
+  },
+  {
+    "path": "presets/character_settings/示例·华丽东方玄幻主角.json",
+    "sha256": "edbe7e87fc490206843ba582b3dee8e2903bb9d156a473744d4a914cca720dd7"
+  },
+  {
+    "path": "presets/comic_styles/3D游戏.txt",
+    "sha256": "b85e9320e6be9536a8a90bc40abf5b5262eeca5b27180c6a9e34e1ae47fffdba"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·3D游戏模型.txt",
+    "sha256": "bb3db004e38874324f420ac4f5810a105f5137704e47a43e3f8258455a2850b6"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·80年代胶片电影.txt",
+    "sha256": "5a9dcc8b97b96363ed22f77ded5ca26f1d0b9df52f6920655f6f68acff7451bd"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·仙侠偶像剧.txt",
+    "sha256": "e5bed73ca27db42a1086d90be2c2fb66bbe3deec0614f5c70a486c879855fd2a"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·像素复古游戏.txt",
+    "sha256": "8f99ebaa4ca456f62d354441435c4270babd7dd340447a163055541b863d3719"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·厚涂插画.txt",
+    "sha256": "35d1f1725905452f863e796080a15971776a01319b86bce321faac20f1c73776"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·国风水墨写意.txt",
+    "sha256": "69783e254589200c7b3f05952d48b94e8d081ce2ef8805bc491b3def1b8498e7"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·复古赛璐璐80年代.txt",
+    "sha256": "2efb4d2be38d0792497c87a790bdef3bf243815e0511f7205f9eb5d9dbccbb32"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·尼尔式机械美学.txt",
+    "sha256": "1c9943c99d3121e1c8b810cd4999012e07af9532782c58ce10c85879ed766e2f"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·日式小清新.txt",
+    "sha256": "5abe4701d7667d50624252ccca0b89017662d540ab2332efd0ba973d0b5f123e"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·水彩油画手绘.txt",
+    "sha256": "0c7d805d5bbe51987c41a07660f19c64f4fba88b533679a4ee96a5a2e6636a75"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·电影级剧照.txt",
+    "sha256": "c9764669a44207b18652bd1273cf3b058c1ff584a9a53a4a8b1e9f5f6bc6d6de"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·赛博霓虹蒸汽波.txt",
+    "sha256": "c96558e53019730d3d5e33c91464764dca4226a1746747b68a8649dfcca7d3df"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·超仿真生活照.txt",
+    "sha256": "e79a4d4e5aab1e94a4e951dc71badeb062798e78e7f26e2b21ebfc8f27236ac9"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·高质量日漫.txt",
+    "sha256": "d5c386e0f4b702c0f7ae629b5288052181a64611f295409688a49a4c3d3c6af7"
+  },
+  {
+    "path": "presets/comic_styles/Krea2·黑白日漫.txt",
+    "sha256": "ca3ec05659fbeb55a148b96f3c978d3537d709dfa0dcd4ba2c127915afd12f94"
+  },
+  {
+    "path": "presets/comic_styles/写实生活.txt",
+    "sha256": "16bae773ef57d6ee7e6f16d75ae70420f1eff2368e54c270f346a74fab0d215e"
+  },
+  {
+    "path": "presets/comic_styles/平面动漫.txt",
+    "sha256": "7c7818cd9029e04da6a6a247eac9b45a90eb44956c2f79209800c0b3a8df1ae4"
+  },
+  {
+    "path": "presets/comic_styles/电影级写实.txt",
+    "sha256": "63abd3b32985c01fad16cea96d2a20ed48c03c0f9b4fd91db3fb48b5829d5022"
+  },
+  {
+    "path": "presets/comic_styles/电影质感.txt",
+    "sha256": "f49057aa2da495d4ed496b1d263d1775bd07a805c6eefe05d1ca884983464b72"
+  },
+  {
+    "path": "presets/comic_styles/网红自然感.txt",
+    "sha256": "4d30127334691f6af02999deff7b67b6295786707092c24f6c0bbcaf613aa4be"
+  },
+  {
+    "path": "presets/content_scale.json",
+    "sha256": "5b3e1554ea52d2277d5690b28cdc59305b6994d9f2fe17cd98ca3989984dfe50"
+  },
+  {
+    "path": "presets/face_library.json",
+    "sha256": "a2b9555abb1847a968b2f953ff18ff046666cf57452f463f1ec720fca8030b28"
+  },
+  {
+    "path": "presets/instructions/AI扩写_指令词.txt",
+    "sha256": "1a21f2635e6dff19973d235758273c27392fbf3b71b60973480a48fd4e0ef586"
+  },
+  {
+    "path": "presets/instructions/Anima_人物三视图.txt",
+    "sha256": "184329afb612a033df7d9d8d0a3049bba0eb8b86207c5505be4c7040949205a0"
+  },
+  {
+    "path": "presets/instructions/Anima_英文词组.txt",
+    "sha256": "a583b8bfbc1d6092c4f1ca55e0736d110668199925ee27e785a852c29db8e31f"
+  },
+  {
+    "path": "presets/instructions/Motion_Ref2VA.txt",
+    "sha256": "c69c71588f0961b7cd8c54fc77a3f72d82d529fbe0d0dd81f9094a06b14937a4"
+  },
+  {
+    "path": "presets/instructions/_lab_武戏连续提示词_指令词.txt",
+    "sha256": "ef7e40f54b18617f13ef404ff7d228b2f50756564361a2af34eef93d5f1c03f7"
+  },
+  {
+    "path": "presets/instructions/人物_12.0_指令词.txt",
+    "sha256": "2b8193188478bd3ee0687d4d71e87cc776d892ebbf7b720a80add2c2ff02ae0a"
+  },
+  {
+    "path": "presets/instructions/人物_分段编译_指令词.txt",
+    "sha256": "50e912459a5c694be0030bcc22cacb79421aa9fcbf437f3066f6de26d72337d2"
+  },
+  {
+    "path": "presets/instructions/人物外观详述_指令词.txt",
+    "sha256": "0ca9928c145f5f6227fe2a186092386ba042f950f44c429949e6ccbdf8bef44e"
+  },
+  {
+    "path": "presets/instructions/人物补全_指令词.txt",
+    "sha256": "318f481e3e72b0ea54cb70e82f435ad98df4a0b89fd16c31c422c5a3879a6234"
+  },
+  {
+    "path": "presets/instructions/人物设定_指令词.txt",
+    "sha256": "02fec9e803a9df48bed9b940d7181255786308208ec5078889608ef2327a7d90"
+  },
+  {
+    "path": "presets/instructions/人物设定图_用户版_指令词.txt",
+    "sha256": "db5ed594f63f6c7ef8891c7a1b8cfe0e62d9d8cb24f2506fcd0fe5c9031d0f2d"
+  },
+  {
+    "path": "presets/instructions/人物设定板_指令词.txt",
+    "sha256": "49399d8febdb832dabf995c7f72707eacbb80fd836726564d8fd324f6bf6995e"
+  },
+  {
+    "path": "presets/instructions/人设图_资料整理_指令词.txt",
+    "sha256": "bca628d93aa192e5eda673bc966a9d26ec769b00f3d2243454e924d161577b12"
+  },
+  {
+    "path": "presets/instructions/出片前门_对话修复_指令词.txt",
+    "sha256": "db021d40e36188d9a2e4db09d0a44b7ae7fc5d9059b0c4e1eb514f9b22a0bd47"
+  },
+  {
+    "path": "presets/instructions/剧本方法论.md",
+    "sha256": "55739f43928d9b84488b5a644addd46204981f52c7040097489b246f5f8143d8"
+  },
+  {
+    "path": "presets/instructions/原文改剧本_指令词.txt",
+    "sha256": "cefc203a519d8748382173c133291ae854371b7ec581f2612788ecc2ad700f3d"
+  },
+  {
+    "path": "presets/instructions/发型设计_指令词.txt",
+    "sha256": "773df78d124cd01d6265f0b87c4968c87fc51eeead0218ac0bb5dd7bfbf47dee"
+  },
+  {
+    "path": "presets/instructions/场景_导演分镜.txt",
+    "sha256": "22a8844de8de45bb7bd9c4ef29bb5aa2568dcc1a7637671727d80424fc63acad"
+  },
+  {
+    "path": "presets/instructions/场景_文戏单元.txt",
+    "sha256": "7e01fe181a1983ad7dda8fa2e3284a506865b6a9c69d19ffae456e2dcafbbc05"
+  },
+  {
+    "path": "presets/instructions/场景_节拍拆解.txt",
+    "sha256": "6e886d6ca53c881d16ab7550066289876c0bc70830493db4ccc861b1127a098c"
+  },
+  {
+    "path": "presets/instructions/场景图C_读剧本_指令词.txt",
+    "sha256": "a20da0849ffa444d3b6fadf5f5619b83590f5e3ea99b726851fa00c69cc8857f"
+  },
+  {
+    "path": "presets/instructions/场景图_指令词.txt",
+    "sha256": "0bd4524613e3c512c8e5d6cdc031c99e351a35f39b0767ce24d451d2def1769b"
+  },
+  {
+    "path": "presets/instructions/场景设计稿_指令词.txt",
+    "sha256": "dbb46b6493ecb8eb41b05b3603361c2ae41fc30f32f5dcf5af6f203f345b1e3d"
+  },
+  {
+    "path": "presets/instructions/实验_时间轴_剪辑式_指令词.txt",
+    "sha256": "ebd9fe48f5e8fea70fe6a42258f739a837421f5e627cdfbd0ed8757c54a99cbe"
+  },
+  {
+    "path": "presets/instructions/实验_时间轴_单主机位_指令词.txt",
+    "sha256": "5aeedb8eb5a012f00f94effe503a12aa19238a35b54ec3e10ccef63096d8634f"
+  },
+  {
+    "path": "presets/instructions/实验_时间轴_接力_指令词.txt",
+    "sha256": "aebea3853cda60618f9224975f73c5ada75bb398a5e707f5f240d6e2c6e3e240"
+  },
+  {
+    "path": "presets/instructions/实验_镜头行_指令词.txt",
+    "sha256": "1cdb854c82412797f3019b0108b03894dea3f1e8c8330c60d1577ae4acf665f1"
+  },
+  {
+    "path": "presets/instructions/导演_分镜_指令词.txt",
+    "sha256": "812dcd5477117d201aedf93135cc69f83520f9292aefe0fa331709113c2e2c2f"
+  },
+  {
+    "path": "presets/instructions/导演段_H3提示词_指令词.txt",
+    "sha256": "0dd2c41187d565b1497162b7f5a489d3304e7486ecc60604275a582487c0877e"
+  },
+  {
+    "path": "presets/instructions/拍摄清单_指令词.txt",
+    "sha256": "f13bf57dc51db4a9bec72415f3d6d6dcaa9bd63712f7bce6d25f7437b14a8100"
+  },
+  {
+    "path": "presets/instructions/故事_分话框架_指令词.txt",
+    "sha256": "f7649c52453e7b9e86e9f8182afa14176385b5caabb98dba3a05383b9d107a34"
+  },
+  {
+    "path": "presets/instructions/故事_分话框架修复_指令词.txt",
+    "sha256": "5867d80160f614a791e5547f82c8a528a58b19436ade2015100e6f63eaf8cd8a"
+  },
+  {
+    "path": "presets/instructions/故事_完整正文.txt",
+    "sha256": "690e7bc664a53ed43f933a7fc79ed468793287379284bd4337a64cf0f3dc949f"
+  },
+  {
+    "path": "presets/instructions/故事_故事核_指令词.txt",
+    "sha256": "ac648fc02b482d965438995740f38d6918eb14c36cfb8af43b2fbca6526a3f22"
+  },
+  {
+    "path": "presets/instructions/故事_正文_按骨架_指令词.txt",
+    "sha256": "7d5edddc2e54255cd9eef9b7196436f54c504c8df4e65420e5286c4fe0a2d95f"
+  },
+  {
+    "path": "presets/instructions/故事_骨架_指令词.txt",
+    "sha256": "1a6f61546010313f188a6eb5e7e9de674a8679c5d6321e8c361b578edfe81eb3"
+  },
+  {
+    "path": "presets/instructions/本话安排_指令词.txt",
+    "sha256": "5083378288aeffafc7a922c63ff10fad3f65d7f48535056c827e304bca6fc4c0"
+  },
+  {
+    "path": "presets/instructions/本话安排修改_指令词.txt",
+    "sha256": "6e28082901686fe3b28f424d9257b079ee06d48fc387a2b75d6c33b29f146cb8"
+  },
+  {
+    "path": "presets/instructions/正文_提取设定.txt",
+    "sha256": "cd6a06f0356ab4013dd358a16fdbce0c3be0d939b68cb53fc3c59b7206f3da1e"
+  },
+  {
+    "path": "presets/instructions/正文提取人物场景_指令词.txt",
+    "sha256": "9147432d1027aec4e8e79d4e2b354bcd90d8d7f6cfbb981e7e2af4cd65924060"
+  },
+  {
+    "path": "presets/instructions/正文改画面稿_指令词.txt",
+    "sha256": "c791609e0d883df360715b977ee9a9eb3a16a20eb89fca51c5bc571840d9b3f6"
+  },
+  {
+    "path": "presets/instructions/画面稿改H3提示词_指令词.txt",
+    "sha256": "7559e7ac2c612b2fe9f13a51b79a3f1407c621ac8599f76ca3be0a98ab19f460"
+  },
+  {
+    "path": "presets/instructions/画面稿改H3提示词_时间轴_指令词.txt",
+    "sha256": "04c0e19fd526cb2a288c1b9f6f8e3b08ab147722f328c1225496a74bcb149a29"
+  },
+  {
+    "path": "presets/instructions/画面稿改H3提示词_时间轴_指令词_旧P322版.txt",
+    "sha256": "0d42bee7ad8e3e62a9990dfb679fc1dfb56744c9da6ebad48770bf99d3614edc"
+  },
+  {
+    "path": "presets/instructions/第一话剧本_指令词.txt",
+    "sha256": "dcd37b7318bc8c17650488ea8ef422149643e2ae5dba865718766c74d2d14cdf"
+  },
+  {
+    "path": "presets/instructions/第一话原文_指令词.txt",
+    "sha256": "697176aaaa46f5364933d23df7e8f4ed456c91878518d949d135ed411522cfc5"
+  },
+  {
+    "path": "presets/instructions/第一话简介_指令词.txt",
+    "sha256": "bc0e07e3d635d5d045b449eea749fae7982d1a871ed2820062a78c78bc7c8d10"
+  },
+  {
+    "path": "presets/instructions/第一话简介提炼_指令词.txt",
+    "sha256": "596104b0fb0ac951d1f4fac24540d5ea15ae1b3d7fa66e5a41311967678d783c"
+  },
+  {
+    "path": "presets/instructions/续写简介_指令词.txt",
+    "sha256": "e4b241c17e7fc5f7fc9765ac41bfc1ff816321212be6f642e81d42aa18f76980"
+  },
+  {
+    "path": "presets/instructions/脸部设计_指令词.txt",
+    "sha256": "1c87295f72d09ba4589ba481d6bb66a2761e6ba14bc1bd868ad3d05ecd60afad"
+  },
+  {
+    "path": "presets/instructions/节拍_分镜.txt",
+    "sha256": "c27ee6875723cce25ba721477daacfdb2961ce9aea4931aaded65d8a18175dfb"
+  },
+  {
+    "path": "presets/instructions/节拍段_H3提示词_指令词.txt",
+    "sha256": "17221ac4d1ead628293b71aa4bf171aa7eb156838d3f730c44839ea7adf8af1a"
+  },
+  {
+    "path": "presets/instructions/补镜头_指令词.txt",
+    "sha256": "6c75bd2a7bc8e5052df988ae771defeaa9d0dcb292b438abd717e01f21fe6f7f"
+  },
+  {
+    "path": "presets/instructions/视频_MiniMax单元_指令词.txt",
+    "sha256": "dc840b5f416b246f1e2b0e2eb38eceae0cdc1e2986709ae43a44f9b44e83b8d0"
+  },
+  {
+    "path": "presets/instructions/视频_六段式补写.txt",
+    "sha256": "b4749e697f41e6499b4dcb88909b7ee950c360cb98c335a0663aaa07124e9d9e"
+  },
+  {
+    "path": "presets/instructions/视频导演_总规则.txt",
+    "sha256": "c6b0715c293b793e2cc470ed7dd39f9b4df8d8abe09a3cd32b033c2bee0fd030"
+  },
+  {
+    "path": "presets/instructions/通用_扩写.txt",
+    "sha256": "7b354897854b41bedd0f0b2a2fa9db45fc07fa14a370f9fa7509fd32b004ff0a"
+  },
+  {
+    "path": "presets/instructions/通用写作_分话结构.txt",
+    "sha256": "91481414acacd1b322bcde9c1a50232ae5deb767dbe913fcc777d87608827810"
+  },
+  {
+    "path": "presets/instructions/通用写作_分话结构_B.txt",
+    "sha256": "59d430318d45f3bf2872ebf53478677e848aa86accbba144fa0e176d00ee9111"
+  },
+  {
+    "path": "presets/instructions/通用写作_完整故事.txt",
+    "sha256": "0f627208ac06074fe0376603c76bd18b3de963f378854635ce417ac3dc5c62f5"
+  },
+  {
+    "path": "presets/instructions/通用写作_小说正文.txt",
+    "sha256": "5ba01e39b7e0d63f06fb97bf45561d38d4da28c218812a133d8495f00588ea76"
+  },
+  {
+    "path": "presets/instructions/通用写作_小说正文_B.txt",
+    "sha256": "09a191277875f0fdd0ae1d16957ccf8c189333f245a7dd2cfa3328383dc4ddd3"
+  },
+  {
+    "path": "presets/instructions/通用写作_局部修订.txt",
+    "sha256": "1edc9a167b4091987432f1dccc5f1fefc53ef8b185577c6faa8219c665741ca7"
+  },
+  {
+    "path": "presets/instructions/通用写作_整部规划修改.txt",
+    "sha256": "bf888c23cebaf1ec67fd1cf9feb8a419a1f61f8113d48811ef16d5aee52dc174"
+  },
+  {
+    "path": "presets/instructions/通用写作_正文核对.txt",
+    "sha256": "e1f3dacdae9dc2075b1342ca410570b2f5bb79c4fef4845bf4e54e69426b4ef8"
+  },
+  {
+    "path": "presets/instructions/通用写作_逐话正文.txt",
+    "sha256": "ea239b91d8fca888c0d5de8fb34af93f10020da6ef95bc35fbfa611abdb9321d"
+  },
+  {
+    "path": "presets/instructions/长篇_故事圣经.txt",
+    "sha256": "c63f231d15778199e44d8637ce0d906724ba956130aa6348f450ffe8d48689c3"
+  },
+  {
+    "path": "presets/instructions/长篇_重新规划后续.txt",
+    "sha256": "4434e37620676ea1c7fe7e0ba27b0bf0646bc58ce23e111505f3a4bb2c1d5205"
+  },
+  {
+    "path": "presets/option_defs.json",
+    "sha256": "9775cd8e5dd0a81a326f3b8ceee4c858b00e45a2e90358deba99577c5dd69e65"
+  },
+  {
+    "path": "presets/outfit_library.json",
+    "sha256": "c6e89af6c8c9b3c9545541299e147c2093a941c354ccea1f2489d3477d5f0190"
+  },
+  {
+    "path": "presets/place_library.json",
+    "sha256": "8a57af76e847d5827467a3c0c3e00418fd662052b183e28c6a4a39eb13c1a26c"
+  },
+  {
+    "path": "presets/render_notes.json",
+    "sha256": "ae9adc32900f0e40d247e321a90ff4cbea5851442a20ef19df5c5276163d31d9"
+  },
+  {
+    "path": "presets/style_kits.json",
+    "sha256": "1e6387f3bf8af04e79bd52c6f1fa27a088a0a5ced80c11b4b7f22bcb10e43984"
+  },
+  {
+    "path": "presets/预设表.json",
+    "sha256": "dc0d7d586c72f35df79de7a2d46c0e55096d5b4ddcf7084d1d22c66b227ad181"
+  },
+  {
+    "path": "production/__init__.py",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "production/album_core.py",
+    "sha256": "e3cf559177a4430940d4e63237fa39ff266bd9b2a09f84e72f232c05dd9f754d"
+  },
+  {
+    "path": "production/cinematic_director.py",
+    "sha256": "4144af46a6a846c698827ca3eef0632e0cfb1f7abb73859d517102ccad867dbf"
+  },
+  {
+    "path": "production/comic_core.py",
+    "sha256": "b4729c1c47e5c2326f4636a3c2c6558df1105a59f3f9c6fdfd650fd6ead1c04e"
+  },
+  {
+    "path": "production/director_core.py",
+    "sha256": "cadf6221c2157db35d8d5bcf8be607c27369a487442312470250065ad0e1a6de"
+  },
+  {
+    "path": "production/novel_core.py",
+    "sha256": "74c630975af51742559520ededd00601f0949f230c89e297151c4270862b0a5c"
+  },
+  {
+    "path": "production/video_core.py",
+    "sha256": "b4db8ea6e268caab72c3fa24e9bd33991c68e73a7cab6d4e0f5f26177ea34074"
+  },
+  {
+    "path": "production/video_plan.py",
+    "sha256": "5c2e8f81d1d8334a44de880dd48eda7f999e821ebae412cc9d25d3b736d66b5a"
+  },
+  {
+    "path": "requirements.txt",
+    "sha256": "7d2e31a991f922449537152a79e6f4c71a6ba4c3526bbd69292b8f80a3c88784"
+  },
+  {
+    "path": "server.py",
+    "sha256": "95b761d34f809b2d7df384e4da4e542fd828f78640d1c94ad8cf8012a0113f5b"
+  },
+  {
+    "path": "tests/test_age_policy.py",
+    "sha256": "56adf26af3bd0671359d0b993e1956c1b340db50dcee12432ca1fe8845921a45"
+  },
+  {
+    "path": "tests/test_bundled_tools.py",
+    "sha256": "9f40cee26d7a934915e54db524312752c77903b10833fc6269bb5ed71b383d1b"
+  },
+  {
+    "path": "tests/test_character_display_template.py",
+    "sha256": "aea202fa904e18d70b842e8ddbe96e6aa91d4f7a9508b089de177edf156d8e79"
+  },
+  {
+    "path": "tests/test_dialogue_timing.py",
+    "sha256": "9aa8c006a3890383a0cd6b8778585b9d7aeee2992575379194285c8ac3590784"
+  },
+  {
+    "path": "tests/test_motion_anima_release.py",
+    "sha256": "f8f305837f02e70b24e1c64f58fbe05fbd0c404a2bc34ea1c712a35e48030a90"
+  },
+  {
+    "path": "tests/test_motion_v104.py",
+    "sha256": "6685bc404b5228760ffe50d5966be3448a42549c5f4d381bc5aac23ab2428c9e"
+  },
+  {
+    "path": "tests/test_口述与节拍.py",
+    "sha256": "657ab5afacdb3f8ad33a3e15b48a6fbc700fb08616489712693c103d146ac8d8"
+  },
+  {
+    "path": "tools/douyin-downloader/app.py",
+    "sha256": "c9c0919a41c9b18eeb17796f48cee3b753a7f709ca44933b08f3669ee37dff30"
+  },
+  {
+    "path": "tools/douyin-downloader/downloader.py",
+    "sha256": "75e4a525c3dbe647e12fae012ccce32002b95e81dade95b91a9469f93a58a432"
+  },
+  {
+    "path": "tools/douyin-downloader/folder_picker.py",
+    "sha256": "0f7f1a8b80eba3e07efb1e92ade505cb00d00da81b999f2620c83ddc303baa92"
+  },
+  {
+    "path": "tools/douyin-downloader/index.html",
+    "sha256": "bc43970cfccaca6642f6cf9f980cfe0c5e1ca38b3a8a5d47c4ca10a71dd5d102"
+  },
+  {
+    "path": "tools/douyin-downloader/launch.pyw",
+    "sha256": "1785bea80df6938736b9e09a0d7ab2df0c0bd3a39d3ce4e8fa21d4a5f08675de"
+  },
+  {
+    "path": "tools/douyin-downloader/test_downloader.py",
+    "sha256": "f4ddcf79defd98facd1eef5c943accc730b43c998b0fa687ba445f929df6a6d3"
+  },
+  {
+    "path": "tools/douyin-downloader/使用说明.txt",
+    "sha256": "4efa0c2adf3272adf95f69e63f3e3f760b4d8633353d9b4bb1c077ac30a36c09"
+  },
+  {
+    "path": "tools/douyin-downloader/启动下载器.vbs",
+    "sha256": "33f64c4cf7686cc937e185bcbbe810831bd5bdc7a77d763925443464b797c8fa"
+  },
+  {
+    "path": "web/api.js",
+    "sha256": "d88e768cc4d8abc1a671182f1cdeba47e1b3e7e9bc1b8d07ead9c6ceacfb6900"
+  },
+  {
+    "path": "web/design-preview.html",
+    "sha256": "a486c01ebae523e8b6b7a2631b30367eb7a82199fca2d133f3198aea29c77017"
+  },
+  {
+    "path": "web/gate_chat.js",
+    "sha256": "ebed0013ce929b992361e088bf770e295b458ba28ebccbcfcb1cab253a0ef357"
+  },
+  {
+    "path": "web/index.html",
+    "sha256": "0a362b7808d92fccb0842fac76dca2656935272877e6bd9234084a09c617fba7"
+  },
+  {
+    "path": "web/pages/assets.js",
+    "sha256": "5d38c40c12f140deb21bd7df1685993e8d484d59e3410043617b41b72533953a"
+  },
+  {
+    "path": "web/pages/config.js",
+    "sha256": "c6a984e0b57f903320704d4cc3562e592d9c5500ceb439768e82292ee2a986fb"
+  },
+  {
+    "path": "web/pages/downloads.js",
+    "sha256": "b060f1a857f73420ac0073693af8dabf522c9fd9b0d0bfe19f5bf38ffe07601d"
+  },
+  {
+    "path": "web/pages/history.js",
+    "sha256": "3263ee739327abb0e4f46fea374b074d2432418cb83f99415c31a8b16ff3b87e"
+  },
+  {
+    "path": "web/pages/legacy.js",
+    "sha256": "5901d49f79371e7600e88658061ea34c72c9a52161f13d6d7aa76615d6f238e8"
+  },
+  {
+    "path": "web/pages/motion.js",
+    "sha256": "003e1a4081aff220cd65817817b7dd511340cf26b454450b6b3e3fe277c071e5"
+  },
+  {
+    "path": "web/pages/productions.js",
+    "sha256": "93cea8c74d31aa6afc0a63ba51cec52a88cc46afa1b1a8e87d7e482bd2f8c44d"
+  },
+  {
+    "path": "web/pages/project.js",
+    "sha256": "c31a277117c7eaa4fa0836b31afaaaae8e8cdb6d666e59f1338617d4ae43526e"
+  },
+  {
+    "path": "web/pages/review.js",
+    "sha256": "f42a17cda3ce3088d17d662b2d2bcc4328c4123c0800e787d3cf6e6b5c3dd006"
+  },
+  {
+    "path": "web/pages/script.js",
+    "sha256": "574cc61e25f7d2c30a9685ec000c55aa5ee394eb386da04666a576f5bdc04eeb"
+  },
+  {
+    "path": "web/pages/settings.js",
+    "sha256": "2e0716e459f8495e011197d4f3ca1109db6df19e22204d2283a04535a169730b"
+  },
+  {
+    "path": "web/pages/story.js",
+    "sha256": "e4a068cceefe563fdd36aca3ee18106db1dfa6eb896b01d57c48d0aecd0351e2"
+  },
+  {
+    "path": "web/pages/timeline.js",
+    "sha256": "37b72ca977e7b5a6a4ec74c88a0a3df20c49c6470715b590f23bce64192cff5d"
+  },
+  {
+    "path": "web/pages/video.js",
+    "sha256": "bc7ab0e231848094f62061e9aa2ad48e5aac990db13b6fb33e82a8fe134ddfa8"
+  },
+  {
+    "path": "web/prose_editor.js",
+    "sha256": "78b89982a8078f0ddc6196f7b917789bc9656a2e10b035b63348d43cfe5c68c0"
+  },
+  {
+    "path": "web/shell.js",
+    "sha256": "65777916fe557814f501dc44cedb776885e742e693b5d00bf38b6d089f91afd1"
+  },
+  {
+    "path": "web/ui.js",
+    "sha256": "4eab8dbf2321dd4d215157168972b1b6eda7e38aab695c6436d510ec0850a74d"
+  },
+  {
+    "path": "web/ui_actions.js",
+    "sha256": "f9f2d58905454fadfb915e013395600c969d10ff978b13bc8f9ad261691cf539"
+  },
+  {
+    "path": "启动 AI视频工作台.vbs",
+    "sha256": "8edf72da2d0ba69b2e2b61b2f3cdf9747352f5dfb25d13febc051664b807c87b"
+  },
+  {
+    "path": "启动（带窗口看报错）.bat",
+    "sha256": "637e8595e22fdee3a1f5af4baaf6d7115404390632e37a7f481cdbb39f8ae350"
+  }
+]

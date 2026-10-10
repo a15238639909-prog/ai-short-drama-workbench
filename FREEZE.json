@@ -1,0 +1,12 @@
+{
+  "tag": "v1.04-freeze-20261010",
+  "date": "2026-10-10",
+  "version": "1.04",
+  "model_weights_included": false,
+  "private_config_included": false,
+  "business_code_modified_by_packaging": false,
+  "known_limitations": [
+    "age_policy checks are currently no-ops",
+    "model generation not tested during packaging"
+  ]
+}
