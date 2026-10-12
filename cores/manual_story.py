@@ -8,10 +8,10 @@ def enabled(settings):
     return (settings or {}).get("story_mode") in ("single", "episode", "manual")
 
 
-def save_input(sid, no, brief, pace="适中", notes="", shooting_notes=""):
+def save_input(sid, no, brief, pace="自动", notes="", shooting_notes=""):
     no = int(no)
-    if no < 1 or pace not in ("舒缓", "适中", "紧凑"):
-        raise ValueError("话号或节奏无效")
+    if no < 1:
+        raise ValueError("话号无效")
     st = story_core.get_story(sid)
     if not st or not enabled(st.get("settings")):
         raise ValueError("此项目不是逐话写作模式")
@@ -24,6 +24,8 @@ def save_input(sid, no, brief, pace="适中", notes="", shooting_notes=""):
         sg["episodes"].append(current)
     if current.get("status") == saga_core.LOCKED:
         raise ValueError("这一话已锁定，请先解锁")
+    # Preserve historical approval signatures; old pace is inert metadata only.
+    pace = current.get("story_pace") or "自动"
     brief = str(brief or "").strip()
     if any(current.get(k, "") != v for k, v in (("brief", brief), ("story_pace", pace),
                                                   ("episode_notes", notes))):
@@ -89,7 +91,7 @@ def write(sid, no, on_step=None):
         previous.append({"话号": n, "用户剧情": old.get("brief"),
                          "原文" if n >= no-2 else "原文结尾（截取）": old["prose"] if n >= no-2 else old["prose"][-600:]})
     before = uw.signature({"settings": st.get("settings"), "episodes": sg.get("episodes")})
-    settings["story_pace"] = current.get("story_pace", "适中")
+    settings["story_pace"] = "自动"
     settings["episode_notes"] = current.get("episode_notes", "")
     # P445②③：人物表固定（第一话建的卡），续话带上一话结束时的账本
     try:
@@ -105,7 +107,27 @@ def write(sid, no, on_step=None):
             settings["_ledger_prev"] = ""
     # 一个输入框：设定说明与剧情分开，简短构思补成因果链，完整口述忠实整理。
     from . import oral_story as _os_, authoring as _au
-    plot = _os_.plan_episode(current["brief"], _au._q, settings, previous, on_step)
+    from .character_facts import check_source_scale
+    from .age_policy import AgePolicyError
+    check_source_scale(current['brief'], settings)
+    plot_warning = ''
+    for attempt in range(2):
+        try:
+            plot = _os_.plan_episode(current["brief"], _au._q, settings, previous, on_step)
+            break
+        except AgePolicyError:
+            raise
+        except ValueError as error:
+            if not attempt:
+                if on_step:
+                    on_step('事件表格式有误，自动重试一次')
+                continue
+            # Only the planner's metadata failed. Keep the user's complete brief
+            # as the writer's source instead of inventing a substitute plot.
+            plot_warning = '事件表两次格式失败，按完整原始构想继续写作：' + str(error)
+            plot = {'mode':'outline', 'context':[], 'events':_os_.event_card(current['brief'])}
+            if on_step:
+                on_step(plot_warning)
     settings["_events"] = plot["events"]
     settings["_story_context"] = plot["context"]
     settings["_plot_mode"] = plot["mode"]
@@ -145,10 +167,14 @@ def write(sid, no, on_step=None):
     if target is None:
         raise ValueError("生成期间这一话已删除")
     changed = before != uw.signature({"settings": latest.get("settings"), "episodes": sg.get("episodes")})
-    if changed or result["review"]["verdict"] in ("fail", "unknown"):
+    if changed or not str(result.get('prose') or '').strip():
         target.update(prose_draft=result["prose"], writing_attempt=result["review"])
         saga_core.save_saga(sid, sg)
-        raise ValueError("本轮正文留作草稿，没有覆盖旧稿：" + ("生成期间输入有变化" if changed else "正文检查未通过"))
+        raise ValueError("本轮正文留作草稿，没有覆盖旧稿：" + ("生成期间输入有变化" if changed else "模型正文为空"))
+    if result['review']['verdict'] in ('fail', 'unknown') and on_step:
+        on_step('正文核对仍有提示，保留核对记录并继续；未标记为核对通过')
+    if plot_warning:
+        result['review'].setdefault('warnings', []).append(plot_warning)
     if target.get("prose") and target["prose"] != result["prose"]:
         target.setdefault("prose_versions", []).append({"at": time.time(), "prose": target["prose"]})
     review = result["review"]

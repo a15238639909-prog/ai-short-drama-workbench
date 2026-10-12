@@ -260,7 +260,7 @@ window.Pages = window.Pages || {};
         if (!v) return Promise.reject(new Error("先写这一话讲什么"));
         if (br.dataset.saved === br.value) return Promise.resolve();
         setState("正在保存本话内容…");
-        return api("/episode-input", { ep: cur, brief: v, pace: e0.story_pace || "适中", notes: e0.episode_notes || "", shooting_notes: e0.shooting_notes || "" })
+        return api("/episode-input", { ep: cur, brief: v, notes: e0.episode_notes || "", shooting_notes: e0.shooting_notes || "" })
           .then(function () { br.dataset.saved = br.value; setState("本话内容已保存"); });
       };
       br.addEventListener("input", function () {

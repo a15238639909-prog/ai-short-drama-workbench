@@ -489,7 +489,6 @@ window.Pages.settings = (function () {
   /* ═══════════ 整部规划卡（P287）：想法 → 完整剧情 → 自动分话/时长 → 看/改/确认 → 逐话生成 ═══════════ */
   var PL_IDEA_PH = "写下整个故事的想法：主要人物、想讲什么、大概怎么收尾。名字、地点可以不写，系统会补。";
   var PL_STYLES = ["由 AI 建议", "电影级写实", "平面动漫", "水彩", "黑白"];
-  var PL_PACES = ["由 AI 建议", "舒缓日常", "稳步推进", "紧张快节奏"];
   var SAVE_PROJECT = null;  /* P316：wire() 里的 saveCurrentProject 挂到模块级——规划按钮原来 typeof 查不到它，「会先保存再规划」从没保存过（项目183 规划时没有世界/画风/尺度） */
   var plOpen = {};          /* 展开了哪几话（uid → true） */
   var plEditing = {};       /* 正在编辑哪几话 */
@@ -509,15 +508,12 @@ window.Pages.settings = (function () {
       '<button class="btn small" data-pl="toggle" data-uid="' + esc(e.uid) + '">' + (open ? "收起" : "展开详细过程") + '</button>' +
       '</div>';
     var body;
-    var PACE3 = ["舒缓", "适中", "紧凑"];
     if (editing) {
       body = '<div style="margin-top:8px;font-size:13px;color:#5a5348">' +
         '<label>标题</label><input data-pl-field="title" data-uid="' + esc(e.uid) + '" value="' + esc(e.title || "") + '" style="width:100%;height:32px;padding:0 8px;margin:2px 0 8px">' +
         '<label>这一话讲什么</label><textarea data-pl-field="one_line" data-uid="' + esc(e.uid) + '" style="width:100%;height:90px;padding:10px 12px;font-size:14px;line-height:1.7;border-radius:8px;margin:2px 0 8px">' + esc(e.one_line || "") + '</textarea>' +
         '<label>主要展示（一行一条）</label><textarea data-pl-field="focus" data-uid="' + esc(e.uid) + '" style="width:100%;height:64px;padding:8px 12px;font-size:13px;line-height:1.6;border-radius:8px;margin:2px 0 8px">' + esc((e.focus || []).join("\n")) + '</textarea>' +
         '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
-        '<label>节奏</label><select data-pl-field="pace" data-uid="' + esc(e.uid) + '" style="height:32px;border-radius:8px">' +
-        PACE3.map(function (p) { return '<option' + (p === e.pace ? " selected" : "") + '>' + p + '</option>'; }).join("") + '</select>' +
         '<label>讲到哪里结束</label>' +
         '<input data-pl-field="landing" data-uid="' + esc(e.uid) + '" value="' + esc(e.landing || "") + '" style="flex:1;min-width:220px;height:32px;padding:0 8px">' +
         '</div>' +
@@ -879,11 +875,7 @@ window.Pages.settings = (function () {
       '<p class="note-gray" style="margin:0 0 8px">把这一话发生的事一件一件说清楚，系统照你说的写、不改意思；第二话起在 📖 剧本 页加。</p>' +
       '<textarea id="plIdea" data-kind="idea" placeholder="例如：少年救下受伤老者，照顾他养伤；老者提出给钱或带他入门修炼，少年选择修炼并准备出发。" ' +
       'style="width:100%;height:200px;min-height:160px;padding:14px 16px;font-size:15px;line-height:1.85;border-radius:10px">' + esc(s0.one_line || "") + '</textarea>' +
-      '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">' +
-      '<label class="setup-label" style="margin:0">这一话节奏：<select id="plPace" style="height:34px;border-radius:7px;padding:0 8px">' +
-      '<option value="紧凑"' + (s0.story_pace !== "舒缓" ? " selected" : "") + '>紧凑（动作为主）</option>' +
-      '<option value="舒缓"' + (s0.story_pace === "舒缓" ? " selected" : "") + '>舒缓（文戏为主）</option></select></label>' +
-      '<span class="note-gray">只影响写正文：舒缓＝多对白多反应、每件事约 380 字；紧凑＝动作句连着写、台词短、每件事约 180 字。分段和每段秒数由导演分段决定（一段一个连续镜头 11～15 秒），和这里无关</span></div>' +
+      '<p class="note-gray" style="margin-top:10px">节奏由本地模型根据故事自动安排，连续动作和对白尽量在同一段完成。</p>' +
       '<p class="setup-label" style="margin-top:10px"><label>补充要求（可不填：对白多少、必须保留的事实或结尾）</label></p>' +
       '<textarea id="plNotes" placeholder="例如：对白多一些；不要加新的人物。" style="width:100%;height:64px;min-height:64px;padding:10px 12px;font-size:14px;line-height:1.65;border-radius:8px"></textarea>' +
       '</div>';
@@ -938,7 +930,6 @@ window.Pages.settings = (function () {
         pick.innerHTML = manualEpisodes.map(function(x) { return '<option value="'+x.no+'">第 '+x.no+' 话</option>'; }).join('');
         pick.value = String(manualEp);
       }
-      document.getElementById("plPace").value = e.story_pace === "舒缓" ? "舒缓" : "紧凑";
       document.getElementById("plNotes").value = e.episode_notes || "";
       if (document.getElementById("plShoot")) document.getElementById("plShoot").value = e.shooting_notes || "";
       if (document.getElementById("manualProse")) document.getElementById("manualProse").textContent = e.prose || "还没有正文。";
@@ -977,7 +968,7 @@ window.Pages.settings = (function () {
     };
     function saveManualInput(no) {
       var input = {ep:no, brief:(document.getElementById("plIdea") || {}).value || "",
-        pace:(document.getElementById("plPace") || {}).value || "紧凑", notes:(document.getElementById("plNotes") || {}).value || "",
+        notes:(document.getElementById("plNotes") || {}).value || "",
         shooting_notes:(document.getElementById("plShoot") || {}).value || ""};
       if (manualInputKind === "idea") {
         return Promise.resolve(typeof SAVE_PROJECT === "function" ? SAVE_PROJECT() : null).then(function () {
@@ -1518,7 +1509,7 @@ window.Pages.settings = (function () {
         video_ratio: (document.getElementById("psRatio") || {}).value || "16:9",
         video_director_mode: "standard",           /* P398：深度导演已废 */
         story_mode: s.story_mode || ((s.story_plan && (s.story_plan.episodes || []).length) ? "split" : "single"),
-        story_pace: s.story_pace || "适中",
+        story_pace: "自动",
         prose_words: s.prose_words || "3000～4000",
         extra_requirements: (document.getElementById("psExtra") || {}).value || s.extra_requirements || "",
         one_line: (s.story_mode === "split" ? one : (s.initial_story_input || s.one_line || "")),
@@ -1537,7 +1528,7 @@ window.Pages.settings = (function () {
 
     function saveCurrentProject() {
       var input = {ep:+((document.getElementById("mkEp") || {}).value || manualEp), brief:(document.getElementById("plIdea") || {}).value || "",
-        pace:(document.getElementById("plPace") || {}).value || "紧凑", notes:(document.getElementById("plNotes") || {}).value || "",
+        notes:(document.getElementById("plNotes") || {}).value || "",
         shooting_notes:(document.getElementById("plShoot") || {}).value || ""};
       return window.api.post("/api/project/settings", currentProjectPayload()).then(function (j) {
         /* skipRoute=true：只刷新顶部项目名下拉，不重渲染本页（重渲染会把

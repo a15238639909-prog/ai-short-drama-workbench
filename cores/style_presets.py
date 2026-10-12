@@ -479,7 +479,38 @@ def height_def(sex, height_type):
 
 def body_ratio_def(name):
     """只供人物设定图使用的头身与四肢比例；不进入故事和视频提示词。"""
-    return BODY_RATIO_DEFS.get(str(name or "").strip(), "")
+    return BODY_RATIO_DEFS.get(normalize_ratio_option(name), "")
+
+
+def normalize_ratio_option(name):
+    name = str(name or '').strip()
+    if name in BODY_RATIO_DEFS:
+        return name
+    return {'迷你幼态':'娇小紧凑', '幼态少年':'娇小紧凑', '小少年比例':'娇小紧凑',
+            '标准成人':'标准均衡', '模特比例':'高挑修长', '高挑模特':'高挑修长',
+            '大长腿':'上身短腿长', '夸张幻想':'上身短腿长'}.get(name, name)
+
+
+def resolve_body_ratio(character, settings=None):
+    """One source for card defaults and prompt lookup; manual selections win."""
+    c = character or {}
+    chosen = normalize_ratio_option(c.get('sheet_body_ratio'))
+    if chosen and chosen not in ('自动', 'None'):
+        return chosen
+    text = ' '.join(str(c.get(k) or '') for k in
+                    ('identity', 'identity_anchor', 'appearance', 'appearance_details', 'look', 'other'))
+    if any(w in text for w in ('上身长', '短腿', '下身短')):
+        chosen = '上身长腿短'
+    elif any(w in text for w in ('上身短', '大长腿', '高腰长腿')):
+        chosen = '上身短腿长'
+    elif any(w in text for w in ('娇小', '矮小', '小个子', '迷你', '幼儿', '儿童')):
+        chosen = '娇小紧凑'
+    elif any(w in text for w in ('高挑', '修长', '模特')):
+        chosen = '高挑修长'
+    else:
+        style = str((settings or {}).get('style') or '')
+        chosen = '高挑修长' if any(w in style for w in ('网红', '动漫', '3D', '游戏', '卡通', '平面')) else '标准均衡'
+    return chosen if chosen in BODY_RATIO_DEFS else next(iter(BODY_RATIO_DEFS), '')
 
 
 def hair_def(sex, name):
@@ -606,30 +637,7 @@ def resolve_auto_character(character, settings=None):
     elif ctype == "非人":
         ctype = "其他非人"
 
-    ratio = str(c.get("sheet_body_ratio") or "自动")
-    if ratio in ("", "自动", "None"):
-        style = str(s.get("style") or "")
-        if any(w in text for w in ("迷你", "三头身", "3头身", "不到一米", "幼儿体态")):
-            ratio = "迷你幼态"
-        elif any(w in text for w in ("幼态矮小", "幼年精灵", "小精灵少年", "小男孩", "小女孩", "四头身", "4头身")):
-            ratio = "幼态少年"
-        elif any(w in text for w in ("矮小", "短手短腿", "小个子")):
-            ratio = "小少年比例"
-        elif any(w in text for w in ("十一头身", "十二头身", "幻想夸张比例")):
-            ratio = "夸张幻想"
-        elif any(w in text for w in ("十头身", "大长腿")):
-            ratio = "大长腿"
-        elif any(w in text for w in ("极度高挑", "九头身")):
-            ratio = "高挑模特"
-        elif any(w in text for w in ("高挑", "修长", "长腿")):
-            ratio = "模特比例"
-        elif "电影" in style:
-            ratio = "标准成人"
-        elif any(w in style for w in ("网红", "动漫", "平面", "3D", "游戏", "卡通")):
-            ratio = "高挑模特"
-        else:
-            ratio = "标准成人"
-        ratio = ratio if ratio in BODY_RATIO_DEFS else choose(BODY_RATIO_DEFS, ["标准成人"])
+    ratio = resolve_body_ratio(c, s)
 
     hair = str(c.get("hair_preset") or "自动")
     if hair in ("", "自动", "None"):

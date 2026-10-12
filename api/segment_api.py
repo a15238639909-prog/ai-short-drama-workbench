@@ -102,6 +102,9 @@ def _with_pose_ref(prompt, n, scene_changed=False, prev_tail="", mode=None):
     # 第一帧里有谁，要点名说。只说"和上一段末帧一致"时，模型会拿**场景参考板**当第一帧，
     # 开头 1.5 秒是一段没有人的空镜（2026-09-05 项目102 段4 实测）。
     _mode = str(mode or os.environ.get("V41_RELAY") or "soft").strip().lower()       # P330/P332：soft=默认（只参考姿势位置构图）/ first=旧硬接力 / space=只锁空间 / none=不加；P392：同场景硬切传 space
+    if str(prompt).startswith("subject_definitions:\n") and "\n\ndetailed_description:" in prompt:
+        from cores import director_flow
+        return director_flow.with_pose_reference(prompt, n, _mode)
     if _mode == "none":
         return prompt
     if _mode == "soft":
@@ -272,6 +275,9 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
             source_text = str(slices[int(seg_no) - 1].get("text") or "")
         except (IndexError, TypeError, ValueError, AttributeError):
             source_text = ""
+    if (g.get("plan") or {}).get("flow") == "source-v1":
+        from cores import director_flow
+        return director_flow.prompt_problems(prompt, source_text, g.get("seconds"), g.get("scene"))
     current_problems = list(g.get("problems") or [])
     if source_text:
         episodes = (((st.get("saga") or {}).get("episodes")) or [])

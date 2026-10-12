@@ -8,12 +8,20 @@
     "sha256": "024b0138f31ab4432da08d0e74371ab8a8c40612b58f47bfb982b6a0903af7e7"
   },
   {
+    "path": "FREEZE.json",
+    "sha256": "619ab809f3f724ef4d76d9be80b3a86d4ef9426a63b7b9480144551930f8b482"
+  },
+  {
     "path": "LICENSE",
     "sha256": "4f5d36e42fb4260449c78e037ccedc1644f283c7a05dd979fd5cd243812bc6aa"
   },
   {
     "path": "README.md",
     "sha256": "2d1d8dc391986b6db7c1e6605f556cd4f277b7d13353afac3ba88817da6eb89f"
+  },
+  {
+    "path": "RECOVERY.txt",
+    "sha256": "727afdfebcd8c97a9916677d2c3579fea94e3d15f4753f8305d43ec699811e55"
   },
   {
     "path": "VERSION.txt",
@@ -161,7 +169,7 @@
   },
   {
     "path": "api/config_api.py",
-    "sha256": "2498d3f431d3349d4990bb2d5ddb2490f60755f789af35121e1639d982aabe16"
+    "sha256": "3fd4db9aff395e8bff86eace7b5ffbf86d7f09409532d9a123088808e23d5c1b"
   },
   {
     "path": "api/download_api.py",
@@ -189,11 +197,11 @@
   },
   {
     "path": "api/saga_api.py",
-    "sha256": "ee067fb37af722f61223b9fe3efe259518978dad20628d590438d2fb209f50a6"
+    "sha256": "e4b1c152787f651e7fe3be94df3c94e2d3ffd648dbf91fb74d07e21e47be5ee2"
   },
   {
     "path": "api/segment_api.py",
-    "sha256": "9603cebb5f072c53b976838a011b646dce3ced93059a3c1ed7739c1ead9ab569"
+    "sha256": "35d93ecafc59d839d030c41edafb803162bb84676c4709a1234be465cd6a031a"
   },
   {
     "path": "api/settings_api.py",
@@ -241,7 +249,7 @@
   },
   {
     "path": "cores/authoring.py",
-    "sha256": "3ba305ed5eb9efb127c817913f469badabd46eefd59c01204f33247c182ebe64"
+    "sha256": "ba2a9f535668f706bede1323effb3c9d0b1d3d63b2a6a9f7258920e3e6917d06"
   },
   {
     "path": "cores/auto_repair.py",
@@ -262,6 +270,10 @@
   {
     "path": "cores/chain_core.py",
     "sha256": "955a340e74cf2d1da736ea441862cefd4447630819dad227dbdf182443b0c93e"
+  },
+  {
+    "path": "cores/character_facts.py",
+    "sha256": "5b2cbd834193355a2aa6b4ceb0c8a1eff88e75d41438d729dc74d1a2c05a99d0"
   },
   {
     "path": "cores/character_setup.py",
@@ -286,6 +298,10 @@
   {
     "path": "cores/director.py",
     "sha256": "96efbbfd25b8cc413a76400a159cd847c757dc7c5610a905054f329c36c134a8"
+  },
+  {
+    "path": "cores/director_flow.py",
+    "sha256": "296f5cdd5e12c6e47d8b11169410443fbea54d2a61c69cb27e582364c50e2f52"
   },
   {
     "path": "cores/director_layer.py",
@@ -333,7 +349,7 @@
   },
   {
     "path": "cores/manual_story.py",
-    "sha256": "dca40ffe8e0271b5b0a23c07fc427dd1e14c27515b6a8da14ba76c0cb8ff0e5a"
+    "sha256": "3e02c48c37e1f57f2831b27a0fc9af2d9b4598d9a49fdfd5ad67d4cc302045c7"
   },
   {
     "path": "cores/model_json.py",
@@ -373,7 +389,7 @@
   },
   {
     "path": "cores/oral_story.py",
-    "sha256": "62d0526349d6daa2829405bfc1c0d1e0415aa8692a7732fd04c5277a236fa2cd"
+    "sha256": "6c4d635ed271952707610a39b5469ced9cf255c136c05f88d0dd4f292f62c4aa"
   },
   {
     "path": "cores/pace.py",
@@ -397,7 +413,7 @@
   },
   {
     "path": "cores/project_settings.py",
-    "sha256": "c3f76b46873367791123476273055b4edba93fc59986dd1979cf70725795963e"
+    "sha256": "ed97943cd761c478e88d66d20c7977649ca4ec0d71ec55a27bb43b6527986020"
   },
   {
     "path": "cores/prompt_hygiene.py",
@@ -425,7 +441,7 @@
   },
   {
     "path": "cores/reference_ready.py",
-    "sha256": "30cbb04d7a0bad5ccf6bed4b8545650463862c3e4b9ab12437c34df69fc30ff7"
+    "sha256": "d1316ec1e530d66b9bc71d599b32a7d33c5ef26a85d8f18e5965af9ba992322e"
   },
   {
     "path": "cores/runtime_core.py",
@@ -453,7 +469,7 @@
   },
   {
     "path": "cores/shot_edit.py",
-    "sha256": "e48166f6c8e64f7d96321420bc2ce004915ebd74371299dcf383e72d2ee9b14a"
+    "sha256": "6aa19efab474eea520b38e5746526e29f7f74181820a5c6869708743cca3eb8d"
   },
   {
     "path": "cores/shotlist.py",
@@ -501,7 +517,7 @@
   },
   {
     "path": "cores/style_presets.py",
-    "sha256": "c0df0ab5a3788b83ce26c621c22bc2d3dfd2bf96c3c74283f686c29e5b2cb80f"
+    "sha256": "d030f4ce75a2d1946b181edd354665b314e7182d0937ed8925317f40f4ecf406"
   },
   {
     "path": "cores/text_checks.py",
@@ -513,7 +529,7 @@
   },
   {
     "path": "cores/universal_writer.py",
-    "sha256": "dae5d2fda5d0947901a69b464cdd5652f11f94737be1aa5aa8faadf7b10d180b"
+    "sha256": "61b93d4f43e5d9203dd45158aa3c12258a07f1a351d3b2a43f77d6bf41ff1e5c"
   },
   {
     "path": "cores/video_layer.py",
@@ -526,6 +542,10 @@
   {
     "path": "cores/whole_plan.py",
     "sha256": "0ef035c67ae55efde114b7dbc0588b43ef4eed9fdedc3bd35f9dc22127303954"
+  },
+  {
+    "path": "data/global_defaults.json",
+    "sha256": "6ff6f843581a0f8e1d752591c2f37ccb8c214b8d00f361038c711abc41c75a7d"
   },
   {
     "path": "docs/ARCHITECTURE.md",
@@ -589,7 +609,7 @@
   },
   {
     "path": "models/qwen_client.py",
-    "sha256": "465818a92f22e0474e04f144181677afd375f001130c56d04ef9eef09c51f5ce"
+    "sha256": "9c2391a8ca60a5d43103137dba610c9b6152cc9f4564e36f0efc579d7f20dacc"
   },
   {
     "path": "models/video_workflows/i2va_fl2va.json",
@@ -602,6 +622,10 @@
   {
     "path": "models/video_workflows/t2va.json",
     "sha256": "d78af7319aef2a21d6f1eb13ad44152c43b8ad7efc330e0ae9910eb7dc2750fe"
+  },
+  {
+    "path": "portable_start.py",
+    "sha256": "74581780feaba62ffeb056e868bf83878b1dcff30f226e6e87e2a83c4cb81528"
   },
   {
     "path": "presets/8848_底层定义原文.js",
@@ -745,11 +769,11 @@
   },
   {
     "path": "presets/instructions/人物设定_指令词.txt",
-    "sha256": "02fec9e803a9df48bed9b940d7181255786308208ec5078889608ef2327a7d90"
+    "sha256": "47a02c5f3995c503729d74a9644b84c25dccd9045938032d824818d50e8cb1a8"
   },
   {
     "path": "presets/instructions/人物设定图_用户版_指令词.txt",
-    "sha256": "db5ed594f63f6c7ef8891c7a1b8cfe0e62d9d8cb24f2506fcd0fe5c9031d0f2d"
+    "sha256": "3c5fa6cd134eeeca781170921db04b7e5c4b13de02b275ebcd35ae830bf1a890"
   },
   {
     "path": "presets/instructions/人物设定板_指令词.txt",
@@ -818,6 +842,14 @@
   {
     "path": "presets/instructions/导演_分镜_指令词.txt",
     "sha256": "812dcd5477117d201aedf93135cc69f83520f9292aefe0fa331709113c2e2c2f"
+  },
+  {
+    "path": "presets/instructions/导演_连续分镜.txt",
+    "sha256": "0861e7b5aba8a6ecc07c9d96ee354c22f96f5f325f388e16089455f378d4906b"
+  },
+  {
+    "path": "presets/instructions/导演_连续镜头写词.txt",
+    "sha256": "87060cb47eba47aa921c07fb44a7750f94ee2627dee9b7cd2aa64cd82e0b6b2a"
   },
   {
     "path": "presets/instructions/导演段_H3提示词_指令词.txt",
@@ -981,7 +1013,7 @@
   },
   {
     "path": "presets/option_defs.json",
-    "sha256": "9775cd8e5dd0a81a326f3b8ceee4c858b00e45a2e90358deba99577c5dd69e65"
+    "sha256": "b290df5eccdaa1dadf3ca8b6f74dd39227221b30724826f19ca82ee22881387d"
   },
   {
     "path": "presets/outfit_library.json",
@@ -1001,7 +1033,7 @@
   },
   {
     "path": "presets/预设表.json",
-    "sha256": "dc0d7d586c72f35df79de7a2d46c0e55096d5b4ddcf7084d1d22c66b227ad181"
+    "sha256": "741b615260c3443b452f4d12e94dc5195b73df5575a3959291a2e1d783420d8f"
   },
   {
     "path": "production/__init__.py",
@@ -1161,11 +1193,11 @@
   },
   {
     "path": "web/pages/settings.js",
-    "sha256": "2e0716e459f8495e011197d4f3ca1109db6df19e22204d2283a04535a169730b"
+    "sha256": "45d674a20f559acaca3b39879085b3cf3ab8a2ba7ea1d84cdb54cc80c14ce471"
   },
   {
     "path": "web/pages/story.js",
-    "sha256": "e4a068cceefe563fdd36aca3ee18106db1dfa6eb896b01d57c48d0aecd0351e2"
+    "sha256": "666f05aec3b5938e3b170dd11ff4e16afc04ca2b87557c970ddca876ade8d255"
   },
   {
     "path": "web/pages/timeline.js",
@@ -1192,8 +1224,16 @@
     "sha256": "f9f2d58905454fadfb915e013395600c969d10ff978b13bc8f9ad261691cf539"
   },
   {
+    "path": "便携版使用说明.md",
+    "sha256": "d4deacdd84a8df54de05f1d64defa8119b957400413ed9cf4b7de978f2e9e897"
+  },
+  {
     "path": "启动 AI视频工作台.vbs",
     "sha256": "8edf72da2d0ba69b2e2b61b2f3cdf9747352f5dfb25d13febc051664b807c87b"
+  },
+  {
+    "path": "启动便携版.bat",
+    "sha256": "c94ffb3041bb5f038eb368b3952754d9e5454140708af73c7f013194b0589d77"
   },
   {
     "path": "启动（带窗口看报错）.bat",

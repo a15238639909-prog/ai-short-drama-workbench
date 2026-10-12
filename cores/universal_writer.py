@@ -420,7 +420,8 @@ def writing_input(settings, ep=1, previous=None, brief="", characters=None, brie
         data["用户依据"].pop("整体怎么展示（用户写的）", None)
         data["用户依据"].pop("题材引擎", None)
         data["用户依据"]["项目初始事实（背景，不重演）"] = data["用户依据"].pop("故事要求", "")
-        data["本话节奏"] = s.get("story_pace", "适中")
+        from .oral_story import NATURAL_PACE
+        data["本话节奏"] = NATURAL_PACE
         data["本话补充要求"] = s.get("episode_notes", "")
         data["写作模式"] = "单话直写：本话构想里明确安排的事件全部写完；不自动分话，不创建整部世界观，不把事件留给后话。"
         data["允许补充"] = "只补充对白、动作、反应、环境和必要过渡；未指定的普通姓名或细节适量补足。"
@@ -438,12 +439,12 @@ def writing_input(settings, ep=1, previous=None, brief="", characters=None, brie
                             "只有口述里点了名的新人物才能出现。" % len(_cn))
         if str(s.get("_ledger_prev") or "").strip():
             data["上一话结束时的状态（衣着、伤、手里的东西、称呼——照这个接）"] = str(s.get("_ledger_prev")).strip()
-        # P366：口述剧情 → 事件卡进写手输入（编号、止于、四类补充、按事件数×节奏算篇幅）
+        # 事件卡提供顺序和落点，整话篇幅按内容自然分配。
         try:
             from . import oral_story as _os_
             _ev = s.get("_events") or _os_.event_card(brief)                                                # P454①：归并后的事件
             if _ev:
-                data.update(_os_.writer_extras(_ev, s.get("story_pace", "适中"), prose_words=s.get("prose_words"),
+                data.update(_os_.writer_extras(_ev, prose_words=s.get("prose_words"),
                                                quotes=(s.get("_quotes") if s.get("_quotes") is not None else _os_.quoted_lines(brief))))   # P420；P455①
             if str(s.get("_writer_table") or "").strip():
                 data[_os_._TABLE_KEY] = str(s.get("_writer_table")).strip()          # P429：写法 H 的状态+对白表

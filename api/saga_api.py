@@ -105,6 +105,11 @@ def _finish_job(j, error=""):
         j["err"] = str(error)[:300]
         j["step"] = "失败"
         _job_event(j, "error", "任务失败：%s" % j["err"])
+    elif j.get("partial"):
+        j["err"] = ""
+        j["eta_seconds"] = 0
+        j["step"] = str(j["partial"])
+        _job_event(j, "warning", j["step"])
     else:
         j["done"] = int(j.get("total") or j.get("done") or 0)
         j["percent"] = 100
@@ -2234,7 +2239,10 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     # 这条链原来只补场景图，人设图要靠「全部生成」，单点「🎥生视频」就留了这个缺口。
     from cores import reference_ready as _rr
     if not text_only:
-        _rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
+        try:
+            _rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
+        except _rr.MissingReferencesError as error:
+            _job_event(j, "warning", str(error) + "；相关段待补，其他素材齐全的段继续")
     # P166①：出片之前先对齐上游——正文改了先重出剧本，剧本改了这一趟必须重拆分镜，
     # 否则就是拿旧剧本的段接着烧片。已有的视频按段号保留，不重烧。
     _fresh = {}
@@ -2303,15 +2311,27 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
             _new_nos, _tot = authoring.next_prompts(sid, ep, n, on_step=lambda m: _set_step(j, m))
             _new_ps = [{"n": x} for x in (_new_nos or [])]
             _job_event(j, "info", "视频提示词写好（整话可切 %d 段，这次新写 %d 段，出前 %d 段）" % (int(_tot or 0), len(_new_nos or []), n))
+        except JobCancelled:
+            raise
         except Exception as ex:
-            _job_event(j, "error", "写视频提示词失败：%s" % str(ex)[:150])
+            saved_count = sum(1 for no, row in _segs().items()
+                              if 1 <= no <= n and str(row.get("prompt") or "").strip())
+            message = "已保存%d/%d段提示词；%s。修正后可从缺失段继续。" % (saved_count, n, str(ex))
+            _job_event(j, "error", message)
+            # Keep the original failure; do not disguise it as an empty storyboard
+            # or render an incomplete episode after a writer failure.
+            raise RuntimeError(message) from ex
 
-    ready = []
+    ready, missing_prompts = [], []
     for i in range(1, n + 1):
         g = _segs().get(i)
         if g and not str(g.get("prompt") or "").strip():
             g = None                                                       # 作废的段：按没有提示词处理
         if not g:
+            if authoring.use_new_pipeline():
+                missing_prompts.append(i)
+                _job_event(j, "warning", "第%d段提示词待补，其他段继续处理" % i)
+                continue
             _set_step(j, "写第 %d 段视频提示词" % i)
             try:
                 if authoring.use_new_pipeline():
@@ -2336,6 +2356,12 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                 break
         ready.append(i)
         _complete_step(j)
+    if missing_prompts:
+        j["missing_prompt_segments"] = missing_prompts
+        j["partial"] = "本轮已处理，提示词第%s段待补（已完成段保留）" % "、".join(map(str, missing_prompts))
+        _job_event(j, "warning", j["partial"])
+        if text_only or not ready:
+            return []
     if not ready:
         raise RuntimeError("一段分镜都没导出来")
     # ── 出片前一道门（P248）：先看这条片子能不能讲清故事，再烧 GPU ──
@@ -2353,7 +2379,7 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         try:
             _tot2 = max(1, authoring.total_segments(sid, ep))
             _miss2 = [i for i in range(1, _tot2 + 1) if not str((_segs().get(i) or {}).get("prompt") or "").strip()]
-            if _miss2:
+            if _miss2 and not missing_prompts:
                 _set_step(j, "剧本修后补写第 %d~%d 段提示词" % (_miss2[0], _tot2))
                 authoring.next_prompts(sid, ep, _tot2, on_step=lambda m: _set_step(j, m))
             ready = [i for i in range(1, _tot2 + 1) if str((_segs().get(i) or {}).get("prompt") or "").strip()]
@@ -2364,9 +2390,10 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         except Exception as _ex:
             _job_event(j, "error", "门修后补写提示词失败：%s" % str(_ex)[:150])
     try:
-        from cores import episode_ledger as _ledg
-        _set_step(j, "记这一话结束时的状态账本")
-        _ledg.build(sid, ep)                                                                 # P445③：下一话从这里接
+        if not missing_prompts:
+            from cores import episode_ledger as _ledg
+            _set_step(j, "记这一话结束时的状态账本")
+            _ledg.build(sid, ep)                                                             # P445③：下一话从这里接
     except Exception as _lx:
         _job_event(j, "error", "状态账本没记成：" + str(_lx)[:120])
     if text_only:
@@ -2386,7 +2413,7 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     except Exception as _ox:
         _job_event(j, "error", "开场段：%s" % str(_ox)[:120])
 
-    outs, _stopped_at = [], 0
+    outs, failed_renders = [], []
     for i in ready:
         g = _segs().get(i)
         if not g:
@@ -2404,27 +2431,38 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         try:
             patch = seg_api.render_segment_checked(sid, ep, 1, i, size_tier=size_tier,
                                            log_fn=lambda m: _set_step(j, m))
+        except JobCancelled:
+            raise
+        except (OSError, TimeoutError):
+            raise
         except Exception as ex:
-            _job_event(j, "error", "第 %d 段出片失败：%s——停在这里" % (i, str(ex)[:150]))
-            _stopped_at = i
-            break
+            from cores.age_policy import AgePolicyError
+            # Cancellation/game mode and unavailable infrastructure are not
+            # recoverable clip-format errors. Do not keep submitting work.
+            if isinstance(ex, AgePolicyError) or any(x in str(ex) for x in
+                    ('已取消', '游戏模式', '生成超时', '未就绪', 'python 不存在', 'V41_NO_MODEL')):
+                raise
+            failed_renders.append(i)
+            _job_event(j, "warning", "第 %d 段出片未成，保留错误并继续其他段：%s" % (i, str(ex)[:180]))
+            seg_api._apply(sid, 1, i, {"render_error": str(ex)}, ep=ep)
+            continue
         out = patch["video"]
+        if g.get("render_error"):
+            seg_api._apply(sid, 1, i, {"render_error": ""}, ep=ep)
         outs.append(out)
         _complete_step(j)
         _job_event(j, "info", "第 %d 段视频已生成（%s）：%s"
                    % (i, patch["size"], out))
-    if not outs:
+    if failed_renders:
+        j["failed_render_segments"] = failed_renders
+        pending = sorted(set(missing_prompts + failed_renders))
+        j["partial"] = "本轮已处理，第%s段待补，已完成视频保留" % "、".join(map(str, pending))
+        _job_event(j, "warning", j["partial"])
+    if not outs and not failed_renders:
         raise RuntimeError("一段视频都没出来")
     _job_event(j, "info", "共出片 %d 段" % len(outs))
-    # 【部分失败必须报成失败】原来中途 break 之后照样走到这里 return，
-    # 任务状态是「完成」、err 是空的——实测要 5 段只出了 2 段，
-    # 调用方看到"完成"就会拿不完整的成片往下走（P230）。
-    # 已出的段照旧留在磁盘和分镜表里，这里只是如实报状态。
-    if _stopped_at:
-        raise RuntimeError("停在第 %d 段：前 %d 段已出并保留，第 %d 段起没有出。"
-                           "看任务日志里那条 error；修好之后再点一次「生视频」会从没出的那段接着补"
-                           % (_stopped_at, len(outs), _stopped_at))
-    return outs
+    # Successful clips remain saved, but an episode with gaps is not a full movie.
+    return [] if missing_prompts or failed_renders else outs
 
 
 def _timeline_busy(sid):

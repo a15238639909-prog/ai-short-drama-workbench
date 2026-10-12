@@ -4,6 +4,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class MissingReferencesError(RuntimeError):
+    """A missing asset affects its dependent clips, not unrelated clips."""
+    pass
+
+
 def adopted_paths(sid, kind=None):
     from . import asset_core
     paths = {}
@@ -71,7 +76,7 @@ def ensure_characters(sid, ep, on_step=None):
         reason = "；".join(str(x) for x in result.get("failed", []))
         if result.get("skipped"):
             reason = "项目设置了只做文字（no_images），请关闭后再生成图片或视频"
-        raise RuntimeError("出片已暂停，缺少可用人设图：%s。%s" % ("、".join(missing), reason))
+        raise MissingReferencesError("缺少可用人设图：%s。%s" % ("、".join(missing), reason))
     return result
 
 
@@ -97,4 +102,4 @@ def assert_references(sid, segments):
         if scene and str((scene_cards.get(scene) or {}).get("scene_id") or "") not in scene_paths:
             missing.append("场景「%s」" % scene)
     if missing:
-        raise RuntimeError("缺少已采用且文件有效的参考图：%s。请补图或上传并采用后再生成视频。" % "、".join(dict.fromkeys(missing)))
+        raise MissingReferencesError("缺少已采用且文件有效的参考图：%s。请补图或上传并采用后再生成视频。" % "、".join(dict.fromkeys(missing)))

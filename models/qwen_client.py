@@ -257,7 +257,7 @@ def budget_reset(limit=None):
         pass
 
 def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
-         reasoning=None, return_meta=False):
+         reasoning=None, return_meta=False, response_format=None):
     from cores.age_policy import assert_model_request, assert_model_response
 
     if os.environ.get("V41_NO_MODEL"):
@@ -297,6 +297,8 @@ def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
         for _k, _v in dict(SAMPLING_OVERRIDE).items():
             if _v is not None:
                 payload[_k] = _v
+    if response_format is not None:
+        payload["response_format"] = response_format
     body = json.dumps(payload).encode("utf-8")
     t0 = time.time()
     req = urllib.request.Request(QWEN_URL + "/v1/chat/completions", data=body,

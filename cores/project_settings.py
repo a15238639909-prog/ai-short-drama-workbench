@@ -55,7 +55,7 @@ def defaults():
         # 故事默认按用户逐话输入直写；split 仅用于打开已封存的旧分话项目。
         "story_mode": "single",
         "initial_story_input": "",
-        "story_pace": "适中",
+        "story_pace": "自动",
         "prose_words": "3000～4000",
     }
 

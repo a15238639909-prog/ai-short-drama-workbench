@@ -526,10 +526,11 @@ def sex_from_brief(brief, names):
     return out
 
 
-_PACE_TELL = {
-    "舒缓": "给关键交流、观察与选择留空间；人物说话时继续手里的事，回应带来新的信息或决定。过渡简洁，口述指定的快慢优先",
-    "紧凑": "压缩等待、赶路与重复反应，行动和对白接着推进；用短问答交代目的、线索和行动理由，重要交流完整保留。人物边行动边说话，口述指定的快慢优先",
-}
+NATURAL_PACE = (
+    "根据本话故事自动安排自然节奏：行动推进利落，关键交流、判断、情绪转折和结果留足理解时间；"
+    "人物边行动边说话，连续的互动连贯展开，完成一件事便进入它带来的下一步。"
+    "过渡简洁，篇幅按事情的重要性和复杂度分配；用户在故事中明确要求的快慢优先。"
+)
 
 
 def words_range(prose_words):
@@ -540,14 +541,14 @@ def words_range(prose_words):
     return (nums[0], nums[-1]) if len(nums) >= 2 else (nums[0], nums[0])
 
 
-def writer_extras(events, pace="适中", prose_words=None, quotes=None):
+def writer_extras(events, pace="自动", prose_words=None, quotes=None):
     """篇幅是整话参考，按因果的重要程度分配，事件数量不再乘固定字数。"""
     n = max(1, len(events or []))
     _lo, _hi = words_range(prose_words)
     if not _lo:
         _lo, _hi = 1200, 1800
-    _tell = _PACE_TELL.get(str(pace or ""), "")
-    return dict(({"讲法（本话节奏：%s）" % pace: _tell} if _tell else {}), **{
+    # pace is retained for old callers only; saved manual choices no longer steer writing.
+    return dict({"讲法（自动节奏）": NATURAL_PACE}, **{
         "本话事件卡（按编号顺序各写成 1～3 段；每一件都要写出现场过程，一件不少、顺序不变）":
             {str(e["n"]): e["text"] for e in (events or [])},
         "本话止于": "事件 %d 写完就结束，之后的事一句不写" % n,

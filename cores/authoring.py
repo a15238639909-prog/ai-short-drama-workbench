@@ -305,7 +305,7 @@ def _fill(ins, settings, characters=None, scale_layers=("story",)):
     return out
 
 
-def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False):
+def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, response_format=None):
     """调模型。**瞬时故障要自己扛住**：显存吃紧时（实测 23.1/24.5 GB）长上下文
     请求会让 llama-server 吐 500，一次抖动就让整条链断掉、整段没有片子。
     退避重试三次；三次都不成才把异常抛出去（2026-08-30）。
@@ -319,8 +319,9 @@ def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False):
             break
         t0 = time.time()
         try:
+            _structured = {"response_format": response_format} if response_format else {}
             _reply = qwen_client.chat(system, user, temperature=temperature,
-                                     max_tokens=mt, reasoning=reasoning, timeout=_to, return_meta=True)
+                                     max_tokens=mt, reasoning=reasoning, timeout=_to, return_meta=True, **_structured)
             if isinstance(_reply, tuple):
                 rep, _meta = _reply
                 if (_meta or {}).get("finish_reason") == "length":
@@ -9959,7 +9960,12 @@ def design_characters(prose, settings):
     _p = str(prose or "").strip()
     if len(_p) > 6000:
         _p = _p[:6000] + "\n（后略）"
-    umsg = "第一话故事正文：\n\n" + _p + "\n\n为里面的主要人物各设计一份人物设定。"
+    _brief = str((settings or {}).get("one_line") or "").strip()
+    from .character_facts import check_source_scale
+    check_source_scale(_brief or _p, settings)
+    umsg = ("【用户原始人物设定】\n" + (_brief or "未另指定")
+            + "\n用户明确写出的姓名、性别和年龄是固定事实，按原样传入对应人物卡；正文省略年龄时仍沿用原始设定。"
+            + "\n\n第一话故事正文：\n\n" + _p + "\n\n为里面的主要人物各设计一份人物设定。")
     _state_src = _p + " " + str((settings or {}).get("episode_notes") or "") + " " + str((settings or {}).get("one_line") or "")
     if re.search(r"衣[物服裳].{0,8}(撕|破|烂|湿|少|剩|刮走|扯)|不蔽体|衣衫不整|衣不蔽体|只剩一半|破布", _state_src):
         # P415：故事里衣服已经被撕破/刮走 → 服装写此刻的状态，不设计完好的日常装（项目221：正文写破碎不堪，卡上仍是风衣西裤）
@@ -9973,7 +9979,10 @@ def design_characters(prose, settings):
         raw = _q(sys, umsg, mt=7000, temperature=temp)
         got = _parse_char_json(raw)
         if got:
-            return _trim_cast(got, _p)
+            from .character_facts import lock_ages, check_design_scale
+            got = lock_ages(_trim_cast(got, _p), _brief)
+            check_design_scale(got, settings)
+            return got
         last = raw
     raise RuntimeError("人设 JSON 解析失败（连试三次，最后一次返回 %d 字，结尾：%s）"
                        % (len(last), last[-60:].replace("\n", " ")))
@@ -10488,35 +10497,18 @@ def _create_cards(sid, chars_data):
     for c in chars_data or []:
         if isinstance(c, dict) and _nm_fix.get(str(c.get("name") or "")):
             c["name"] = _nm_fix[str(c.get("name") or "")]                  # P418：「林小」改回口述的「小林」
+    from .character_facts import lock_ages, check_design_scale
+    chars_data = lock_ages(chars_data or [], _brief)
+    check_design_scale(chars_data, _st0.get("settings") or {})
     _sx_map = _os_.sex_from_brief(_brief, [str(c.get("name") or "") for c in (chars_data or []) if isinstance(c, dict)])
     for c in chars_data or []:
         c = sanitize_card_fields(dict(c))
         # 人物卡在“生成文字”结束时就显示最终头身比例，后续出图不再暗中补选。
         try:
             from . import style_presets as _ratio_sp
-            _valid_ratios = list(_ratio_sp.BODY_RATIO_DEFS)
-            if str(c.get("sheet_body_ratio") or "") not in _valid_ratios:
-                _shape = " ".join(str(c.get(k) or "") for k in
-                                  ("name", "age", "identity", "appearance", "build"))
-                _style = str((_st0.get("settings") or {}).get("style") or "")
-                if re.search(r"婴儿|幼童|迷你|三头身", _shape):
-                    c["sheet_body_ratio"] = "迷你幼态"
-                elif re.search(r"幼态|小精灵|孩童|儿童|男童|女童|四头身|不到一米", _shape):
-                    c["sheet_body_ratio"] = "幼态少年"
-                elif re.search(r"小少年|小个子|娇小|五头身|六头身", _shape):
-                    c["sheet_body_ratio"] = "小少年比例"
-                elif re.search(r"夸张|幻想比例|十二头身", _shape):
-                    c["sheet_body_ratio"] = "夸张幻想"
-                elif re.search(r"大长腿|十头身", _shape):
-                    c["sheet_body_ratio"] = "大长腿"
-                elif re.search(r"九头身|极度高挑|超模", _shape):
-                    c["sheet_body_ratio"] = "高挑模特"
-                elif re.search(r"八头身|高挑|修长|长腿", _shape):
-                    c["sheet_body_ratio"] = "模特比例"
-                else:
-                    c["sheet_body_ratio"] = "标准成人" if "电影" in _style else "高挑模特"
+            c["sheet_body_ratio"] = _ratio_sp.resolve_body_ratio(c, _st0.get("settings") or {})
         except Exception:
-            c["sheet_body_ratio"] = c.get("sheet_body_ratio") or "标准成人"
+            c["sheet_body_ratio"] = c.get("sheet_body_ratio") or "标准均衡"
         if _sx_map.get(str(c.get("name") or "")) and _sx_map[str(c.get("name") or "")] != str(c.get("sex") or "").strip():
             c["sex"] = _sx_map[str(c.get("name") or "")]
         if not str(c.get("sex") or "").strip():
@@ -13723,7 +13715,7 @@ def _set_camera_owner(sid, settings, chars):
 
 
 def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
-                    prev_tail="", direction=None):
+                    prev_tail="", direction=None, on_prompt=None, on_error=None):
     """画面稿 → H3 提示词，一段一个。
 
     段的边界＝slice_pictures 的时长切段（8~15 秒），提示词和秒数是同一刀切的。
@@ -13790,6 +13782,17 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
     if start >= len(slices):
         return []
     end = len(slices) if count is None else min(len(slices), start + max(0, int(count)))
+    from . import director_flow, camera_view
+    if director_flow.active(slices) and _pov_spec(settings)[0] not in camera_view.MODES:
+        # One authoritative director/writer route. Do not run legacy scene,
+        # wardrobe, pose-inheritance or rewrite passes on its output.
+        _allowed_names = {c["name"] for c in chars}
+        _ordered_chars = [c for c in (_ac.list_assets(sid, "characters") or []) if c.get("name") in _allowed_names]
+        return director_flow.make_prompts(slices, _ordered_chars, [s["name"] for s in _scs_all], _q,
+            settings=settings, start=start, count=count, on_step=on_step, prev_tail=prev_tail, direction=direction,
+            on_prompt=on_prompt, on_error=on_error,
+            trace_dir=(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "节拍表",
+                                   "%s_e%d_连续写词" % (sid, ep)) if on_prompt else None))
     out, _tail = [], str(prev_tail or "")
     # 【分镜表】导演一段一段写不知道全篇，先通读一次给每段定目的/关键动作/站位（用户 2026-09-03）
     _plan = plan_segments(slices, chars, settings=settings)
@@ -14355,10 +14358,10 @@ def beat_slices_for(sid, ep, pics, on_step=None):
         _dbg_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "节拍表")
         os.makedirs(_dbg_dir, exist_ok=True)
         if director_mode(sid):
-            # P435：导演分段——一件事 2～3 段、每段一个连续镜头 11～15 秒、只列画面里的人、结束状态同一次调用连着写
+            # 新分段按完整行动规划；已有冻结切片和专用主观视点保持兼容。
             from . import director_shots as _ds
             if on_step:
-                on_step("导演分段：一件事 2～3 段")
+                on_step("导演分段：按行动进展安排镜头")
             _evp = [str(x.get("text") or "") for x in ((e or {}).get("events") or []) if isinstance(x, dict)]
             _prev_led = ""
             try:
@@ -14370,7 +14373,13 @@ def beat_slices_for(sid, ep, pics, on_step=None):
             _st461 = (_stc461.get_story(sid) or {}).get("settings") or {}
             _pov_name = _pov_spec(_st461)[0]
             _pov_owner = camera_owner_for(sid, _st461) if _pov_name in _ds.POV_MODES else ""     # P461
-            sl = _ds.shot_list(pics, asset_core.list_assets(sid, "scenes") or [], cast_cards(sid) or [], _q,
+            from . import director_flow, camera_view
+            if _pov_name not in camera_view.MODES:
+                sl = director_flow.plan(pics, asset_core.list_assets(sid, "scenes") or [], cast_cards(sid) or [], _q,
+                    on_step=on_step, prev_ledger=_prev_led,
+                    debug_path=os.path.join(_dbg_dir, "%s_e%d_连续导演.json" % (sid, int(ep or 1))))
+            else:
+                sl = _ds.shot_list(pics, asset_core.list_assets(sid, "scenes") or [], cast_cards(sid) or [], _q,
                                debug_path=os.path.join(_dbg_dir, "%s_e%d_导演.txt" % (sid, int(ep or 1))), on_step=on_step,
                                event_points=_evp,                                                      # P440：口述要点给导演
                                event_map=((e or {}).get("fidelity") or {}).get("map"),                    # P443：按忠实核对的事件→段落表分件
@@ -14651,6 +14660,8 @@ def build_timeline(sid, ep, prompts, replace=False):
                       "warn": "", "state_block": "", "segments": segs}]}
     if isinstance(old.get("slicing"), dict):
         tl["slicing"] = old["slicing"]                                    # P339：冻结的切片跟着表走
+    if old.get("prompt_failures"):
+        tl["prompt_failures"] = dict(old["prompt_failures"])
     _sc.merge_segment_media(sid, ep, tl)
     # P316：开场段（场景板全景 + 人物亮相）按第 1 段的场景/人物建；提示词没变的段保住已出的视频
     try:
@@ -14660,7 +14671,8 @@ def build_timeline(sid, ep, prompts, replace=False):
     except Exception as _ox:
         tl["opening"] = list(old.get("opening") or [])
         _dbg("开场段没建成", {"err": str(_ox)[:120]})
-    _sc.save_ep_timeline(sid, ep, tl)
+    if not _sc.save_ep_timeline(sid, ep, tl):
+        raise RuntimeError("项目已不存在，分镜提示词未保存")
     try:
         _sc.stamp_source(sid, ep)                      # 盖正文快照、清 timeline_stale（P312 曾把它放到 return 后面，等于没盖）
     except Exception:
@@ -14684,25 +14696,50 @@ def next_prompts(sid, ep, upto, on_step=None):
     tl = _sc.ep_timeline(sid, ep) or {"scenes": []}
     segs = sorted([g for sc0 in (tl.get("scenes") or []) for g in (sc0.get("segments") or [])],
                   key=lambda g: int(g.get("no") or 0))
-    have = [int(g.get("no") or 0) for g in segs if str(g.get("prompt") or "").strip()]
-    _total0 = total_segments(sid, ep)
-    _missing = [k for k in range(1, _total0 + 1) if k not in set(have)]
-    start = (_missing[0] - 1) if _missing else _total0                    # 从第一个没提示词的段起写（中间作废的段也补上），不是 max(have)
-    tail = ""
-    if start > 0 and start in set(have):
-        last = next(g for g in segs if int(g.get("no") or 0) == start)
-        tail = str(last.get("tail") or "").strip()
-        if not tail:
-            _ls = [x for x in str(last.get("prompt") or "").splitlines()
-                   if x.strip().startswith("镜头")]
-            tail = _ls[-1].strip() if _ls else ""
+    have = {int(g.get("no") or 0): g for g in segs if str(g.get("prompt") or "").strip()}
     total = total_segments(sid, ep)
-    count = max(0, min(int(upto), total) - start)
-    ps = make_h3_prompts(sid, ep, on_step=on_step, start=start, count=count,
-                         prev_tail=tail) if count else []
-    if ps:
-        build_timeline(sid, ep, ps)
-    return [p["n"] for p in ps], total
+    missing = [k for k in range(1, min(int(upto), total) + 1) if k not in have]
+    ranges = []
+    for no in missing:
+        if ranges and no == ranges[-1][1] + 1:
+            ranges[-1][1] = no
+        else:
+            ranges.append([no, no])
+    saved = []
+
+    def save_prompt(row):
+        build_timeline(sid, ep, [row])
+        saved.append(row["n"])
+        have[row["n"]] = row
+        current = _sc.ep_timeline(sid, ep) or {}
+        failures = current.get("prompt_failures") or {}
+        if str(row["n"]) in failures:
+            failures.pop(str(row["n"]), None)
+            current["prompt_failures"] = failures
+            _sc.save_ep_timeline(sid, ep, current)
+
+    def save_failure(no, message):
+        current = _sc.ep_timeline(sid, ep) or {"scenes": []}
+        current.setdefault("prompt_failures", {})[str(no)] = message
+        if not _sc.save_ep_timeline(sid, ep, current):
+            raise RuntimeError("项目已不存在，未保存待补段记录")
+        if on_step:
+            on_step(message + "；先继续后面的段")
+
+    for first, last in ranges:
+        previous = have.get(first - 1) or {}
+        tail = str(previous.get("tail") or "").strip()
+        if not tail:
+            lines = [x for x in str(previous.get("prompt") or "").splitlines() if x.strip().startswith("镜头")]
+            tail = lines[-1].strip() if lines else ""
+        # New writer persists each validated row before requesting the next one.
+        # Older writers retain their batch contract; save their returned rows below.
+        ps = make_h3_prompts(sid, ep, on_step=on_step, start=first-1, count=last-first+1,
+                             prev_tail=tail, on_prompt=save_prompt, on_error=save_failure)
+        for row in ps:
+            if row["n"] not in saved:
+                save_prompt(row)
+    return saved, total
 
 
 def make_screenplay(sid, ep=1, on_step=None):

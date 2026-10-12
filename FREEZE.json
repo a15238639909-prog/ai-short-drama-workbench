@@ -1,12 +1,15 @@
 {
-  "tag": "v1.04-freeze-20261010",
-  "date": "2026-10-10",
+  "tag": "snapshot-20261012_182019",
+  "date": "2026-10-12",
   "version": "1.04",
   "model_weights_included": false,
   "private_config_included": false,
   "business_code_modified_by_packaging": false,
+  "private_data_included": false,
+  "public_defaults_retained": ["presets/content_scale.json"],
   "known_limitations": [
-    "age_policy checks are currently no-ops",
-    "model generation not tested during packaging"
+    "age_policy legacy checks remain no-ops; character_facts contains active checks",
+    "model generation not tested during this backup",
+    "this source snapshot does not include model weights or the Python runtime"
   ]
 }

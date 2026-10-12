@@ -27,6 +27,9 @@ def _split_names(t):
 def blocks_to_text(director):
     """director 骨架 → 时间块文本（含台词行）。"""
     d = director or {}
+    from . import director_flow
+    if d.get("flow") == director_flow.VERSION:
+        return director_flow.edit_text(d)
     says = [list(x) for x in (d.get("says") or [])]
     flat = [x for b in (d.get("blocks") or []) for x in (b[3] if len(b) > 3 else [])]
     by_d = {}
@@ -100,6 +103,10 @@ def _slice_from_row(old, row):
     d.update({"camera": camera, "cast": cast, "blocks": [[b[0], b[1], b[2], list(b[3])] for b in blocks],
               "says": [list(x) for x in says], "end_state": es})
     d.setdefault("purpose", "")
+    from . import director_flow
+    if d.get("flow") == director_flow.VERSION and row.get("blocks_text") is not None:
+        director_flow.sync_edit(d, row["blocks_text"])
+        blocks, says = d["blocks"], d["says"]
     body = "；".join(str(b[2]).rstrip("。") for b in blocks)
     text = "── %s ──\n%s。" % (place, body)
     for nm, q in says:
@@ -107,6 +114,8 @@ def _slice_from_row(old, row):
     s.update({"text": text, "seconds": secs, "scene_hint": place, "shot": _ds.shot_of(camera) if camera else (s.get("shot") or "中景"),
               "who": "、".join(_os_.short_name(n) for n in cast), "director": d, "pace": "导演", "cut": True})
     s.setdefault("beat", "")
+    if d.get("flow") == director_flow.VERSION:
+        s["text"] = "── %s ──\n%s" % (place, re.sub(r"【D\d+】", "", "\n".join(b[2] for b in blocks)))
     s.setdefault("beat_index", -1)
     return s
 
