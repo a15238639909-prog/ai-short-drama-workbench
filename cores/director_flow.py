@@ -9,6 +9,7 @@ import math
 import re
 import time
 from pathlib import Path
+from . import episode_contract as contract
 
 VERSION = 'source-v1'
 FIELDS = ('subject_definitions', 'summary', 'retention_analysis',
@@ -112,13 +113,16 @@ def sync_edit(director, editor_text):
         block[3] = list(range(offset+1, offset+len(quoted)+1))
         says.extend(quoted)
     director.update(blocks=blocks, says=says)
+    director['timing_source'] = 'user'
     # State summaries become unreliable once the user changes a shot.
     director.pop('target_state', None)
     director.pop('start_state', None)
+    for key in ('end_state_text', 'presence', 'source_contract_version', 'source_contract'):
+        director.pop(key, None)
     return director
 
 
-def _request(q, stage, payload, schema, validate, trace=None, repair=None):
+def _request(q, stage, payload, schema, validate, trace=None, repair=None, fallback=None):
     system = instruction(stage)
     current = copy.deepcopy(payload)
     if stage == 'write':
@@ -127,7 +131,8 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None):
             'dialogue_placeholders': ['{{D%d}}' % u['dialogue_id'] for u in payload['source_order'] if u.get('dialogue_id')],
             'character_labels': [r['subject_label'] for r in payload['references'] if r['role'] == 'character'],
         }
-    for attempt in range(2):
+    # One initial request and at most two local repairs; never retry the whole story.
+    for attempt in range(3):
         raw = q(system, json.dumps(current, ensure_ascii=False), mt=4200 if stage == 'plan' else 5000,
                 temperature=.2, _tries=1, response_format={'type': 'json_object', 'schema': schema})
         if trace is not None:
@@ -135,11 +140,17 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None):
                           'scope': payload.get('current_scope'), 'clip_id': payload.get('clip_id'),
                           'output_contract': current.get('output_contract')})
         try:
-            return validate(_response_object(raw))
+            parsed = _response_object(raw)
+            fixed = contract.normalize_anchors(parsed) if stage == 'write' else parsed
+            result = validate(fixed)
+            if trace is not None and fixed != parsed:
+                trace[-1]['auto_repair'] = '已规范本段对白编号写法，原话与顺序保留'
+                trace[-1]['repaired_data'] = fixed
+            return result
         except (ValueError, KeyError, TypeError, IndexError, StopIteration) as error:
             if trace is not None:
                 trace[-1]['validation_error'] = str(error)
-            if attempt:
+            if attempt == 2:
                 if repair is not None:
                     try:
                         fixed = repair(_response_object(raw))
@@ -150,7 +161,23 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None):
                         return result
                     except (ValueError, KeyError, TypeError, IndexError):
                         pass
-                raise ValueError('导演文字格式未通过，请重试当前步骤：'+str(error)) from error
+                if stage == 'write' and fallback is not None:
+                    entry = {'stage': 'source_fallback', 'clip_id': payload.get('clip_id'),
+                             'trigger': str(error), 'status': 'checking'}
+                    if trace is not None:
+                        trace.append(entry)
+                    try:
+                        fixed = fallback(payload)
+                        result = validate(fixed)
+                        entry.update(status='accepted', repaired_data=fixed,
+                            auto_repair='模型写词连续校验失败，已使用原文保底写词；动作、对白和顺序保留')
+                        return result
+                    except (ValueError, KeyError, TypeError, IndexError) as fallback_error:
+                        entry.update(status='blocked', validation_error=str(fallback_error))
+                        error = ValueError(str(error) + '；原文保底写词未通过：' + str(fallback_error))
+                raise contract.ContractError('导演文字格式自动修复后仍未通过：'+str(error),
+                    stage=stage, code='prompt_contract' if stage == 'write' else 'plan_contract',
+                    details={'clip_id': payload.get('clip_id'), 'error': str(error)}) from error
             # A failed global plan is not a useful draft for a local source window.
             # Retry the same bounded task, rather than priming the repeated wrong plan.
             if stage == 'plan':
@@ -158,7 +185,7 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None):
             else:
                 current['validation_feedback'] = {
                     'error': str(error), 'draft': raw,
-                    'task': '只修当前clip_id的写词JSON。镜头与source_order保持原样；text按output_contract的顺序各放一次对白占位符，人物动作使用对应character_labels。输出完整的本段JSON。',
+                    'task': '只修当前clip_id的写词JSON。以source_order作为唯一对白和动作来源，保留原剧情和镜头。text按output_contract的顺序各放一次对白占位符；不得保留未知编号、重复编号或发明台词。dialogue_placeholders为空表示本段没有可说出的对白，须依据原动作重新写本段，不得为配合草稿创造对白。人物动作使用对应character_labels。输出完整的本段JSON。',
                 }
 
 
@@ -181,6 +208,77 @@ def _response_object(raw):
     return data
 
 
+def source_fallback(clip):
+    """Minimal writer data from the validated source, never the failed draft."""
+    seconds = clip['seconds']
+    if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds) or not 4 <= seconds <= 15):
+        raise ValueError('原文保底写词要求有效的4～15秒分段')
+    refs = clip['references']
+    if not isinstance(refs, list) or not refs or len(refs) > 9:
+        raise ValueError('原文保底写词的参考素材数量无效')
+    by_name = {}
+    for index, ref in enumerate(refs, 1):
+        name = ref['name']
+        if (not isinstance(name, str) or not name.strip() or name in by_name
+                or type(ref['subject']) is not int or ref['subject'] != index
+                or type(ref['picture']) is not int or ref['picture'] != index
+                or ref['subject_label'] != '<Subject %d>' % index
+                or ref['role'] not in ('character', 'scene')):
+            raise ValueError('原文保底写词的身份或图片引用无效')
+        by_name[name] = ref
+    scenes = [r for r in refs if r['role'] == 'scene']
+    if len(scenes) != 1 or scenes[0]['name'] != clip['scene']:
+        raise ValueError('原文保底写词缺少当前场景引用')
+    characters = {name: ref for name, ref in by_name.items() if ref['role'] == 'character'}
+    presence = clip.get('presence_contract') or {}
+    needed = list(presence.get('actors') or []) + [row['name'] for row in presence.get('visual_identity_candidates') or []]
+    if any(name not in characters for name in needed):
+        raise ValueError('原文保底写词缺少行动或可见人物引用')
+    name_pattern = re.compile('|'.join(re.escape(name) for name in sorted(characters, key=len, reverse=True))) if characters else None
+    def bind_names(text):
+        return name_pattern.sub(lambda match: characters[match[0]]['subject_label'], text) if name_pattern else text
+    content = clip['source_order']
+    if not isinstance(content, list) or not content:
+        raise ValueError('原文保底写词没有已确认原文')
+    lines, ids, speech = [], [], 0
+    for unit in content:
+        words = unit['text']
+        if not isinstance(words, str) or not words.strip():
+            raise ValueError('原文保底写词发现空白原文')
+        did = unit.get('dialogue_id')
+        if did is not None:
+            ref = characters.get(unit.get('speaker'))
+            prefix = unit.get('speech_prefix', '')
+            if (type(did) is not int or did <= 0 or did in ids or not ref
+                    or not re.fullmatch(re.escape(ref['subject_label']) + r' \(S[1-9]\d*\)', prefix)):
+                raise ValueError('原文保底写词的对白编号或说话人未确认')
+            ids.append(did)
+            speech += contract.speech_seconds(words)
+            lines.append('{{D%d}}' % did)
+        else:
+            # An unlifted source quote must be repaired at the source, not made
+            # into untracked dialogue by this last formatting fallback.
+            if contract.prepare_source(words, list(characters.values()))[1]:
+                raise ValueError('原文保底写词发现尚未编号的原对白')
+            lines.append(bind_names(words))
+    if speech > seconds:
+        raise ValueError('原文保底写词不能在本段秒数内读完对白')
+    # Keep only optical vocabulary from the confirmed camera description. A
+    # plan may paraphrase speech or action; copying it would duplicate a line
+    # or add an event not present in source_order. The source supplies the end.
+    optics = re.findall(r'(?:近景|中景|全景)(?:至|转为|转|到)(?:特写|近景|中景|远景)|'
+        r'(?:缓慢|缓缓|慢速|快速)?(?:推近|拉远|推镜|拉镜|摇镜|移镜|跟拍|平移|变焦)|'
+        r'(?:焦点|背景)(?:虚化|转移)|浅景深|深景深|(?:大|极)?特写|近景|中景|远景|全景|俯拍|仰拍|平视|固定机位|'
+        r'close-up|medium shot|wide shot|low angle|high angle|shallow depth of field',
+        str(clip.get('camera') or ''), flags=re.I)
+    camera = '摄影：' + '；'.join(dict.fromkeys(optics)) + '。\n' if optics else ''
+    return {'clip_id': clip['clip_id'], 'summary': '按已确认原文顺序呈现本段行动和对白。',
+            'style': str(clip.get('style') or '沿用参考素材的画面风格与光线。'),
+            'text': camera + '\n'.join(lines),
+            'overall_soundscape': '保留原文明确写出的环境声和动作声；对白仅按正文标记发声。'}
+
+
 TEXT = {'type': 'string', 'minLength': 1}
 
 
@@ -188,7 +286,7 @@ def resolve_speakers(script, dialogue, chars, q, on_step=None, trace=None):
     """Resolve speaker metadata only; dialogue text/order and original source stay intact."""
     from . import oral_story
     names = [n for n, _, _ in oral_story._char_items(chars)]
-    aliases = oral_story.card_aliases(chars)
+    aliases = contract._aliases(chars)
     fixed = [(name if name in names else aliases.get(name, name), text) for name, text in dialogue]
     pending = [{'dialogue_id': i + 1, 'speaker': name, 'text': text}
                for i, (name, text) in enumerate(fixed) if name not in names]
@@ -233,7 +331,8 @@ def resolve_speakers(script, dialogue, chars, q, on_step=None, trace=None):
             except (ValueError, KeyError, TypeError) as error:
                 entry['validation_error'] = str(error)
                 if attempt:
-                    raise ValueError('说话人自动核对两次仍未确认：' + str(error)) from error
+                    raise contract.ContractError('说话人自动核对两次仍未确认：' + str(error),
+                        code='speaker_unresolved', details={'pending': pending}) from error
                 payload['validation_feedback'] = {'error': str(error), 'draft': raw}
     changes = [{'dialogue_id': i + 1, 'from': old[0], 'to': new[0]}
                for i, (old, new) in enumerate(zip(dialogue, fixed)) if old[0] != new[0]]
@@ -250,22 +349,29 @@ def resolve_speakers(script, dialogue, chars, q, on_step=None, trace=None):
 
 def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
     from . import director_shots as ds, oral_story
-    script, dialogue = oral_story.numbered_script(pics)
+    script, dialogue, source_contract = contract.prepare_source(pics, chars, split_long_dialogue=True)
     names = [n for n, _, _ in oral_story._char_items(chars)]
     places = [n for n, _ in oral_story._scene_items(scenes)]
     if not places:
         raise ValueError('请先建立本话场景卡，再自动分段')
-    all_shots, state, log = [], str(prev_ledger or ''), []
+    all_shots, state, log = [], str(prev_ledger or ''), [{'stage': 'source_contract', 'report': source_contract}]
     try:
+        too_long = [issue for issue in source_contract['issues'] if issue['code'] == 'dialogue_timing']
+        if too_long:
+            raise contract.ContractError('第%d句原话超过单段15秒，且没有可靠标点拆分位置；原文已保留，需补充分句标点后继续' %
+                too_long[0]['dialogue_id'], stage='plan', code='dialogue_timing', details={'dialogue': too_long})
         script, dialogue = resolve_speakers(script, dialogue, chars, q, on_step, log)
         events = source_windows(script)
-        aliases = oral_story.card_aliases(chars)
+        aliases = contract._aliases(chars)
         for index, event in enumerate(events):
             units = units_of(event)
             payload = {'whole_story': script, 'state_context': state, 'scenes': places, 'characters': names,
                        'current_scope': {'part': index+1, 'parts': len(events), 'unit_count': len(units),
                            'last_end_unit': len(units), 'task': '只规划下方units；whole_story仅用于理解背景。'},
                        'units': units,
+                       'continuity_contract': {
+                           'source_presence': contract.presence_evidence(event, chars),
+                           'rules': 'cast包含本镜实际行动者和说话人；仅被提及、被寻找或已失踪的人不能因此在场。承接state_context中的人数、姿势、携带关系、道具归属和地点；发生变化必须有原文动作依据。end_state明确留下谁、谁离开以及手中物和姿势，不能把整个项目人物表当作本镜在场表。'},
                        'dialogue': [{'id': u['dialogue_id'], 'speaker': dialogue[u['dialogue_id']-1][0],
                                      'text': dialogue[u['dialogue_id']-1][1]}
                                     for u in units if u['dialogue_id']]}
@@ -288,18 +394,28 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                     if shot['scene_name'] not in places or not set(cast) <= set(names):
                         raise ValueError('地点和人物须来自给定卡片')
                     current = units[cursor:end]
+                    presence = contract.presence_evidence('\n'.join(u['text'] for u in current), chars)
+                    # Keep explicit departures active in later shots, until a
+                    # new action/return in the source establishes presence again.
+                    progress = contract.presence_evidence(state + '\n' + '\n'.join(u['text'] for u in units[:end]), chars)
+                    presence['absent'] = progress['absent']
                     ids = [u['dialogue_id'] for u in current if u['dialogue_id']]
-                    missing = list(dict.fromkeys(dialogue[d-1][0] for d in ids if dialogue[d-1][0] not in cast))
+                    visible = contract.camera_identity_evidence(shot.get('camera'), chars, presence['absent'])
+                    presence['visual_identity_candidates'] = visible['evidence']
+                    required = list(dict.fromkeys([dialogue[d-1][0] for d in ids] + presence['actors'] + visible['names']))
+                    missing = [name for name in required if name not in cast]
                     if missing:
                         cast.extend(missing)
                         log.append({'stage': 'cast_repair', 'part': index+1, 'shot': shot_index, 'added': missing})
                         if on_step:
-                            on_step('第%d部分第%d镜已自动补入说话人物：%s' % (index+1, shot_index, '、'.join(missing)))
+                            on_step('第%d部分第%d镜已补入行动、说话或可能可见人物的身份参考：%s' % (index+1, shot_index, '、'.join(missing)))
+                    absent_only = [name for name in presence['absent'] if name not in required]
+                    cast = [name for name in cast if name not in absent_only]
                     shot = dict(shot, cast=cast)
                     seconds = shot['seconds']
                     if isinstance(seconds, bool) or not isinstance(seconds, (int,float)) or not math.isfinite(seconds):
                         raise ValueError('秒数无效')
-                    speech = sum(len(re.findall(r'[一-龥A-Za-z0-9]', dialogue[d-1][1]))/4.5+.5 for d in ids)
+                    speech = sum(contract.speech_seconds(dialogue[d-1][1]) for d in ids)
                     seconds = max(4, math.ceil(seconds), math.ceil(speech))
                     if seconds > 15:
                         raise ValueError('原对白需%d秒，请按行动拆开，单段最多15秒' % seconds)
@@ -308,7 +424,8 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                     result.append(dict(shot, place=shot['scene_name'], seconds=seconds,
                         blocks=[[0,seconds,'\n'.join(u['text'] for u in current),ids]],
                         says=[dialogue[d-1] for d in ids], shot=ds.shot_of(shot['camera']),
-                        target_state=shot['end_state'], end_state={}))
+                        target_state=shot['end_state'], end_state_text=shot['end_state'],
+                        presence=presence, end_state={}))
                     cursor=end
                 if cursor != len(units) or not result:
                     raise ValueError('当前原文尚未完整分配：已到%d，须继续分配至%d；最后end_unit须为%d' % (cursor,len(units),len(units)))
@@ -326,7 +443,11 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
             Path(debug_path).write_text(json.dumps(log,ensure_ascii=False,indent=2),encoding='utf-8')
     slices=ds.to_slices(all_shots)
     for sl,shot in zip(slices,all_shots):
-        sl['director'].update(flow=VERSION,start_state=shot['start_state'],target_state=shot['target_state'])
+        sl['director'].update(flow=VERSION,start_state=shot['start_state'],target_state=shot['target_state'],
+                             end_state_text=shot['end_state_text'], presence=shot['presence'],
+                             source_contract_version=contract.VERSION, timing_source='auto',
+                             source_dialogue=[row for row in source_contract['dialogue']
+                                              if row['id'] in shot['blocks'][0][3]])
         # to_slices normally appends dialogue; here it is already in its source position.
         sl['text']='── %s ──\n%s' % (sl['scene_hint'],re.sub(r'【D\d+】','',shot['blocks'][0][2]))
     return slices
@@ -337,8 +458,22 @@ def _clip(sl, number, chars, speakers, prior, settings, direction):
     names=set(d['cast'])
     content=ordered_content(d)
     names.update(u['speaker'] for u in content if u.get('dialogue_id'))
+    camera=direction or d['camera']
+    # Re-evaluate frozen slices too: an earlier source-contract version may
+    # already be valid while its cast omitted a hand, silhouette or background
+    # person explicitly visible in the camera description.
+    presence=contract.presence_evidence(sl.get('text'), chars)
+    progress=contract.presence_evidence('\n'.join((prior or '', d.get('start_state') or '', sl.get('text') or '')), chars)
+    presence['absent']=list(dict.fromkeys(progress['absent'] + [n for n in (d.get('presence') or {}).get('absent', [])
+                                                             if n not in presence['actors']]))
+    visible=contract.camera_identity_evidence(camera, chars, presence['absent'])
+    presence['visual_identity_candidates']=visible['evidence']
+    names.update(presence['actors'])
+    names.update(visible['names'])
     if names - {c['name'] for c in chars}:
         raise ValueError('分段人物已不存在，请重新保存人物或分段')
+    d['cast']=[c['name'] for c in chars if c['name'] in names]
+    d['presence']=presence
     # Same card order as segment_api.new_pack; IDs are compact per render job.
     refs=[{'name':c['name'],'subject':i,'picture':i,'role':'character','voice':c.get('voice','')}
           for i,c in enumerate([c for c in chars if c['name'] in names],1)]
@@ -351,13 +486,16 @@ def _clip(sl, number, chars, speakers, prior, settings, direction):
         if unit.get('dialogue_id'):
             unit['speech_prefix']='<Subject %d> (S%d)' % (by_name[unit['speaker']]['subject'],speakers[unit['speaker']])
     return {'clip_id':number,'seconds':sl['seconds'],'scene':sl['scene_hint'], 'references':refs,
-            'camera':direction or d['camera'],'purpose':d['purpose'],'source_order':content,
-            'earlier_source':prior,'start_state':d.get('start_state',''), 'end_state':d.get('target_state',''),
+            'camera':camera,'purpose':d['purpose'],'source_order':content,
+            'earlier_source':prior,'start_state':d.get('start_state',''), 'end_state':contract.ending_text(d),
+            'presence_contract': presence,
+            'continuity_rules': '仅绘制当前动作或机位可能看到的人物。身份参考槽位不要求所有人物同时出镜，也不要求每帧都显示；背影或身体局部若可见，须沿用对应人物身份。失踪或离场者不可因拥有参考图重新出现；衣着、携带关系、道具归属、人数和姿势承接开始状态，变化须拍出动作。',
             'style':settings.get('style') or settings.get('visual_style') or settings.get('art_style') or '',
             'extra_requirements':settings.get('extra_requirements') or ''}
 
 
 def assemble(data, clip):
+    data = contract.normalize_anchors(data)
     if data['clip_id'] != clip['clip_id']:
         raise ValueError('镜头编号不符')
     raw={k:data[k] for k in ('summary','style','text','overall_soundscape')}
@@ -372,11 +510,20 @@ def assemble(data, clip):
     # Remove only this duplicate slot, not surrounding action prose or signage.
     raw['text']=re.sub(r'<Subject \d+>\s*:?\s*["“][^"”\n]*["”]\s*(?=\{\{D\d+\}\})', '', raw['text'])
     joined='\n'.join(raw.values())
+    for field in ('summary', 'style', 'overall_soundscape'):
+        if re.search(r'\{\{D\d+\}\}', raw[field]):
+            raise ValueError('对白占位符只能写在text中，不能藏在摘要、风格或声音字段')
+    if re.search(r'(?:\{\{?|\[|【|<)\s*[dD]\s*[\d?A-Za-z]', re.sub(r'\{\{D\d+\}\}', '', raw['text'])):
+        raise ValueError('对白占位符格式不完整，请按源编号使用{{D数字}}')
     allowed={(kind,str(ref[key])) for ref in clip['references'] for kind,key in (('Subject','subject'),('Picture','picture'))}
     if not set(re.findall(r'<(Subject|Picture|Audio|Video)\s*(\d+)>',joined)) <= allowed:
         raise ValueError('正文引用了本段未绑定素材')
     if re.search(r'<d>|\(S\d+\)|\[Shot\s+\d+\]',joined):
         raise ValueError('对白及镜头标记由程序绑定，正文用D占位符')
+    departure = contract.unsupported_departure(joined, '\n'.join(
+        unit['text'] for unit in clip['source_order'] if not unit.get('dialogue_id')))
+    if departure:
+        raise ValueError(departure)
     dialogue=[u for u in clip['source_order'] if u.get('dialogue_id')]
     if any(line['text'] in joined for line in dialogue):
         raise ValueError('原对白只由D占位符承担；删除正文重复写出的原话，保留占位符')
@@ -393,13 +540,21 @@ def assemble(data, clip):
     for r in clip['references']:
         role='environment' if r['role']=='scene' else 'character'
         definitions.append('<Subject %d> is %s, the %s from <Picture %d>.' % (r['subject'],r['name'],role,r['picture']))
+        if r['role']=='scene':
+            definitions[-1] += ' Reference scope: fixed architecture, fixed furniture layout and lighting only; movable props and any people in the image are not fixed scene content.'
+        else:
+            definitions[-1] += ' Reference scope: character identity, face, hair and clothing only; pose, hand occupancy and carried objects follow the current action and preceding state.'
         if r.get('voice') and r['name'] in {u.get('speaker') for u in dialogue}:
             definitions[-1] += ' Voice reference: '+str(r['voice'])+'.'
+    object_scope = ('Movable object count, location, holder and completed actions follow the confirmed source and preceding state, '
+                    'advanced only by the written actions; do not duplicate an object or restore its earlier placement from a reference image.')
     fields=dict(subject_definitions='\n'.join(definitions),summary='[reference generation] '+raw['summary'],
         retention_analysis='\n'.join(
-            ('<Subject %d> (appears in [Shot 1]): fully_preserved - reference identity; current action follows this shot.' % r['subject'])
-            if r['role']=='scene' or r['subject_label'] in text else
-            ('<Subject %d> (identity reference only): fully_preserved - retain the reference identity if visible; no additional entrance is specified.' % r['subject'])
+            ('<Subject %d> (appears in [Shot 1]): partially_preserved - retain fixed architecture, fixed furniture layout and lighting only. ' % r['subject'] + object_scope)
+            if r['role']=='scene' else
+            ('<Subject %d> (appears in [Shot 1]): fully_preserved - character identity, face, hair and clothing only; pose and hand occupancy follow the current action and preceding state.' % r['subject'])
+            if r['subject_label'] in text else
+            ('<Subject %d> (identity reference only): fully_preserved - retain identity, face, hair and clothing if visible; pose and hand occupancy follow the current action and preceding state; no additional entrance is specified.' % r['subject'])
             for r in clip['references']),
         detailed_description=raw['style']+'\n[Shot 1]\nFrom 0 to %g seconds, '%clip['seconds']+text,
         overall_soundscape=raw['overall_soundscape'], non_diegetic_music='N/A')
@@ -407,25 +562,121 @@ def assemble(data, clip):
 
 
 def repair_missing_dialogue(data, clip):
-    """Recover missing anchors only; preserve every existing anchor and action in place."""
-    fixed = copy.deepcopy(data)
+    """Recover an anchor at its exact source words; never invent a speech position."""
+    fixed = contract.normalize_anchors(data)
     text = fixed['text']
     expected = [u['dialogue_id'] for u in clip['source_order'] if u.get('dialogue_id')]
     actual = [int(n) for n in re.findall(r'\{\{D(\d+)\}\}', text)]
-    if actual == expected or actual != [n for n in expected if n in actual]:
-        raise ValueError('仅自动补缺失标记；不重排或猜测重复、未知对白')
-    cursor = 0
-    def fill(match):
-        nonlocal cursor
-        end = expected.index(int(match[1])) + 1
-        tokens = ' '.join('{{D%d}}' % n for n in expected[cursor:end])
-        cursor = end
-        return tokens
-    text = re.sub(r'\{\{D(\d+)\}\}', fill, text)
-    if cursor < len(expected):
-        text += ' ' + ' '.join('{{D%d}}' % n for n in expected[cursor:])
+    if actual != [n for n in expected if n in actual]:
+        raise ValueError('未知、重复或乱序对白须由本段原文重新修复')
+    for line in clip['source_order']:
+        did = line.get('dialogue_id')
+        if did and did not in actual:
+            if text.count(line['text']) != 1:
+                raise ValueError('缺失对白位置没有唯一原文依据，保留本段等待修复')
+            text = text.replace(line['text'], '{{D%d}}' % did, 1)
+    if [int(n) for n in re.findall(r'\{\{D(\d+)\}\}', text)] != expected:
+        raise ValueError('对白来源顺序不一致')
     fixed['text'] = text
     return fixed
+
+
+def repair_slice_source(sl, chars, q, on_step=None, trace=None):
+    """Upgrade old slices that treated literary dialogue as silent action.
+
+    Existing D rows remain authoritative. Only metadata/layout changes; the
+    original block and its complete source evidence remain available for review.
+    """
+    director = sl['director']
+    if director.get('source_contract_version') == contract.VERSION:
+        return False
+    candidate = copy.deepcopy(director)
+    old_says = list(candidate.get('says') or [])
+    offset, says, blocks, reports = 0, [], [], []
+    for block in candidate.get('blocks') or []:
+        ids = block[3]
+        if offset + len(ids) > len(old_says):
+            raise contract.ContractError('分镜原话记录不完整，已保留分镜供修复', code='dialogue_source_mismatch')
+        assigned = {did: old_says[offset + index] for index, did in enumerate(ids)}
+        offset += len(ids)
+        body = block[2]
+        seen = []
+
+        def old_line(match):
+            did = int(match[1])
+            if did not in assigned or did in seen:
+                raise contract.ContractError('分镜对白编号与原话记录不符', code='dialogue_source_mismatch')
+            seen.append(did)
+            return '%s：%s' % tuple(assigned[did])
+
+        body = re.sub(r'^【D(\d+)】[^\n]*', old_line, body, flags=re.M)
+        # Legacy editor blocks kept some dialogue separately from action prose.
+        for did, line in assigned.items():
+            if did not in seen:
+                _, found, _ = contract.prepare_source(body, chars)
+                if tuple(line) not in found:
+                    body += '\n%s：%s' % tuple(line)
+        script, quoted, report = contract.prepare_source(body, chars)
+        script, quoted = resolve_speakers(script, quoted, chars, q, on_step, trace)
+        first = len(says)
+        script = re.sub(r'【D(\d+)】', lambda m: '【D%d】' % (int(m[1]) + first), script)
+        blocks.append([block[0], block[1], script, list(range(first + 1, first + len(quoted) + 1))])
+        says.extend(quoted)
+        reports.append(report)
+    if offset != len(old_says):
+        raise contract.ContractError('分镜原话没有全部归属到动作块', code='dialogue_source_mismatch')
+    changed = blocks != candidate.get('blocks') or [list(x) for x in says] != [list(x) for x in old_says]
+    candidate.update(blocks=blocks, says=says, source_contract_version=contract.VERSION,
+                     source_contract={'original_blocks': copy.deepcopy(director.get('blocks')), 'reports': reports})
+    candidate['presence'] = contract.presence_evidence('\n'.join(b[2] for b in blocks), chars)
+    required = list(dict.fromkeys([name for name, _ in says] + candidate['presence']['actors']))
+    candidate['cast'] = list(dict.fromkeys((candidate.get('cast') or []) + required))
+    candidate['cast'] = [name for name in candidate['cast']
+                         if name not in candidate['presence']['absent'] or name in required]
+    candidate['end_state_text'] = contract.ending_text(candidate)
+    # Recovered speech must fit the existing shot; do not render clipped dialogue.
+    speech_seconds = sum(contract.speech_seconds(words) for _, words in says)
+    original_seconds = float(sl['seconds'])
+    extra = 0.0
+    retimed = copy.deepcopy(blocks)
+    for block in retimed:
+        begin, finish = float(block[0]), float(block[1])
+        if begin < 0 or finish <= begin:
+            raise contract.ContractError('本段时间块无效，保留原段待修复', code='dialogue_timing')
+        needed = sum(contract.speech_seconds(says[did - 1][1]) for did in block[3])
+        width = max(finish - begin, needed)
+        block[0], block[1] = begin + extra, begin + extra + width
+        extra += width - (finish - begin)
+    minimum_seconds = max(speech_seconds, original_seconds + extra, float(retimed[-1][1]) if retimed else 0)
+    required_seconds = math.ceil(minimum_seconds) if minimum_seconds > original_seconds + 1e-9 else original_seconds
+    if required_seconds > original_seconds:
+        automatic = director.get('flow') == VERSION and director.get('timing_source') != 'user'
+        if not automatic or required_seconds > 15:
+            raise contract.ContractError('恢复原话后本段需%d秒，原分镜只有%s秒；%s，已保留原段' %
+                (required_seconds, sl['seconds'], '需局部重新分镜' if required_seconds > 15 else '保留你设置的时间，需调整本段时长'),
+                code='dialogue_timing', details={'required_seconds': required_seconds,
+                                                'original_seconds': original_seconds, 'automatic': automatic})
+        if retimed:
+            retimed[-1][1] = required_seconds
+        candidate['blocks'] = retimed
+        candidate['seconds'] = required_seconds
+        candidate['timing_repair'] = {'original_seconds': original_seconds, 'seconds': required_seconds,
+                                      'reason': '恢复原话后按发声时长延长自动分镜；原动作与原话保留'}
+        sl['seconds'] = required_seconds
+        changed = True
+        message = '已按原话发声时长将本段从%g秒延长到%d秒' % (original_seconds, required_seconds)
+        if trace is not None:
+            trace.append({'stage': 'timing_repair', 'auto_repair': message,
+                          'original_seconds': original_seconds, 'seconds': required_seconds})
+        if on_step:
+            on_step(message)
+    sl['director'] = candidate
+    if changed:
+        sl['text'] = '── %s ──\n%s' % (sl['scene_hint'], contract.plain_script('\n'.join(b[2] for b in blocks)))
+        if trace is not None:
+            trace.append({'stage': 'source_repair', 'auto_repair': '已从本段原文恢复对白结构，原话与动作保留',
+                          'dialogue_before': len(old_says), 'dialogue_after': len(says)})
+    return changed
 
 
 def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, on_step=None, prev_tail='', direction=None,
@@ -451,13 +702,16 @@ def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, o
         try:
             if sl['scene_hint'] not in scenes:
                 raise ValueError('分段场景已不存在，请重新选择场景')
+            repair_slice_source(sl, chars, q, on_step, trace)
+            for name, _ in sl['director'].get('says') or []:
+                speakers.setdefault(name, len(speakers) + 1)
             prior='\n'.join(s['text'] for s in slices[:k])
             clip=_clip(sl,k+1,chars,speakers,prior,settings,str(direction or '').strip())
             if k==start and prev_tail:
                 clip['rendered_previous_state']=str(prev_tail)
             schema=_object(clip_id={'type':'integer','enum':[k+1]}, summary=TEXT,style=TEXT,text=TEXT,overall_soundscape=TEXT)
             prompt=_request(q,'write',clip,schema,lambda data:assemble(data,clip),trace,
-                            repair=lambda data: repair_missing_dialogue(data, clip))
+                            repair=lambda data: repair_missing_dialogue(data, clip), fallback=source_fallback)
         except (ValueError, KeyError, TypeError, IndexError, StopIteration) as error:
             from .age_policy import AgePolicyError
             if isinstance(error, AgePolicyError):
@@ -476,14 +730,23 @@ def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, o
         prompt=desex_text(prompt,settings)
         assert_allowed(cards=chars,settings=settings,text=prompt,media='video_prompt')
         repairs = [t['auto_repair'] for t in trace if t.get('auto_repair')]
+        fallback_used = any(t['stage'] == 'source_fallback' and t.get('status') == 'accepted' for t in trace)
+        if fallback_used:
+            sl['director']['prompt_recovery'] = {'mode': 'source_fallback', 'reason': repairs[-1]}
+        else:
+            sl['director'].pop('prompt_recovery', None)
         body = prompt.split('detailed_description:', 1)[-1]
         unused = [r['name'] for r in clip['references'] if r['role']=='character' and r['subject_label'] not in body]
         if unused:
             repairs.append('本镜未明确使用这些人物标签，保留参考槽位并继续：'+'、'.join(unused))
         if repairs and on_step:
-            on_step('第%d段格式已兼容处理，继续生成' % (k+1))
+            on_step(('第%d段使用原文保底写词（source_fallback）：原动作和对白顺序已校验，继续生成' if fallback_used
+                     else '第%d段格式已兼容处理，继续生成') % (k+1))
         row = {'n':k+1,'prompt':prompt,'problems':repairs,'critical_problems':[],
-            'source_text':sl['text'],'seconds':sl['seconds'],'over':False,'tail':sl['director'].get('target_state',''),
+            'source_text':sl['text'],'seconds':sl['seconds'],'over':False,'tail':contract.ending_text(sl['director']),
+            'source_contract': copy.deepcopy(sl['director'].get('source_contract') or {}),
+            'source_fallback': fallback_used,
+            'director_contract': copy.deepcopy(sl['director']),
             'scene':sl['scene_hint'],'chars':[r['name'] for r in clip['references'] if r['role']=='character'],
             'cut':bool(sl.get('cut')),'establish':bool(sl.get('establish')),'shot':sl.get('shot',''),
             'direction':str(direction or ''),'plan':{'flow':VERSION,'camera':clip['camera'],'purpose':clip['purpose']},
@@ -498,7 +761,10 @@ def prompt_problems(prompt, source_text, seconds, scene):
     """Six-field text uses <d> dialogue, not the legacy Chinese 镜头N parser."""
     from . import oral_story
     problems=[]
-    _, source=oral_story.numbered_script(source_text)
+    departure = contract.unsupported_departure(prompt, source_text)
+    if departure:
+        problems.append(departure)
+    _, source, _=contract.prepare_source(source_text)
     spoken=re.findall(r'<d>\[Chinese\]\s*(.*?)</d>',prompt,re.S)
     if spoken != [line for _,line in source]:
         problems.append('视频提示词对白与当前分段原话或顺序不一致')

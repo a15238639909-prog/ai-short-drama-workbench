@@ -681,7 +681,10 @@ _SEG_MEDIA = ("video", "video_hd", "end_frame", "seed", "size", "size_hd",
               "mode", "used_refs", "adopted", "refs", "ref_hide",
               # P242：这一段是用哪个档、哪个比例、多少步出的，也要跟着搬，
               # 否则跨话恢复后看不出一话里混了几种档
-              "size_tier", "ratio", "steps", "size_tier_hd")
+              "size_tier", "ratio", "steps", "size_tier_hd",
+              "render_request", "render_input_signature", "render_media",
+              "continuity_source", "render_history", "h3_prompt_sent",
+              "h3_prompt_sha256", "reference_scope_version", "h3_prompt_snapshot_origin")
 
 
 def _all_segments(tl):

@@ -19,7 +19,16 @@ def atomic_write(path, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, str(p))
+        for attempt in range(8):
+            try:
+                os.replace(tmp, str(p))
+                break
+            except PermissionError as error:
+                # Windows readers/antivirus can briefly deny replacement.
+                # Keep atomic replacement; never fall back to truncating p.
+                if getattr(error, "winerror", None) not in (5, 32) or attempt == 7:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
 
 def load_json(path, default):
     try:

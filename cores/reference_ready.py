@@ -1,5 +1,7 @@
 """Reference readiness uses adopted files, never a card's stale visuals field."""
 from pathlib import Path
+import copy
+import re
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,6 +49,57 @@ def required_characters(sid, ep=None):
     return [c for c in cards if c.get("name") != camera]
 
 
+def resolve_scene_card(sid, ep, name, cards=None):
+    """Resolve an internal shooting position using this episode's stated location."""
+    from . import asset_core, continuation_assets, saga_core
+    if cards is None:
+        cards = asset_core.list_assets(sid, "scenes") or []
+    episode = saga_core.episode(saga_core.get_saga(sid), int(ep or 1)) or {}
+    return continuation_assets.match_scene(name, cards, context=str(episode.get("brief") or ""))
+
+
+def canonical_scene_slices(sid, ep, slices, cards=None):
+    """Copy automatic director rows with canonical references; retain source text."""
+    from . import asset_core, continuation_assets
+    if cards is None:
+        cards = asset_core.list_assets(sid, "scenes") or []
+    rows = copy.deepcopy(slices)
+    arrival_context = None
+    for row in rows:
+        raw_hint = str(row.get("scene_hint") or "")
+        card = resolve_scene_card(sid, ep, raw_hint, cards)
+        director = row.get("director") or {}
+        if director.get("flow") == "source-v1":
+            source = re.sub(r"(?m)^\s*──[^\n]*──\s*$", "", str(row.get("text") or ""))
+            arrivals = continuation_assets.arrived_locations(source)
+            destinations = [(event, resolve_scene_card(sid, ep, event["name"], cards)) for event in arrivals]
+            destinations = [(event, found) for event, found in destinations if found]
+            if destinations:
+                event, destination = destinations[-1]
+                if card and card.get("scene_id") != destination.get("scene_id"):
+                    director["scene_transition"] = {
+                        "from": card["name"], "to": destination["name"],
+                        "source_evidence": event["evidence"],
+                    }
+                arrival_context = (raw_hint, destination)
+                card = destination
+            elif arrival_context:
+                previous_hint, destination = arrival_context
+                narration = continuation_assets.source_narration(source)
+                explicitly_old = bool(card and card.get("scene_id") != destination.get("scene_id")
+                                      and any(name and name in narration for name in (raw_hint, card.get("name"))))
+                if raw_hint == previous_hint and not explicitly_old:
+                    # An unchanged automatic heading cannot reset a completed arrival.
+                    card = destination
+                elif raw_hint != destination.get("name"):
+                    arrival_context = None
+        else:
+            arrival_context = None
+        if card:
+            row["scene_hint"] = card["name"]
+    return rows
+
+
 def scene_ids_for_episode(sid, ep):
     """None means no trustworthy plan; retain the previous conservative behaviour."""
     from . import asset_core, project_prompt, saga_core
@@ -54,12 +107,14 @@ def scene_ids_for_episode(sid, ep):
     if not slices:
         return None
     cards = {str(c.get("name") or ""): c for c in asset_core.list_assets(sid, "scenes") or []}
+    slices = canonical_scene_slices(sid, ep, slices, list(cards.values()))
     ids = set()
     locations = [str(s.get("scene_hint") or "").strip() for s in slices]
     opening = (saga_core.ep_timeline(sid, ep) or {}).get("opening") or []
     locations.extend(str(s.get("scene") or "").strip() for s in opening if s.get("scene"))
     for raw in locations:
-        name = raw if raw in cards else project_prompt.match_scene_name(raw, list(cards))
+        resolved = resolve_scene_card(sid, ep, raw, list(cards.values()))
+        name = resolved.get("name") if resolved else (raw if raw in cards else project_prompt.match_scene_name(raw, list(cards)))
         if not name or name not in cards:
             return None
         ids.add(cards[name]["scene_id"])
@@ -80,7 +135,7 @@ def ensure_characters(sid, ep, on_step=None):
     return result
 
 
-def assert_references(sid, segments):
+def assert_references(sid, segments, ep=None):
     from . import asset_core, authoring, story_core
     all_cards = asset_core.list_assets(sid, "characters") or []
     char_paths = adopted_paths(sid, "character")
@@ -99,7 +154,10 @@ def assert_references(sid, segments):
         known = {c.get("name") for c in all_cards}
         missing.extend("人物卡「%s」" % n for n in names if n not in known)
         scene = str(g.get("scene") or "").strip()
-        if scene and str((scene_cards.get(scene) or {}).get("scene_id") or "") not in scene_paths:
+        card = scene_cards.get(scene)
+        if scene and not card and ep is not None:
+            card = resolve_scene_card(sid, ep, scene, list(scene_cards.values()))
+        if scene and str((card or {}).get("scene_id") or "") not in scene_paths:
             missing.append("场景「%s」" % scene)
     if missing:
         raise MissingReferencesError("缺少已采用且文件有效的参考图：%s。请补图或上传并采用后再生成视频。" % "、".join(dict.fromkeys(missing)))

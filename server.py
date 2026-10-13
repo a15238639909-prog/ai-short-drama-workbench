@@ -789,6 +789,11 @@ def main():
         _doctor.report()
     except Exception as _e:
         print("  （开机自检跑不了：%s）" % str(_e)[:80])
+    from api import saga_api
+    try:
+        saga_api.restore_generation_jobs()
+    except Exception as error:
+        log("error", "恢复任务检查暂未完成，已保留进度：%s" % str(error)[:200])
     if not os.environ.get("V41_NO_BROWSER"):
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     srv.serve_forever()

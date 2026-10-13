@@ -871,8 +871,12 @@ window.Pages.settings = (function () {
     var slotAct = slotOf("slotActions");
     slot.innerHTML =
       '<div id="planCard">' +
-      '<h4 style="font-size:15px;margin:0 0 5px">第一话讲什么？</h4>' +
-      '<p class="note-gray" style="margin:0 0 8px">把这一话发生的事一件一件说清楚，系统照你说的写、不改意思；第二话起在 📖 剧本 页加。</p>' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px">' +
+      '<label for="mkEp" style="font-size:14px">当前制作</label>' +
+      '<select id="mkEp" aria-label="当前制作话次" style="height:34px;min-width:100px;border-radius:8px" disabled><option value="1">第 1 话</option></select>' +
+      '<button type="button" class="btn small" id="manualNext" style="height:34px;border-radius:8px" disabled>＋ 增加第 2 话</button></div>' +
+      '<h4 id="manualEpisodeTitle" style="font-size:15px;margin:0 0 5px">第 1 话讲什么？</h4>' +
+      '<p id="manualEpisodeHint" class="note-gray" style="margin:0 0 8px">写清这一话发生什么。第一话完成后，点上面的“增加下一话”接着写。</p>' +
       '<textarea id="plIdea" data-kind="idea" placeholder="例如：少年救下受伤老者，照顾他养伤；老者提出给钱或带他入门修炼，少年选择修炼并准备出发。" ' +
       'style="width:100%;height:200px;min-height:160px;padding:14px 16px;font-size:15px;line-height:1.85;border-radius:10px">' + esc(s0.one_line || "") + '</textarea>' +
       '<p class="note-gray" style="margin-top:10px">节奏由本地模型根据故事自动安排，连续动作和对白尽量在同一段完成。</p>' +
@@ -890,7 +894,9 @@ window.Pages.settings = (function () {
     slot2.innerHTML = '';
     plView = { plan: null, pending: null };
     plLastEps = [];
-    manualEp = 1;
+    var episodeKey = "v43_episode_" + st.storyId;
+    var requestedEpisode = (location.hash || "").match(/[?&]ep=(\d+)/);
+    manualEp = parseInt(requestedEpisode ? requestedEpisode[1] : localStorage.getItem(episodeKey), 10) || 1;
     manualInputKind = localStorage.getItem("v43_input_kind_" + st.storyId) || "idea";
     if (!MANUAL_INPUT_GUIDES[manualInputKind]) manualInputKind = "idea";
     var manualDrafts = {};
@@ -923,13 +929,28 @@ window.Pages.settings = (function () {
       });
     }
     function drawEpisode() {
-      var e = manualEpisodes.find(function(x) { return +x.no === manualEp; }) || {};
+      var e = manualEpisodes.find(function(x) { return +x.no === manualEp; });
+      if (!e) { e = manualEpisodes[0] || {no:1}; manualEp = +e.no || 1; }
       currentEpisodeData = e;
       var pick = document.getElementById("mkEp");
       if (pick) {
         pick.innerHTML = manualEpisodes.map(function(x) { return '<option value="'+x.no+'">第 '+x.no+' 话</option>'; }).join('');
         pick.value = String(manualEp);
+        pick.disabled = false;
       }
+      var next = document.getElementById("manualNext");
+      if (next) {
+        var nextNo = Math.max.apply(null, manualEpisodes.map(function(x) { return +x.no || 0; })) + 1;
+        next.textContent = "＋ 增加第 " + nextNo + " 话";
+        next.disabled = !String(e.prose || "").trim();
+        next.title = next.disabled ? "先生成当前话正文，再接着写下一话" : "沿用本项目的人物和场景资源，填写下一话剧情";
+      }
+      document.getElementById("manualEpisodeTitle").textContent = "第 " + manualEp + " 话讲什么？";
+      document.getElementById("manualEpisodeHint").textContent = manualEp > 1
+        ? "接着上一话写本话剧情。沿用第一话的人物和场景资源，点①生成文字，再去剧本页检查。"
+        : "写清这一话发生什么。第一话完成后，点上面的“增加下一话”接着写。";
+      localStorage.setItem(episodeKey, String(manualEp));
+      history.replaceState(null, "", "#settings?ep=" + manualEp);
       document.getElementById("plNotes").value = e.episode_notes || "";
       if (document.getElementById("plShoot")) document.getElementById("plShoot").value = e.shooting_notes || "";
       if (document.getElementById("manualProse")) document.getElementById("manualProse").textContent = e.prose || "还没有正文。";
@@ -956,15 +977,33 @@ window.Pages.settings = (function () {
     };
     var _mkEp = document.getElementById("mkEp");
     if (_mkEp) _mkEp.onchange = function() {
-      manualEp = +this.value || 1;
-      reloadEpisode().catch(function(e) { UI.toast(e.message,"err"); });
+      var chosen = +this.value || 1;
+      this.value = String(manualEp);
+      this.disabled = true;
+      saveManualInput(manualEp).then(function() {
+        manualEp = chosen;
+        return reloadEpisode();
+      }).then(function() { load(main, st); })
+        .catch(function(e) { drawEpisode(); UI.toast(e.message,"err"); });
     };
     var _mkNext = document.getElementById("manualNext");
     if (_mkNext) _mkNext.onclick = function() {
-      saveManualInput(manualEp).then(function() { return plSagaEps(st); }).then(function(eps) {
-        manualEp = Math.max.apply(null, eps.map(function(e) { return +e.no; }).concat([0])) + 1;
-        manualEpisodes = eps.concat([{no:manualEp}]); drawEpisode();
-      }).catch(function(e) { UI.toast(e.message,"err"); });
+      if (_mkNext.disabled) return;
+      _mkNext.disabled = true;
+      _mkNext.textContent = "正在新建…";
+      saveManualInput(manualEp)
+        .then(function() { return window.api.post("/api/saga/" + st.storyId + "/episode-approve", {ep:manualEp}); })
+        .then(function() { return window.api.post("/api/saga/" + st.storyId + "/add-episode", {}); })
+        .then(function(r) {
+          if (!r || !r.no) throw new Error("没有收到新话号，请刷新后查看分话列表");
+          manualEp = +r.no;
+          manualInputKind = "idea";
+          localStorage.setItem("v43_input_kind_" + st.storyId, "idea");
+          return reloadEpisode();
+        }).then(function() {
+          UI.toast("第 " + manualEp + " 话已建好，人物和场景资源沿用第一话");
+          document.getElementById("plIdea").focus();
+        }).catch(function(e) { drawEpisode(); UI.toast(e.message,"err"); });
     };
     function saveManualInput(no) {
       var input = {ep:no, brief:(document.getElementById("plIdea") || {}).value || "",
@@ -1129,22 +1168,24 @@ window.Pages.settings = (function () {
     if (slot) main = { get innerHTML() { return slot.innerHTML; },
                        set innerHTML(v) { slot.innerHTML = v; } };
     var cf = D.char_fields;
+    var requestedCharEp = (location.hash || "").match(/[?&]ep=(\d+)/);
+    var visibleCharEp = parseInt(requestedCharEp ? requestedCharEp[1] : localStorage.getItem("v43_episode_" + st.storyId), 10) || 1;
     /* 长相和身材的选项分男女两套。原来写死用 D.char_fields（女性那套），
        男性角色的"修长青年"在女性列表里找不到，下拉永远显示"自动"。 */
     function fieldsFor(sex) {
       return (D.char_fields_by_sex || {})[sex === "男" ? "男" : "女"] || cf;
     }
     main.innerHTML += '<div class="card" style="margin-top:16px"><h3 style="font-size:16px">② 人物设定</h3>' +
-      '<p class="note-gray" style="margin:0 0 8px">只显示第一话登场的人物。后面话次才出场的新人物，' +
-      '写到那一话时在剧本页添加。</p>' +
+      '<p class="note-gray" style="margin:0 0 8px">显示截至当前话登场的人物。本话的新人物会自动建卡；' +
+      '已有人物和设定图继续沿用，也可以手动调整。</p>' +
       '<div style="text-align:right;margin-bottom:8px">' +
       '<button class="btn" id="fixCharImgs" title="只给还没有设定图的人物出图（偶发失败后补图用）">🎭 补出人设图</button>' +
       '<button class="btn" id="addChar" style="margin-left:8px">＋ 添加人物</button></div>' +
       '<div id="charList">' + D.characters.map(function (c, i) {
-        /* 只显示第一话在场的（first_episode<=1）。龙套/后面话次的角色不占位，
+        /* 只显示截至当前话已登场的人物。后面话次的角色不占位，
            但用 return "" 跳过而不是过滤数组——下面接线按 index 遍历全部，
            过滤会让 index 错位。 */
-        if (+(c.first_episode || 1) > 1) return "";
+        if (+(c.first_episode || 1) > visibleCharEp) return "";
         var av = adopted[c.character_id];
         return '<div class="card character-card" id="blk_char' + i + '" style="display:grid">' +
           '<div>' + (av && av.path
@@ -2070,7 +2111,7 @@ window.Pages.settings = (function () {
       var ids = { text: ["genText", "① 生成文字", 600], images: ["genImages", "② 生成图片", 1500], video: ["genAll", "③ 生成视频", 3600] }[stage];
       var busy = beginGenBusy(Date.now(), ids[0], ids[1], ids[2]);
       var titleOf = { text: "生成文字", images: "生成图片", video: "生成视频" }[stage];
-      saveAllCharacters()
+      (epNo > 1 ? Promise.resolve() : saveAllCharacters())
         .then(saveCurrentProject)
         .then(function () { return window.api.post("/api/saga/" + st.storyId + "/make", { ep: epNo, stage: stage }); })
         .then(function () {

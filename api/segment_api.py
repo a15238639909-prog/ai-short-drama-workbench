@@ -8,11 +8,13 @@
   · 同地点接着上一段 → i2va，上一段的结束帧直接当第 1 帧，接缝无痕
 """
 import json
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import threading
+import uuid
 from pathlib import Path
 
 from api import post
@@ -27,6 +29,8 @@ _KEY = "timeline"
 # 谁后保存谁把别人的成果抹掉。所以：慢活（Qwen/H3）在锁外干，
 # 落盘前在锁里**重读最新状态**、只改自己那一段、立刻写回。
 _SAVE_LOCK = threading.Lock()
+_RENDER_LOCKS = {}
+_RENDER_LOCKS_GUARD = threading.Lock()
 
 
 def _apply(sid, scene_no, seg_no, patch, ep=None):
@@ -44,12 +48,12 @@ def _apply(sid, scene_no, seg_no, patch, ep=None):
         return g
 
 
-def new_pack(sid, g):
+def new_pack(sid, g, ep=None):
     """新链路（<SubjectN> 提示词）的参考图包：人物卡顺序 + 场景卡，
     和提示词里 <Subject 1..N> / <Picture 1..N> 一一对应，顺序不能乱。
     图在独立的 visuals 表里按 owner_id 关联，只认已采用版。"""
     from cores import reference_ready
-    reference_ready.assert_references(sid, [g])
+    reference_ready.assert_references(sid, [g], ep=ep)
     adopted = {}
     for v in (asset_core.list_assets(sid, "visuals") or []):
         if str(v.get("status") or "") != "adopted":
@@ -67,10 +71,10 @@ def new_pack(sid, g):
     _settings = (story_core.get_story(sid) or {}).get("settings") or {}
     _all = asset_core.list_assets(sid, "characters") or []
     _want_chars = [str(x) for x in ((g or {}).get("chars") or [])]      # 这一段只绑出场的人（提示词里也只列了他们）
-    if (g or {}).get("no_chars") or ((g or {}).get("shot") and not _want_chars):
+    if (g or {}).get("no_chars") or ((g or {}).get("shot") and not _want_chars) or ('chars' in (g or {}) and not _want_chars and ((g or {}).get('plan') or {}).get('flow') == 'source-v1'):
         _all = []                                                          # P316：开场的空场段不带任何人物图；P388：节拍段的空镜（在场为空）也不带——带了 Picture 1 就不是场景
     elif _want_chars:
-        _all = [c for c in _all if str(c.get("name") or "") in _want_chars] or _all
+        _all = [c for c in _all if str(c.get("name") or "") in _want_chars]
     _order, _cam = _au.h3_char_order(_all, _settings)
     for c in _order:
         if c.get("name") == _cam:
@@ -80,13 +84,18 @@ def new_pack(sid, g):
             imgs.append(p)
     # 场景图：这一段绑了哪张（g["scene"]）就只带那张；没绑就带全部有图的（老段兼容）
     _want = str((g or {}).get("scene") or "")
-    for sc in (asset_core.list_assets(sid, "scenes") or []):
+    _scene_cards = asset_core.list_assets(sid, "scenes") or []
+    if _want and ep is not None:
+        _resolved = reference_ready.resolve_scene_card(sid, ep, _want, _scene_cards)
+        if _resolved:
+            _want = _resolved["name"]
+    for sc in _scene_cards:
         if _want and str(sc.get("name") or "") != _want:
             continue
         p = adopted.get(str(sc.get("scene_id") or ""))
         if p:
             imgs.append(p)
-    return imgs[:9]
+    return imgs
 
 
 def is_new_prompt(text):
@@ -301,7 +310,81 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
         {"seconds": g.get("seconds"), "over": g.get("over")}, g.get("scene") or "")
 
 
-def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=None):
+def _render_references(sid, g, ep=None):
+    picked = [r for r in (g.get('refs') or []) if r.get('n')]
+    if not picked:
+        return new_pack(sid, g, ep=ep)
+    by_name = _adopted_paths(sid)
+    missing = [r['n'] for r in picked if not by_name.get(r['n']) or not os.path.isfile(by_name[r['n']])]
+    if missing:
+        raise ValueError('所选参考图待补：' + '、'.join(missing))
+    return [by_name[r['n']] for r in picked]
+
+
+def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, override=None):
+    from cores import video_continuity as vc
+    from models import h3_client as h3
+    st, tl = _load(sid, ep)
+    sc, g = _seg_of(tl, int(scene_no or 1), int(seg_no))
+    if not g:
+        raise ValueError('找不到第 %s 段' % seg_no)
+    tier, ratio, steps = _render_params(st, size_tier, override)
+    params = {'size_tier': '1.0' if hd else (tier or h3.SIZE_TIER),
+              'ratio': ratio or h3.DEFAULT_RATIO,
+              'steps': steps or h3.DEFAULT_STEPS or h3.TEMPLATE_STEPS}
+    previous = vc.previous_segment(st, tl, ep, scene_no, seg_no)
+    if str(os.environ.get('V41_RELAY') or '').lower() == 'none':
+        previous = None
+    refs = _render_references(sid, g, ep=ep) if is_new_prompt(g.get('prompt')) else director_pack(sid, g)[2]
+    signature = vc.segment_signature(g, params, previous, refs)
+    return st, tl, sc, g, params, previous, refs, signature
+
+
+def can_resume_segment(sid, ep, seg_no, scene_no=1, size_tier=None):
+    from models import h3_client
+    try:
+        if is_segment_current(sid, ep, scene_no, seg_no, size_tier=size_tier):
+            return True
+        _, tl = _load(sid, ep)
+        _, g = _seg_of(tl, int(scene_no), int(seg_no))
+        request = (g or {}).get('render_request') or {}
+        receipt = h3_client.recovery_receipt(request.get('key'))
+        return bool(request.get('key') and request.get('status') == 'pending'
+                    and receipt.get('status') != 'cancelled')
+    except (ValueError, TypeError, OSError):
+        return False
+
+
+def is_segment_current(sid, ep, scene_no, seg_no, size_tier=None):
+    from cores import video_continuity as vc
+    try:
+        st, tl, sc, g, params, previous, refs, signature = _render_context(sid, ep, scene_no, seg_no, size_tier)
+        if g.get('stale_video') or not vc.media_stamp(g.get('video')):
+            return False
+        if g.get('render_input_signature') and g['render_input_signature'] != signature:
+            return False
+        saved = g.get('render_media') or {}
+        if saved.get('check') == 'decoded' and all(saved.get(k) == v for k, v in vc.media_stamp(g['video']).items()):
+            return True
+        vc.validate_video(g['video'], g.get('seconds'))
+        return True
+    except (ValueError, TypeError, OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=None, override=None):
+    # Double clicks must not overwrite one another's durable request receipt.
+    with _RENDER_LOCKS_GUARD:
+        lock = _RENDER_LOCKS.setdefault(str(sid), threading.Lock())
+    if not lock.acquire(blocking=False):
+        raise RuntimeError('本项目正在生成视频，当前进度已保留，请等该任务结束')
+    try:
+        return _render_segment(sid, ep, scene_no, seg_no, size_tier, hd, log_fn, override)
+    finally:
+        lock.release()
+
+
+def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=None, override=None):
     """出这一段的视频并写回段。返回写回的 patch（含 video 路径）。出不了就抛错。
 
     参考图按提示词格式分流：<SubjectN> 是新链路 → new_pack；
@@ -317,73 +400,161 @@ def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=N
         raise RuntimeError("第 %s 段还没有提示词" % seg_no)
     if is_new_prompt(prompt):
         from cores import reference_ready
-        reference_ready.assert_references(sid, [g])
+        reference_ready.assert_references(sid, [g], ep=ep)
     # 严重问题不能只标红后继续烧视频额度。新提示词会把确定性问题写进
     # critical_problems；旧时间轴也在这里按现有字段补算一次。
     critical = _render_critical_problems(st, tl, g, prompt, ep, seg_no)
     if critical:
-        # P365：门只记录不拦（用户 9-14 定）——记进段的 problems，照常出片，分镜页能看到
-        if log_fn:
-            log_fn("第 %s 段提示词有严重问题（照常出片）：%s" % (seg_no, "；".join(str(x) for x in critical[:3])))
-        try:
-            _apply(sid, int(scene_no or 1), int(seg_no), {"critical_problems": list(critical)}, ep=ep)
-        except Exception:
-            pass
-    if is_new_prompt(prompt):
+        _apply(sid, int(scene_no or 1), int(seg_no), {"critical_problems": list(critical)}, ep=ep)
+        raise ValueError("第 %s 段提示词待修复：%s" % (seg_no, "；".join(str(x) for x in critical[:3])))
+    from cores import video_continuity as vc
+    st, tl, sc, g, params, previous, base_refs, signature = _render_context(
+        sid, ep, scene_no, seg_no, size_tier, hd, override)
+    seed = (override or {}).get('seed')
+    if seed is None and (hd or (override or {}).get('same_seed')):
+        seed = g.get('seed')
+    request = dict(g.get('render_request') or {})
+    receipt_status = h3.recovery_receipt(request.get('key')).get('status')
+
+    def same_pending_request():
+        return (request.get('status') == 'pending' and request.get('input_signature') == signature
+                and request.get('requested_seed') == seed
+                and receipt_status not in ('cancelled', 'invalid_media'))
+
+    snapshot_fields = ('final_prompt', 'final_refs', 'resolved_params')
+    frozen = same_pending_request() and all(k in request for k in snapshot_fields)
+    if same_pending_request() and any(k in request for k in snapshot_fields) and not frozen:
+        raise ValueError('待恢复的视频请求快照不完整，已保留原任务，不能更换输入后重复提交')
+    appearance_frame = ''
+    handoff_version = 'none'
+    if frozen:
+        h3p = request['final_prompt']
+        imgs = list(request['final_refs'])
+    elif is_new_prompt(prompt):
         # 【用户挑过就听用户的】分镜页每段能单独挑/换参考图，存在 g["refs"]。
         # 原来这里只走 new_pack，把用户挑的整个丢掉——单段重渲认、批量出片不认，
         # 「自定义作品」传了自己的图也白传（2026-09-05 查出）。和 gen_segment 同一套规则。
-        _picked = [r for r in (g.get("refs") or []) if r.get("n")]
-        if _picked:
-            _byname = _adopted_paths(sid)
-            imgs = [_byname[r["n"]] for r in _picked if _byname.get(r["n"])]
-            if log_fn and len(imgs) < len(_picked):
-                log_fn("第 %s 段：挑了 %d 张参考图，有 %d 张还没采用，跳过"
-                       % (seg_no, len(_picked), len(_picked) - len(imgs)))
-        else:
-            imgs = new_pack(sid, g)
-        if not imgs:                                   # 挑的全没采用 → 退回自动配包，别让这段出不了片
-            imgs = new_pack(sid, g)
+        imgs = base_refs
         h3p = prompt
         # 【姿势参考】上一段的最后一帧当第 N 张参考图，只参考姿势/位置/构图
         # （用户 2026-09-02 提法，实验 V13a：接口几乎无缝，脸没换）。
-        prev = next((x for x in (sc.get("segments") or [])
-                     if int(x.get("no") or 0) == int(seg_no) - 1), None)
+        prev = previous['segment'] if previous else None
         pef = str((prev or {}).get("end_frame") or "")
-        _sc_now = str(g.get("scene") or "")
-        _sc_prev = str((prev or {}).get("scene") or "")
-        _changed = bool(_sc_now and _sc_prev and _sc_now != _sc_prev) or bool((g.get("seam") or {}).get("scene_changed"))
-        _soft = str(os.environ.get("V41_RELAY") or "soft").strip().lower() == "soft"
-        _ssc = bool((g.get("seam") or {}).get("same_scene_cut"))
-        if pef and os.path.exists(pef) and len(imgs) < 9 and not (_soft and _changed):
-            # P332：同场景才带上一段末帧（软句：只参考姿势位置构图）；换场景不带——出场拍/入场拍在提示词里
-            # P392②：同场景的硬切（换机位/换人）也带，但只对齐空间、家具位置和光（space 口径），机位按本段【机位】
+        if previous and (not pef or not os.path.isfile(pef)):
+            pef = str(Path(prev['video']).with_suffix('')) + '_handoff_' + uuid.uuid4().hex[:8] + '.png'
+            extracted = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-sseof', '-0.1',
+                                        '-i', prev['video'], '-frames:v', '1', pef], capture_output=True, timeout=120)
+            if extracted.returncode or not os.path.isfile(pef):
+                raise ValueError('上一段尾帧提取失败，已保留视频，稍后自动重试')
+            _apply(sid, previous['scene_no'], previous['segment_no'], {'end_frame': pef}, ep=previous['episode'])
+            prev['end_frame'] = pef
+            signature = vc.segment_signature(g, params, previous, base_refs)
+        if pef and os.path.exists(pef) and len(imgs) >= 9:
+            raise ValueError('本段已占满9张参考图，无法加入上一段尾帧；请减少本段引用后继续')
+        if pef and os.path.exists(pef):
             imgs = imgs + [pef]
-            h3p = _with_pose_ref(h3p, len(imgs), scene_changed=_changed,
-                                 prev_tail=str((prev or {}).get("tail") or ""), mode=("space" if _ssc else None))
+            frame_number = len(imgs)
+            appearance_number = None
+            slices = ((tl.get('slicing') or {}).get('slices') or [])
+            d = (slices[int(seg_no)-1].get('director') or {}) if len(slices) >= int(seg_no) else {}
+            d = d or g.get('director_contract') or {}
+            transition = d.get('scene_transition') or {}
+            departure = str(transition.get('from') or '').strip() if isinstance(transition, dict) else ''
+            arrival = str(transition.get('to') or '').strip() if isinstance(transition, dict) else ''
+            # A resumed legacy submission must retain its original image slots.
+            # Only a written departure-to-arrival transition needs old setting
+            # appearance; later shots must not reintroduce the departure room.
+            if (not same_pending_request() and (g.get('plan') or {}).get('flow') == 'source-v1'
+                    and departure and arrival and departure != arrival):
+                if len(imgs) >= 9:
+                    raise ValueError('本段参考图已占满9张，无法加入上一段外观参考帧；请减少本段引用后继续')
+                appearance_frame = vc.prepare_handoff(previous)
+                if not appearance_frame or not os.path.isfile(appearance_frame):
+                    raise ValueError('上一段外观参考帧未准备好，已保留视频，稍后继续')
+                imgs = imgs + [appearance_frame]
+                appearance_number = len(imgs)
+            handoff_version = 'h3-handoff-v3' if appearance_number else 'h3-handoff-v2'
+            h3p = vc.handoff_prompt(h3p, frame_number, g, previous, d,
+                                    appearance_number=appearance_number)
     else:
         _ok, _names_, imgs, h3p = director_pack(sid, g)
-    imgs = [x for x in imgs if x and os.path.exists(x)][:9]
+    secs = float(g.get("seconds") or 12)
+    if not frozen:
+        resuming_legacy = same_pending_request()
+        if not resuming_legacy:
+            request = {'key': '%s:e%s:s%s:%s' % (sid, ep, seg_no, uuid.uuid4().hex),
+                       'input_signature': signature, 'requested_seed': seed, 'status': 'pending'}
+            slices = ((tl.get('slicing') or {}).get('slices') or [])
+            d = (slices[int(seg_no)-1].get('director') or {}) if len(slices) >= int(seg_no) else {}
+            d = d or g.get('director_contract') or {}
+            h3p = vc.scope_prompt(h3p, g, d)
+        request.update({
+            'final_prompt': h3p, 'final_refs': list(imgs),
+            'resolved_params': {'mode': 'ref2va', 'seconds': min(15, max(4, int(round(secs)))),
+                                'ratio': params['ratio'], 'size_tier': params['size_tier'],
+                                'steps': params['steps'], 'seed': seed},
+            'reference_scope_version': (vc.REFERENCE_SCOPE_VERSION
+                                        if not resuming_legacy and 'Reference scope (' + vc.REFERENCE_SCOPE_VERSION + '):' in h3p
+                                        else 'legacy'),
+            'snapshot_origin': 'legacy_reconstructed' if resuming_legacy else 'before_submission',
+            'handoff_version': handoff_version,
+            'appearance_frame': appearance_frame,
+        })
+    resolved = request['resolved_params']
+    if not isinstance(resolved, dict) or any(k not in resolved for k in ('mode', 'seconds', 'ratio', 'size_tier', 'steps', 'seed')):
+        raise ValueError('待恢复的视频参数快照不完整，已保留原任务，不能更换参数后重复提交')
+    request.setdefault('reference_scope_version', 'legacy')
+    request.setdefault('snapshot_origin', 'legacy_reconstructed')
+    request['final_prompt_sha256'] = hashlib.sha256(h3p.encode('utf-8')).hexdigest()
+    if any(not x or not os.path.isfile(x) for x in imgs):
+        raise ValueError('参考图在生成前发生变化，已暂停，不能移动图片编号后继续生成')
+    if len(imgs) > 9:
+        raise ValueError('参考图超过9张，请调整本段引用，不能截断图片编号')
     if not imgs:
         raise RuntimeError("第 %s 段没有参考图——先去 🗂 资源 生成并采用人物和场景的设定图" % seg_no)
-    secs = float(g.get("seconds") or 12)
+    vc.validate_prompt_references(h3p, imgs)
     if log_fn:
         log_fn("第 %s 段：%d 张参考图，%.0f 秒" % (seg_no, len(imgs), secs))
-    # 分辨率档 / 画幅比 / 步数：设定页可改，见 _render_params（P242）。
-    # 【原注释是错的】不设步数时用的是工作流模板里的 **25**，不是 10——
-    # 三份模板的 BasicScheduler 实测都是 25，数值唯一出处是 models/video_workflows/*.json。
-    _tier, _ratio, _steps = _render_params(st, size_tier)
-    r = h3.generate("ref2va", h3p, images=imgs,
-                    seconds=min(15, max(4, int(round(secs)))),
-                    ratio=_ratio, size_tier=("1.0" if hd else _tier), steps=_steps)
+    # Persist the actual request before H3 can accept it. Pending work must keep
+    # this input even when an internal prompt policy changes during a restart.
+    _apply(sid, int(scene_no or 1), int(seg_no), {'render_request': request}, ep=ep)
+    r = h3.generate(resolved['mode'], h3p, images=imgs,
+                    seconds=resolved['seconds'], ratio=resolved['ratio'],
+                    size_tier=resolved['size_tier'], steps=resolved['steps'], seed=resolved['seed'],
+                    recovery_key=request['key'])
     src = r.get("output_path") or r.get("path")
+    try:
+        media = vc.validate_video(src, secs)
+        if r.get('expect_audio') and not media.get('audio'):
+            raise ValueError('生成结果缺少工作流应有的音轨，原视频保留')
+    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        receipt = h3.recovery_receipt(request['key'])
+        receipt['status'] = 'invalid_media'
+        h3._save_receipt(request['key'], receipt)
+        raise ValueError('视频校验失败：' + str(exc)) from exc
+    if _render_context(sid, ep, scene_no, seg_no, size_tier, hd, override)[-1] != signature:
+        raise RuntimeError('输入已改变：本次视频文件已保留，不覆盖当前分镜，请按新内容继续生成')
     from cores import saga_core as _sgc
     out = _sgc.seg_video_path(sid, ep, scene_no, seg_no, hd=hd)   # P237 文件名带话号
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    if os.path.exists(out):
+        out = str(Path(out).with_suffix('')) + '__' + uuid.uuid4().hex[:8] + '.mp4'
     shutil.copy2(src, out)
     patch = {"mode": "ref2va", "seed": r.get("seed"),
              "used_refs": [os.path.basename(x) for x in imgs],
-             "h3_prompt_sent": h3p[:12000]}                                # P322⑤：实际发给 H3 的那份（含末帧接力句），验收查这个
+             "h3_prompt_sent": h3p,
+             "h3_prompt_sha256": request['final_prompt_sha256'],
+             "reference_scope_version": request['reference_scope_version'],
+             # Old pending jobs lack original submission evidence; their rebuilt
+             # prompt must not be presented as an exact pre-submission snapshot.
+             "h3_prompt_snapshot_origin": request['snapshot_origin']}
+    media.update(vc.media_stamp(out))
+    request = dict(request, status='completed')
+    patch['render_request'] = request
+    history = list(g.get('render_history') or [])
+    if g.get('video'):
+        history.append({k: g.get(k) for k in ('video', 'video_hd', 'end_frame', 'seed', 'render_input_signature', 'render_media')})
+    patch['render_history'] = history
     # 这一段是用什么参数出的，记下来——不记就没法判断一话里混没混档（P242）
     for _k, _v in (("size_tier_hd" if hd else "size_tier", r.get("size_tier")),
                    ("ratio", r.get("ratio")), ("steps", r.get("steps"))):
@@ -393,17 +564,22 @@ def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=N
         patch["video_hd"] = out
         patch["size_hd"] = "%sx%s" % (r.get("width"), r.get("height"))
     else:
+        patch['render_input_signature'] = signature
+        patch['render_media'] = media
+        patch['continuity_source'] = ({k: previous[k] for k in ('episode', 'scene_no', 'segment_no')} if previous else {})
         patch["video"] = out
         patch["size"] = "%sx%s" % (r.get("width"), r.get("height"))
         patch["video_hd"] = ""
+        patch["end_frame"] = ""
         ef = out[:-4] + "_end.png"
         try:
-            subprocess.run(["ffmpeg", "-y", "-sseof", "-0.1", "-i", out,
-                            "-frames:v", "1", ef], capture_output=True, timeout=120)
-            if os.path.exists(ef):
+            extracted = subprocess.run(["ffmpeg", "-sseof", "-0.1", "-i", out,
+                                       "-frames:v", "1", ef], capture_output=True, timeout=120)
+            if not extracted.returncode and os.path.exists(ef):
                 patch["end_frame"] = ef
-        except Exception:
-            pass
+        except Exception as exc:
+            if log_fn:
+                log_fn('尾帧暂未提取，下一段将从已保存视频补取：' + str(exc)[:100])
     _apply(sid, int(scene_no or 1), int(seg_no), patch, ep=ep)
     return patch
 
@@ -1537,7 +1713,7 @@ def gen_segment(h, path, d):
         return _RESP({"ok": False, "error": "找不到这一段"}, 400)
     # 页面上的提示词框是可编辑的：用户改完直接点生成，就按改完的这份生成
     if str(d.get("prompt") or "").strip():
-        g = _apply(sid, no, sno, {"prompt": str(d["prompt"]).strip()})
+        g = _apply(sid, no, sno, {"prompt": str(d["prompt"]).strip(), "critical_problems": []})
     if not g.get("prompt"):
         try:
             g = _apply(sid, no, sno, {"prompt": _compile_prompt(sid, sc, g)})
@@ -1555,6 +1731,15 @@ def gen_segment(h, path, d):
         return _RESP({"ok": False,
                       "error": "第 %s 段提示词未通过出片检查：%s" %
                                (sno, "；".join(str(x) for x in critical[:4]))}, 400)
+
+    if is_new_prompt(g.get("prompt")):
+        try:
+            render_segment(sid, _ep_of(sid), no, sno, hd=bool(d.get("hd")), override=d)
+            _, current_timeline = _load(sid)
+            _, rendered = _seg_of(current_timeline, no, sno)
+            return _RESP({"ok": True, "data": {"segment": rendered}})
+        except Exception as error:
+            return _RESP({"ok": False, "error": str(error)[:500]}, 500)
 
     # 【导演段】和界面预览共用 director_pack——预览给用户看的和实际发给 H3 的
     # 必须是同一份（2026-08-28 用户要求先审提示词再出片）。

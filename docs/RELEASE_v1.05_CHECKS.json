@@ -1,0 +1,32 @@
+{
+  "required_publication_checks_passed": true,
+  "overall_test_suite_successful": false,
+  "generation_run_during_packaging": false,
+  "checks": {
+    "passed": true,
+    "continuation_tests_passed": 176,
+    "motion_anima_tests_passed": 14,
+    "downloader_tests_passed": 15,
+    "python_files": 168,
+    "json_files": 24,
+    "bundled_http_tests_skipped": 8,
+    "historical_age_suite": {
+      "tests_run": 24,
+      "passed": 9,
+      "failed_test_cases": 15,
+      "failure_records": 21,
+      "error_records": 8,
+      "baseline_same_failures": true,
+      "baseline_same_errors": true,
+      "age_policy_source_unchanged": true
+    }
+  },
+  "real_generation_prior_to_packaging": {
+    "episodes": 3,
+    "segments": 10,
+    "sampled_frames_at_2fps": 208,
+    "decoded_films": 3,
+    "related_regression_tests": 176,
+    "audio_heard": false
+  }
+}

@@ -278,7 +278,8 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
                    "seconds": max(4, min(15, int(round(float(seconds))))),
                    "seed": used_seed,
                    "size_tier": (size_tier if size_tier is not None else SIZE_TIER),
-                   "ratio": ratio, "steps": steps}
+                   "ratio": ratio, "steps": steps,
+                   "expect_audio": bool(combine and isinstance(combine.get("inputs", {}).get("audio"), (list, tuple)))}
 
 _START_LOCK = threading.Lock()
 
@@ -329,29 +330,130 @@ def start_h3(timeout=240):
             raise RuntimeError("H3 ComfyUI %d 秒内未就绪，看 %s" % (timeout, H3_ROOT / "v41_h3.log"))
 
 
+def _receipt_path(key):
+    import hashlib
+    from cores import store
+    return store.DATA / 'generation_requests' / 'h3' / (hashlib.sha256(str(key).encode('utf-8')).hexdigest() + '.json')
+
+
+def recovery_receipt(key):
+    from cores import store
+    return store.load_json(_receipt_path(key), {}) if key else {}
+
+
+def _save_receipt(key, receipt):
+    if key:
+        from cores import store
+        receipt['updated_at'] = time.time()
+        store.save_json(_receipt_path(key), receipt)
+
+
+def _has_audio_stream(path):
+    """A VHS filename is a hint; verify the completed mux really has audio."""
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type',
+             '-of', 'json', str(path)], capture_output=True, text=True, timeout=20,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return result.returncode == 0 and any(
+            item.get('codec_type') == 'audio' for item in json.loads(result.stdout).get('streams', []))
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        return False
+
+
 def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeout=3600,
-             size_tier=None, steps=None, reference_videos=None, exact_frames=None):
+             size_tier=None, steps=None, reference_videos=None, exact_frames=None, recovery_key=None):
     """提交一次 H3 生成，轮询并复制 mp4 到 outputs/video。"""
     from cores.age_policy import assert_model_request
 
     if os.environ.get("V41_NO_MODEL"):
         raise RuntimeError("V41_NO_MODEL=1：零模型测试不许调模型（视频生成）")
+    CANCEL["flag"] = False
+    recovery_key = recovery_key or ('standalone:' + uuid.uuid4().hex)
+    receipt = recovery_receipt(recovery_key)
+    if receipt.get('status') == 'completed' and Path(str((receipt.get('result') or {}).get('output_path') or '')).is_file():
+        return receipt['result']
+    if receipt.get('status') == 'cancelled':
+        raise RuntimeError('已取消：已保存的视频任务不会自动重新提交')
     if not up():
         start_h3()
     from . import gpu_manager as _gm
     _gm.acquire("h3", note="generate")                 # P273 用模型也要过占卡闸
-    graph, meta = build_workflow(mode, prompt, images, seconds, ratio, seed,
-                                 size_tier=size_tier, steps=steps, reference_videos=reference_videos, exact_frames=exact_frames)
-    # P267：计时从提交算起（含排队/加载模型），步数读图里的实际值——steps=None 时是模板的 25，
-    # 记「None」下次 rate_for 就对不上档
-    _t0 = time.time()
-    _steps_used = _graph_steps(graph)
-    result = _http("POST", "/prompt", {"prompt": graph}, timeout=60)
-    pid = result.get("prompt_id")
-    if not pid:
-        raise RuntimeError("H3 未返回 prompt_id")
+    pid = receipt.get('prompt_id')
+    resume = bool(pid and receipt.get('status') in ('submitting', 'submitted'))
+    if resume:
+        # Queue first, then history: a job finishing between these queries is
+        # still found. Never infer non-submission from a lost POST response.
+        try:
+            queue = _http('GET', '/queue', timeout=30)
+            hist = _http('GET', '/history/' + pid, timeout=30)
+        except Exception as exc:
+            raise RuntimeError('H3任务状态暂时无法确认，已保存任务编号，恢复时查询原任务') from exc
+        queued = any(len(row) > 1 and str(row[1]) == pid
+                     for row in queue.get('queue_running', []) + queue.get('queue_pending', []))
+        if not queued and pid not in hist:
+            prefix = str(receipt.get('filename_prefix') or '')
+            # VHS retains the raw video next to the final '-audio' mux. Plain
+            # lexicographic sorting puts '.mp4' last and would recover silence.
+            # All three shipped templates contain audio; old receipts therefore
+            # default to requiring it as well.
+            meta = dict(receipt.get('meta') or {})
+            meta.setdefault('expect_audio', True)
+            candidates = sorted(H3_OUTPUT.glob(prefix + '*.mp4'),
+                                key=lambda path: (path.name.endswith('-audio.mp4'), path.name),
+                                reverse=True) if prefix else []
+            recovered = [path for path in candidates
+                         if not meta['expect_audio'] or _has_audio_stream(path)]
+            if recovered:
+                src = recovered[0]
+                OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+                dst = OUTPUT_ROOT / src.name
+                shutil.copy2(src, dst)
+                result = {'output_file': src.name, 'output_path': str(dst), **meta,
+                          'steps': receipt.get('steps') or meta.get('steps')}
+                receipt.update(status='completed', result=result)
+                _save_receipt(recovery_key, receipt)
+                return result
+            if receipt.get('status') == 'submitting':
+                raise RuntimeError('H3提交结果待核对，已保存任务编号；继续查询原任务，不重复生成')
+            # The service had acknowledged this exact id. If both the active
+            # queue and history lost it (e.g. service restart), no job remains.
+            resume = False
+    if resume:
+        meta = receipt['meta']
+        _t0 = float(receipt.get('started_at') or time.time())
+        _steps_used = receipt.get('steps') or TEMPLATE_STEPS
+    else:
+        pid = str(uuid.uuid4())
+        prefix = 'MiniMaxH3/v41_recovery_' + pid
+        graph, meta = build_workflow(mode, prompt, images, seconds, ratio, seed,
+                                     filename_prefix=prefix, size_tier=size_tier, steps=steps,
+                                     reference_videos=reference_videos, exact_frames=exact_frames)
+        _t0, _steps_used = time.time(), _graph_steps(graph)
+        receipt = {'status': 'submitting', 'prompt_id': pid, 'meta': meta,
+                   'started_at': _t0, 'steps': _steps_used, 'filename_prefix': prefix}
+        # Persist the client UUID before sending; ComfyUI accepts prompt_id.
+        _save_receipt(recovery_key, receipt)
+        if CANCEL["flag"]:
+            receipt['status'] = 'cancelled'
+            _save_receipt(recovery_key, receipt)
+            raise RuntimeError('已取消')
+        try:
+            result = _http("POST", "/prompt", {"prompt": graph, "prompt_id": pid}, timeout=60)
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                receipt.update(status='rejected', error=str(exc))
+                _save_receipt(recovery_key, receipt)
+                raise
+            raise RuntimeError('H3提交结果待核对，已保存任务编号；继续查询原任务，不重复生成') from exc
+        except Exception as exc:
+            raise RuntimeError('H3提交结果待核对，已保存任务编号；继续查询原任务，不重复生成') from exc
+        if not result.get('prompt_id'):
+            raise RuntimeError('H3提交结果待核对，未返回任务编号')
+        pid = str(result['prompt_id'])
+        receipt.update(status='submitted', prompt_id=pid)
+        _save_receipt(recovery_key, receipt)
     deadline = time.time() + timeout
-    CANCEL["flag"] = False
     while time.time() < deadline:
         if CANCEL["flag"]:
             # 用户点了取消：让 ComfyUI 打断当前队列，不等这段生完
@@ -360,12 +462,19 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
             except Exception:
                 pass
             CANCEL["flag"] = False
+            receipt['status'] = 'cancelled'
+            _save_receipt(recovery_key, receipt)
             raise RuntimeError("已取消")
-        hist = _http("GET", "/history/" + pid, timeout=60)
+        try:
+            hist = _http("GET", "/history/" + pid, timeout=60)
+        except Exception as exc:
+            raise RuntimeError('H3任务查询暂时失败，已保存任务编号，恢复时继续查询') from exc
         item = hist.get(pid)
         if item:
             st = item.get("status", {})
             if st.get("status_str") == "error":
+                receipt.update(status='failed', error=str(st.get('messages'))[-500:])
+                _save_receipt(recovery_key, receipt)
                 raise RuntimeError("H3 工作流失败：" + str(st.get("messages"))[-500:])
             outs = item.get("outputs", {})
             for node_out in outs.values():
@@ -378,10 +487,14 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
                         dst = OUTPUT_ROOT / fn
                         shutil.copy2(str(src), str(dst))
                         _record_timing(meta, _steps_used, time.time() - _t0)    # P267 真拿到片子才记
-                        return {"output_file": fn, "output_path": str(dst),
+                        result = {**meta, "output_file": fn, "output_path": str(dst),
                                 "mode": meta["mode"], "frames": meta["frames"],
                                 "seed": meta.get("seed"),
                                 "size_tier": meta.get("size_tier"),
-                                "width": meta.get("width"), "height": meta.get("height")}
+                                "width": meta.get("width"), "height": meta.get("height"),
+                                "expect_audio": meta.get("expect_audio", True), "steps": _steps_used}
+                        receipt.update(status='completed', result=result)
+                        _save_receipt(recovery_key, receipt)
+                        return result
         time.sleep(4)
-    raise RuntimeError("H3 生成超时")
+    raise RuntimeError("H3 生成超时，已保存任务编号，恢复时继续查询原任务")

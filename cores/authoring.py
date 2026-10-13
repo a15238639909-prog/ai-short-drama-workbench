@@ -3937,8 +3937,8 @@ def ensure_scenes(sid, ep=1):
         out = []
         for p in _places:
             card = next((c for c in have if str(c.get("name") or "").strip() == p), None)
-            if card is None:      # 卡名是地点的一部分（卡「酒馆」，地点「镇上酒馆」）也算同一个景
-                card = next((c for c in have if str(c.get("name") or "").strip() and str(c.get("name")).strip() in p), None)
+            if card is None:
+                card = _place_match(p, have)
             if card is None:
                 card = asset_core.create_scene(sid, {"name": p, "space": "", "contract_text": ""})
                 if card:
@@ -3953,22 +3953,8 @@ def ensure_scenes(sid, ep=1):
         for c in have:
             if c.get("user_made") and int(c.get("episode") or 0) == int(ep or 1) and c.get("scene_id") not in [x.get("scene_id") for x in out]:
                 out.append(c)
-        # 自动抠出来的碎片卡（没设计稿、没图、用户没改、不在任何一话的地点里）删掉——118 第 2 话曾抠出「酒馆左侧角落」「酒馆中央过道及人群」
-        try:
-            _all_places = plan_places(sid)
-            adopted = {v.get("owner_id") for v in (asset_core.list_assets(sid, "visuals") or []) if v.get("status") == "adopted"}
-            from . import story_core as _sc0
-            st0 = _sc0.get_story(sid) or {}
-            for c in asset_core.list_assets(sid, "scenes") or []:
-                nm = str(c.get("name") or "").strip()
-                if (not str(c.get("design") or "").strip() and c.get("scene_id") not in adopted and not c.get("edited_by_user")
-                        and nm and not any(nm == p or nm in p for p in _all_places)):
-                    asset_core.delete_asset(sid, "scenes", c["scene_id"])
-                    if c["scene_id"] in (st0.get("scene_ids") or []):
-                        st0["scene_ids"].remove(c["scene_id"]); _sc0.save_story(st0)
-                    _dbg("删掉不在结构地点里的碎片场景卡", {"名": nm})
-        except Exception as ex:
-            _dbg("清碎片场景卡失败", {"错": str(ex)[:80]})
+        # 本话没用到的卡仍属于整个项目。自动制作不能删除历史设定，
+        # 也不能以当前规划名单为依据清理旧卡或已采用图片。
         return out
     have = asset_core.list_assets(sid, "scenes") or []
     if have and int(ep or 1) > 1:
@@ -4012,28 +3998,10 @@ def ensure_scenes(sid, ep=1):
     return asset_core.list_assets(sid, "scenes") or []
 
 
-def _place_match(name, have):
-    """新地点名对现有卡：同名 / 互相包含 / 同类（岸/水/山林…）且有一张同类卡就算同一个景。返回卡或 None。"""
-    from . import oral_story as _os_
-    nm = str(name or "").strip()
-    if not nm:
-        return None
-    for c in have:
-        cn = str(c.get("name") or "").strip()
-        if cn and (cn == nm or cn in nm or nm in cn):
-            return c
-    _core = re.sub(r"[旁边上里内外中前后处口]$", "", re.sub(r"[·\-—（(].*$", "", nm))
-    _grams = {_core[i:i + 2] for i in range(len(_core) - 1)} if len(_core) >= 2 else set()
-    for c in have:                                                          # 「礁石旁」↔「礁石浅滩」：共一个两字词
-        cn = re.sub(r"[·\-—（(].*$", "", str(c.get("name") or "").strip())
-        if any(g in cn for g in _grams):
-            return c
-    cls = _os_.place_class(nm)
-    if cls:
-        same = [c for c in have if _os_.place_class(str(c.get("name") or "")) == cls]
-        if same:
-            return same[0]
-    return None
+def _place_match(name, have, context=""):
+    """只有明确同一地点才复用；同类型/共享两字不构成同一地点。"""
+    from .continuation_assets import match_scene
+    return match_scene(name, have, context=context)
 
 
 def new_places_for_episode(sid, ep):
@@ -4049,11 +4017,19 @@ def new_places_for_episode(sid, ep):
         _raw = [(k, n, f) for k, n, f in _extract_cards_raw(prose) if k == "场景"]
         got = [{"name": n, "space": f.get("空间", ""), "light": f.get("光线", ""), "ground": f.get("地面墙面", ""),
                 "furniture": f.get("陈设", ""), "landmarks": f.get("标志物", "")} for _k, n, f in _raw]
+    from .continuation_assets import arrived_locations
+    for arrival in arrived_locations(prose):
+        item = next((x for x in got if x.get("name") == arrival["name"]), None)
+        if item is None:
+            item = {"name": arrival["name"], "space": arrival["evidence"]}
+            got.append(item)
+        item["explicit_destination"] = True
+        item["source_evidence"] = arrival["evidence"]
     have = asset_core.list_assets(sid, "scenes") or []
     made = []
     for sc in got:
         nm = str(sc.get("name") or "").strip()
-        if not nm or nm == "主场景" or _place_match(nm, have):
+        if not nm or nm == "主场景" or _place_match(nm, have, context=str((e or {}).get("brief") or "")):
             continue
         try:
             card = asset_core.create_scene(sid, {"name": nm, "space": sc.get("space", ""), "light": sc.get("light", ""), "ground": sc.get("ground", ""),
@@ -4061,6 +4037,8 @@ def new_places_for_episode(sid, ep):
             if card:
                 card["episode"] = int(ep)
                 card["auto_made"] = True
+                if sc.get("explicit_destination"):
+                    card.update(explicit_destination=True, source_evidence=sc["source_evidence"], first_episode=int(ep))
                 asset_core.save_asset(sid, "scenes", card)
                 made.append(nm)
                 have = asset_core.list_assets(sid, "scenes") or []
@@ -10497,12 +10475,22 @@ def _create_cards(sid, chars_data):
     for c in chars_data or []:
         if isinstance(c, dict) and _nm_fix.get(str(c.get("name") or "")):
             c["name"] = _nm_fix[str(c.get("name") or "")]                  # P418：「林小」改回口述的「小林」
-    from .character_facts import lock_ages, check_design_scale
-    chars_data = lock_ages(chars_data or [], _brief)
-    check_design_scale(chars_data, _st0.get("settings") or {})
+    from .character_facts import explicit_ages, check_design_scale
     _sx_map = _os_.sex_from_brief(_brief, [str(c.get("name") or "") for c in (chars_data or []) if isinstance(c, dict)])
     for c in chars_data or []:
         c = sanitize_card_fields(dict(c))
+        _first_ep = int(c.get("first_episode") or 1)
+        _first_row = next((e for e in ((_st0.get("saga") or {}).get("episodes") or [])
+                           if isinstance(e, dict) and int(e.get("no") or 1) == _first_ep), {})
+        _local_source = str(_first_row.get("brief") or "")
+        _initial_source = str((_st0.get("settings") or {}).get("initial_story_input")
+                              or (_st0.get("settings") or {}).get("one_line") or "")
+        for _source in (_local_source, _initial_source):
+            _ages = explicit_ages(_source, [c.get("name") or ""])
+            if c.get("name") in _ages:
+                c["age"] = _ages[c["name"]]
+                break
+        check_design_scale([c], _st0.get("settings") or {})
         # 人物卡在“生成文字”结束时就显示最终头身比例，后续出图不再暗中补选。
         try:
             from . import style_presets as _ratio_sp
@@ -10513,41 +10501,26 @@ def _create_cards(sid, chars_data):
             c["sex"] = _sx_map[str(c.get("name") or "")]
         if not str(c.get("sex") or "").strip():
             c["sex"] = card_sex(c)                                          # P316：空性别先按身份词推，不默认女
-        # P421：故事里衣服已撕破/湿透，设计师仍给了完好的日常装 → 让模型按此刻状态改写这一张的服装
-        try:
-            _prose0 = " ".join(str(e.get("prose") or "")[:3000] for e in ((_st0.get("saga") or {}).get("episodes") or []) if isinstance(e, dict))
-            _state_src0 = _brief + " " + str((_st0.get("settings") or {}).get("episode_notes") or "") + " " + _prose0
-            _cl0 = str(c.get("clothing") or "")
-            if (re.search(r"衣[物服裳].{0,8}(撕|破|烂|湿|少|剩|刮走|扯)|不蔽体|衣衫不整|衣不蔽体|只剩一半|破布", _state_src0)
-                    and _cl0 and not re.search(r"撕|破|残|裂|剩|湿|烂|断", _cl0)):
-                _new_cl = str(_q("你是服装设计师。故事里这个人的衣服已经被海浪/意外撕破、湿透、只剩一半。把下面这段完好的服装描述改写成此刻的状态：哪件撕到哪里、露出什么、用什么布条裹着，保留原来的款式和颜色词，只输出改写后的一段。",
-                                 "【人物】%s\n【原服装】%s\n【故事里的状态】%s" % (c.get("name"), _cl0, _state_src0[:600]), mt=500, temperature=0.4) or "").strip()
-                if len(_new_cl) > 20:
-                    c["clothing"] = _new_cl.split("\n")[0][:600]
-        except Exception as _cx:
-            _dbg("服装按状态改写失败", {"人": c.get("name"), "err": str(_cx)[:80]})
-        # P459：口述/正文里明写了这个人穿什么 → 具体服装照那个写（项目4：口述「T恤和内裤」「换上校服」，设计师给了晚礼服）
-        try:
-            _all_names = [str(x.get("name") or "") for x in (chars_data or []) if isinstance(x, dict)]
-            _al459 = _os_.card_aliases([dict(x, sex=(x.get("sex") or "")) for x in (chars_data or []) if isinstance(x, dict)])
-            _sx459 = {str(x.get("name") or ""): str(x.get("sex") or "") for x in (chars_data or []) if isinstance(x, dict)}
-            _hints = _os_.outfit_hints(_brief + "\n" + _prose0, _all_names, _al459, _sx459).get(str(c.get("name") or ""), [])
-            _want = _os_.outfit_words(_hints)
-            _cl1 = str(c.get("clothing") or "")
-            if _want and not any(w in _cl1 for w in _want):
-                _new_cl = str(_q("你是服装设计师。用户口述里已经写明这个人穿什么，具体服装必须按口述写：口述点到的每件衣物都要出现，颜色、材质、剪裁细节可以补，"
-                                 "不许换成别的款式。只输出一段服装描述。",
-                                 "【人物】%s（%s）\n【口述里写的穿着】%s\n【原来的设计（只借颜色材质的写法）】%s"
-                                 % (c.get("name"), c.get("identity") or "", "；".join(_hints)[:400], _cl1[:300]), mt=500, temperature=0.4) or "").strip()
-                if len(_new_cl) > 15 and any(w in _new_cl for w in _want):
-                    c["clothing"] = _new_cl.split("\n")[0][:600]
-                    c["clothing_requirement"] = "自定义"
-                    c["clothing_from_brief"] = True
-                    _dbg("服装按口述改写", {"人": c.get("name"), "口述": _hints[:2], "改后": c["clothing"][:80]})
-            elif _want:
-                c["clothing_from_brief"] = True                              # 设计师自己就写对了，也标上，免得后面被库/尺度改掉
-        except Exception as _cx2:
-            _dbg("服装按口述改写失败", {"人": c.get("name"), "err": str(_cx2)[:80]})
+        # 固定设定与剧情状态分离：新卡只看首次出场这话；临时湿透、
+        # 受伤或破损保留在正文/状态账本，不改全片共用的人设图。
+        _prose0 = " ".join(str(e.get("prose") or "") for e in ((_st0.get("saga") or {}).get("episodes") or [])
+                            if isinstance(e, dict) and int(e.get("no") or 1) == _first_ep)
+        # 明确衣着是输入事实。完整套装逐件保留原色，不再让模型命中
+        # 一个“衬衫”就放过错误裤色；这里只处理即将新建的卡。
+        _all_names = [str(x.get("name") or "") for x in (chars_data or []) if isinstance(x, dict)]
+        _al459 = _os_.card_aliases([dict(x, sex=(x.get("sex") or "")) for x in (chars_data or []) if isinstance(x, dict)])
+        _sx459 = {str(x.get("name") or ""): str(x.get("sex") or "") for x in (chars_data or []) if isinstance(x, dict)}
+        _hints = []
+        for _source in (_local_source, _initial_source, _prose0):
+            _hints = _os_.outfit_hints(_source, _all_names, _al459, _sx459).get(str(c.get("name") or ""), [])
+            _hints = [strip_state_look(x) for x in _hints if strip_state_look(x).strip()]
+            if _hints:
+                break
+        _clothing, _required = _os_.fixed_outfit_description(_hints, c.get("clothing") or "")
+        if _required:
+            c["clothing"] = _clothing
+            c["clothing_requirement"] = "自定义"
+            c["clothing_from_brief"] = True
         card = asset_core.create_character(sid, {
             "name": c.get("name"), "sex": c.get("sex"), "age": str(c.get("age") or ""),
             "char_type": c.get("identity"),
@@ -10564,8 +10537,11 @@ def _create_cards(sid, chars_data):
             "clothing_from_brief": bool(c.get("clothing_from_brief")),   # P459：口述指定的服装，库和尺度不改
             "clothing": c.get("clothing"),              # 具体服装描述
             "appearance_details": c.get("appearance"),  # 外貌与识别特征
-            "first_episode": 1})
+            "first_episode": int(c.get("first_episode") or 1)})
         cid = card["character_id"] if isinstance(card, dict) else card
+        if c.get("aliases") and isinstance(card, dict):
+            card["aliases"] = list(c["aliases"])
+            asset_core.save_asset(sid, "characters", card)
         cards.append(asset_core.get_asset(sid, "characters", cid))
     try:
         from . import story_core as _stc0
@@ -10655,7 +10631,7 @@ def normalize_cards_for_world(sid, settings, cards=None, log=None):
     return n
 
 
-def design_hair(sid, on_step=None, only_missing=True):
+def design_hair(sid, on_step=None, only_missing=True, character_ids=None):
     """在文字阶段为全组人物选定可编辑的发型预设，并写出最终固定发型。"""
     from . import asset_core, story_core, style_presets
     _has_img = {str(v.get("owner_id") or "") for v in (asset_core.list_assets(sid, "visuals") or [])
@@ -10668,6 +10644,7 @@ def design_hair(sid, on_step=None, only_missing=True):
         return bool(c.get("edited_by_user")) and (bool(str(c.get("hair") or "").strip()) or preset not in ("", "自动"))
     todo = [c for c in cards
             if str(c.get("character_id") or "") not in _has_img
+            and (character_ids is None or c.get("character_id") in character_ids)
             and not _manual(c)
             and (not only_missing
                  or str(c.get("hair_preset") or "自动").strip() in ("", "自动")
@@ -11026,7 +11003,7 @@ def face_line(c):
         ("，静态第一印象：" + f["note"]) if f.get("note") else ""))
 
 
-def design_faces(sid, on_step=None, only_missing=True):
+def design_faces(sid, on_step=None, only_missing=True, character_ids=None):
     """给这个项目还没定脸的人各定一张结构不同的脸，写回人物卡 face_spec。
 
     一次模型调用做全组（组内不重复它才管得住）；核对和修复在代码里。
@@ -11038,7 +11015,8 @@ def design_faces(sid, on_step=None, only_missing=True):
     if not cards:
         return {"ok": 0, "note": "没有人物"}
     has = [bool((c.get("face_spec") or {}).get("face_shape")) or is_nonhuman(c) for c in cards]   # 非人形不定脸
-    todo = [c for c, h in zip(cards, has) if not (only_missing and h)]
+    todo = [c for c, h in zip(cards, has) if not (only_missing and h)
+            and (character_ids is None or c.get("character_id") in character_ids)]
     if not todo:
         return {"ok": 0, "note": "所有人都已经定过脸", "fixes": [], "specs": []}
     if on_step:
@@ -11057,8 +11035,8 @@ def design_faces(sid, on_step=None, only_missing=True):
             c.get("face_type") or "自动", ("（九项照这个骨相定：%s）" % _fd) if _fd else "",
             c.get("behavior_anchor") or c.get("personality") or "",
             ("，身份：" + str(c.get("char_type") or c.get("identity") or "")) if (c.get("char_type") or c.get("identity")) else "")
-        if only_missing and h:
-            f = c["face_spec"]
+        if c not in todo:
+            f = c.get("face_spec") or {}
             base += "　【已定，照抄不改】" + "、".join(
                 "%s=%s" % (_FACE_CN[k], f.get(k, "")) for k in _FACE_OPTS)
         lines.append(base)
@@ -11071,8 +11049,8 @@ def design_faces(sid, on_step=None, only_missing=True):
         if is_nonhuman(c):
             sp = {}                                     # 非人形：没有人脸九项
             locked.append(idx)
-        elif only_missing and h:
-            sp = dict(c["face_spec"])           # 锁住：原样
+        elif c not in todo:
+            sp = dict(c.get("face_spec") or {})           # 锁住：原样；旧卡缺字段也不补写
             locked.append(idx)
         else:
             sp = _face_norm(by.get(str(c.get("name") or "").strip(), {}))
@@ -11176,7 +11154,7 @@ def _char_one_line(c, settings=None, visual_facts=None):
     2. 只给标签（"精致"）不够，Qwen 对抽象词的理解每次都飘。这里把标签**展开成定义**
        （精致 → 巴掌小脸、鹅蛋轮廓、鼻梁细直、五官精巧无瑕），给 Qwen 具体的五官事实。
     """
-    from . import style_presets as sp
+    from . import style_presets as sp, character_clothing as cc
 
     def _opt(v):
         v = str(v or "").strip()
@@ -11216,19 +11194,23 @@ def _char_one_line(c, settings=None, visual_facts=None):
     except Exception:
         pass
     sheet_pose = scale_pose or sp.sheet_pose_def(sex)
+    clothing_guard = cc.coverage(c, disabled=bool(scale_clothing) or is_nonhuman(c))
+    if visual_facts is not None:
+        visual_facts = cc.prepared_facts(visual_facts, clothing_guard)
     # 已有九项结构时只提供这一份；缺失时才用骨相预设正文补齐。
     # 具体外貌文字的瞳色、肤色、疤痕等仍独立完整传入，由指令明确优先级。
-    face_reference = face_line(c) or _with_def(face, sp.face_def, sex, face)
+    face_reference = cc.visible_text(face_line(c) or _with_def(face, sp.face_def, sex, face), clothing_guard)
 
     bits = [
         ("人设图展示模板（姿势＋版式）：" + sheet_pose) if sheet_pose else "",
         "%s（%s%s%s）" % (c.get("name"), (sex + "，") if sex else "",
                          ((str(c.get("age")).strip() + ("岁" if str(c.get("age")).strip().isdigit() else "")) + "，") if str(c.get("age") or "").strip() else "", c.get("char_type") or ""),
+        ("固定穿搭与遮挡事实（优先保留）：" + cc.clothing_fact(clothing_guard)) if clothing_guard else "",
         ("已合并外貌事实：" + json.dumps(visual_facts["appearance"], ensure_ascii=False)) if visual_facts is not None else
         (("脸部结构参考（补充）：" + face_reference) if not is_nonhuman(c) else ""),
-        ("具体外貌事实（以此确定对应部位）：" + str(c.get("appearance_details") or "")) if visual_facts is None else "",
+        ("具体外貌事实（以此确定对应部位）：" + cc.visible_text(c.get("appearance_details"), clothing_guard)) if visual_facts is None else "",
         ("头身比例：" + ratio_text) if ratio_text and not is_nonhuman(c) else "",
-        ("身材：" + body_text(c, include_label=False)) if not is_nonhuman(c) else body_scale_line(c),
+        ("身材：" + cc.visible_text(body_text(c, include_label=False), clothing_guard)) if not is_nonhuman(c) else body_scale_line(c),
         ("面部表情：" + visual_facts["expression"]) if visual_facts is not None else
         ("神态取意素材（只转成面部表情）：" + _with_def(pose, sp.pose_def, pose)),
         "发型：" + str(c.get("hair") or ""),
@@ -11649,14 +11631,16 @@ def write_char_sheet(sid, card, settings=None, extra_rules=""):
 
     程序只汇总人物卡事实，不再自行拼一篇最终提示词。比例、身材、五官、发型、
     服装和成人姿势一次性交给 Qwen；Qwen 负责去重、消除冲突并写成纯正向最终稿。
-    本函数只清理首尾空白；最终正文保留 Qwen 原稿。
+    最后仅核对普通衣物的覆盖事实，避免把衣服挡住的肌肉写成可见；原卡不动。
     """
-    from . import asset_core, prompt_writer as pw
+    from . import asset_core, prompt_writer as pw, style_presets as sp, character_clothing as cc
     render_card = sanitize_card_fields(dict(card or {}))
     assert_allowed(cards=(render_card,), settings=settings, text=extra_rules, media="image_prompt")
 
     nude = is_nude(render_card, settings)
     qwen_card = nude_card(render_card) if nude else render_card
+    variant = sp.character_figure_variant((_scale_gate(settings or {}, render_card).get("content_tendencies") or []), card_sex(render_card))
+    clothing_guard = cc.coverage(qwen_card, disabled=bool(variant.get("clothing")) or is_nonhuman(qwen_card))
     # 原卡不动。先让本地 Qwen 把重叠外貌与混有动作的服装资料归类，再写最终词。
     visual_facts = pw.prepare_character_facts(_char_one_line(qwen_card, settings or {}))
     sheet, _look = pw.write_character(
@@ -11666,6 +11650,7 @@ def write_char_sheet(sid, card, settings=None, extra_rules=""):
     sheet = str(sheet or "").strip()
     if not sheet:
         raise ValueError("本地模型没有返回人设图提示词，请稍后重试")
+    sheet = cc.final_sheet(sheet, clothing_guard)
     assert_allowed(cards=(render_card,), settings=settings, text=sheet, media="image_prompt")
     saved = asset_core.get_asset(sid, "characters", card.get("character_id"))
     if saved:
@@ -11691,7 +11676,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
     # P352：出图前先把发型设计好（没有分线/层次/编发/束法这些设计词的人才做；一次 Qwen 做全组）
     if any(not hair_is_designed(c.get("hair")) and not is_nonhuman(c) for c in cards):
         try:
-            _rh = design_hair(sid, on_step=on_step, only_missing=True)
+            _rh = design_hair(sid, on_step=on_step, only_missing=True,
+                              character_ids={c.get("character_id") for c in cards})
             if on_step and _rh.get("ok"):
                 on_step("发型设计好了 %d 人" % _rh.get("ok", 0))
         except Exception as _hx:
@@ -11704,7 +11690,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
     # 所以只挂这一处。做完把传进来的卡换成磁盘上的新卡，face_spec 才带得上。
     if any(not ((c.get("face_spec") or {}).get("face_shape")) for c in cards):
         try:
-            r0 = design_faces(sid, on_step=on_step, only_missing=True)
+            r0 = design_faces(sid, on_step=on_step, only_missing=True,
+                              character_ids={c.get("character_id") for c in cards})
             for m in (r0.get("fixes") or []):
                 if on_step:
                     on_step("脸部设计修正：" + m)
@@ -11754,8 +11741,18 @@ def _gen_char_images(sid, cards, settings, on_step=None):
             # 实测修理店的 32 岁精灵店主被异世界项目的 6 岁小公主顶替，
             # 一路进了成片（P227）。人名重名很常见，这不是特例。
             dst = os.path.join(krea_dir, "%s_CHAR_%s.png" % (sid, name))
+            previous_visuals = [v for v in asset_core.list_assets(sid, "visuals")
+                                if v.get("owner_id") == c["character_id"]]
+            version = max([int(v.get("visual_version") or 1) for v in previous_visuals] or [0]) + 1
+            if version > 1 or os.path.exists(dst):
+                version = max(2, version)
+                base = os.path.splitext(dst)[0]
+                dst = base + "__v%d.png" % version
+                while os.path.exists(dst):
+                    version += 1
+                    dst = base + "__v%d.png" % version
             shutil.copy2(res["output_path"], dst)
-            v = asset_core.add_approved_visual(sid, "character_master", c["character_id"], 1, dst, prompt=sheet)
+            v = asset_core.add_approved_visual(sid, "character_master", c["character_id"], version, dst, prompt=sheet)
             asset_core.adopt(sid, v["visual_id"])
         except Exception as ex:
             failed.append("%s(出图:%s)" % (name, str(ex)[:40]))
@@ -12049,167 +12046,105 @@ def _ground_card_type(card, name, src, is_hero=False):
                 card[k] = v.replace(ct, role or "（按一句话）")
 
 
-def extract_cards(sid, on_step=None):
-    """【自定义作品用】只读第一话原文，把人物立成卡——不写正文、不出图。
+def prepare_episode_assets(sid, ep=1, on_step=None):
+    """首话/续话共用的增量建卡入口；生成图片仍由 only_missing 流程处理。"""
+    return extract_cards(sid, on_step=on_step, ep=ep, characters_only=False)
 
-    2026-08-29 用户定：自带成熟故事时，需要一个"只建花名册"的入口。
-    人物卡不只是挂图的钩子，还管台词归属（名字）和音频块的声线，所以
-    上传自己的人设图之前必须先有卡。
 
-    已存在的同名卡**原样不动**（用户可能已经挂好图/改过声线），只补缺的；
-    重复点不会重建、不会覆盖。返回 {"added": [...], "kept": [...]}。
+def extract_cards(sid, on_step=None, ep=1, characters_only=False):
+    """从本话正文补缺失设定；已有卡、已采用图和历史设定原样保留。
+
+    安排和简介可以提供身份线索，不能代替已确认正文的实际出场名单。
+    只提及/寻找的缺席者不会因为资产准备而成为本话演员。
     """
     from . import story_core, asset_core
-    _saga, e = _ep1(sid)
+    from .continuation_assets import match_character, match_scene, appears_in_source
+    ep = int(ep or 1)
+    _saga, e = _ep(sid, ep, create=False)
     prose = str((e or {}).get("prose") or "").strip()
     if not prose:
-        raise RuntimeError("第一话还没有原文，先把你的故事填进原文框")
+        raise RuntimeError("第%d话还没有原文，先生成或填写本话正文" % ep)
     settings = (story_core.get_story(sid) or {}).get("settings") or {}
-    have = {str(c.get("name") or "").strip(): c
-            for c in asset_core.list_assets(sid, "characters")
-            if str(c.get("name") or "").strip()}
+    existing = list(asset_core.list_assets(sid, "characters") or [])
+    scene_cards = list(asset_core.list_assets(sid, "scenes") or [])
+    have_names = sorted({str(c.get("name") or "").strip() for c in existing if c.get("name")})
     if on_step:
-        on_step("从原文里提取人物和场景")
-    # 【两步提取，2026-09-01 用户定】
-    #   ① 只摘正文里已经写了的，没写的空着——不补不编
-    #   ② 空的那几栏交给设计师（出图提示词那一步）去补
-    # 原来走 design_characters：一次调用又认人又设计，正文没写的它大段补写，
-    # 而且**不出场景**——场景图没有数据来源，出来全是纯白影棚底
-    # （用户实测：视频背景是白的、人都站着）。
+        on_step("复用已有设定，补齐第%d话实际新增的人物和场景" % ep)
     cards = _extract_cards_raw(prose)
-    _scene_cards = [c for c in (asset_core.list_assets(sid, "scenes") or []) if str(c.get("name") or "").strip()]
-    have_s = {str(c.get("name") or "").strip() for c in _scene_cards}
-    # 【P265 建卡按安排】有已确认的本话安排时，卡只按安排建：
-    #   · 人物：名字不在安排人物表（∪ plan_people）里的不建——提取器按原文叫法出「灰狸花猫」「奶猫」，
-    #     表上是「流浪猫」，建了也绑不上，还让画面稿里同一只猫两个名字（STORY_164 实测）。
-    #   · 场景：提取器出的地点名先归到安排地点表（place_in_table，和清单/出片前门同一口径）；
-    #     归不到的（「后巷」）不建；归到的名字已有卡就只补空字段，没有才建——
-    #     原来「面包店」和「面包店内」各建一张，提示词随机绑一张，空间进进出出。
-    #   人物表/地点表都空时不过滤（和 cast_cards 的退路一致：没表就没法按表建）。
-    # 没有安排：一字不改走老路（老项目/自定义作品不受影响）。
-    _arr = confirmed_arrangement(sid)
-    _allow, _places, skipped, merged = set(), [], [], []
-    if _arr:
-        from . import shotlist as _slm
-        _allow = {str(p.get("name") or "").strip()
-                  for p in (((_arr.get("items") or {}).get("who") or {}).get("people") or []) if isinstance(p, dict)}
-        _allow |= {str(p.get("name") or "").strip()
-                   for p in (settings.get("plan_people") or []) if isinstance(p, dict)}
-        _allow = {x for x in _allow if x}
-        _places = list(_slm._place_names((((_arr.get("items") or {}).get("where") or {}).get("places") or [])))
-        if not _places:
-            _places = list(plan_places(sid, 1) or [])
-    _SCENE_F = (("space", "空间"), ("light", "光线"), ("ground", "地面墙面"),
-                ("furniture", "陈设"), ("landmarks", "标志物"))
-    fresh, scenes_added = [], []
-    _PRON = ("你", "我", "他", "她", "它", "您", "你们", "我们", "他们", "她们")
-    # 只给需要固定长相的主要人物建卡。模型会把司仪、某长老、为首弟子
-    # 也列成人物；这些临时角色不在用户构想里，建卡会多出一批人设图并
-    # 抢占视频参考位。用户构想明确写到的身份仍保留。
-    _user_people_src = (str(settings.get("one_line") or "") + " "
-                        + str((e or {}).get("brief") or ""))
-    _INCIDENTAL_PERSON = re.compile(
-        r"^(?:司仪|旁白|路人|宾客|观众|众人|一名.+|某.+|为首.+|执剑长老|"
-        r"[甲乙丙丁]|(?:普通|年轻|年长)?(?:弟子|长老|守卫|侍卫|士兵))$")
-    for kind, name, f in cards:
-        if kind == "人物" and (str(name).strip() in _PRON or len(str(name).strip()) < 2):
-            # P322⑦：第二人称正文抽出「你」「她」当名字 → 绑定行「<Subject1>你是…」没法认人。改成身份名/性别名
-            _role = str(f.get("身份") or "").strip()
-            _sexw = "女" if "女" in str(f.get("性别") or "") else ("男" if "男" in str(f.get("性别") or "") else "")
-            _new = _role[:6] if _role else ((_sexw + "主") if _sexw else "")
-            if not _new or any(str(n2).strip() == _new for _k2, n2, _f2 in cards if _k2 == "人物" and n2 != name):
-                _new = (_new or "人物") + str(len(fresh) + 1)
-            _dbg("人物代词名改身份名", {"原": name, "新": _new})
-            f = dict(f, 别称=str(name))
-            name = _new
-        one = card_one_line(kind, name, f)
+    from .continuation_assets import arrived_locations
+    for arrival in arrived_locations(prose):
+        fields = next((f for k, n, f in cards if k == "场景" and n == arrival["name"]), None)
+        if fields is None:
+            fields = {"空间": arrival["evidence"]}
+            cards.append(("场景", arrival["name"], fields))
+        fields.update(出场证据=arrival["evidence"], _explicit_destination=True)
+    # 调用保留兼容性，但旧安排不再否决正文已经发生的新出场/新地点。
+    arrangement = confirmed_arrangement(sid, ep)
+    fresh, scenes_added, skipped, merged = [], [], [], []
+    pronouns = {"你", "我", "他", "她", "它", "您", "你们", "我们", "他们", "她们"}
+    for kind, original_name, fields in cards:
+        name, fields = str(original_name or "").strip(), dict(fields or {})
+        if not name or kind not in ("人物", "场景") or (characters_only and kind != "人物"):
+            continue
         if kind == "人物":
-            _canonical = next((str(n2).strip() for k2, n2, _f2 in cards
-                               if k2 == "人物" and str(n2).strip() != str(name).strip()
-                               and str(name).strip().endswith(str(n2).strip())
-                               and str(n2).strip() in _user_people_src), "")
-            if _canonical:
-                skipped.append({"kind": "人物", "name": name,
-                                "why": "与用户构想中的“%s”是同一人" % _canonical})
+            found = match_character(name, existing + fresh, fields.get("别称") or fields.get("别名") or "")
+            if found is not None:
+                if name != found.get("name"):
+                    merged.append({"kind": kind, "from": name, "to": found.get("name"), "filled": []})
                 continue
-            _auto_incidental = bool(_INCIDENTAL_PERSON.match(str(name).strip())
-                                    and str(name).strip() not in _user_people_src)
-            if _arr and _allow and name not in _allow:
-                skipped.append({"kind": "人物", "name": name, "why": "不在本话安排的人物表里"})
+            if not appears_in_source(name, prose, evidence=fields.get("出场证据") or ""):
+                skipped.append({"kind": kind, "name": name, "why": "正文无实际出场证据（仅提及、缺席或提取器新增）"})
                 continue
-            if name in have:
+            if name in pronouns:
+                role = str(fields.get("身份") or "").strip()
+                if not role:
+                    skipped.append({"kind": kind, "name": name, "why": "代词没有可确定的身份"})
+                    continue
+                name = role
+                if match_character(name, existing + fresh) is not None:
+                    continue
+            role = next((str(p.get("role") or "").strip() for p in settings.get("plan_people") or []
+                         if isinstance(p, dict) and str(p.get("name") or "").strip() == name), "")
+            fresh.append({"name": name, "age": fields.get("年龄", ""), "sex": fields.get("性别", ""),
+                          "identity": fields.get("身份") or role, "build": fields.get("身形", ""),
+                          "hair": strip_state_look(fields.get("头发", "")),
+                          "clothing": strip_state_look(fields.get("衣着", "")),
+                          "appearance": strip_state_look("；".join(str(x) for x in
+                              (fields.get("五官特征", ""), fields.get("标志物", "")) if x)),
+                          "voice": fields.get("声音", ""), "personality": fields.get("动作习惯", ""),
+                          "aliases": [x.strip() for x in re.split(r"[、，,；;|]", str(fields.get("别称") or fields.get("别名") or ""))
+                                      if x.strip() and x.strip() not in pronouns],
+                          "first_episode": ep})
+        else:
+            found = match_scene(name, scene_cards, context=str((e or {}).get("brief") or ""))
+            if found is not None:
+                if name != found.get("name"):
+                    merged.append({"kind": kind, "from": name, "to": found.get("name"), "filled": []})
                 continue
-            # 正文里没写身份时，用人物表那一行——「精灵女魔法师/店主」这类信息
-            # 本来就在 plan_people 里，只是一直没接上，出图那一步不知道她是精灵（P207）
-            _role = next((str(p.get("role") or "").strip()
-                          for p in (settings.get("plan_people") or [])
-                          if str((p or {}).get("name") or "").strip() == name), "")
-            _ctype = f.get("身份", "") or _role
-            fresh.append({
-                "name": name, "age": f.get("年龄", ""), "sex": f.get("性别", ""),
-                "char_type": _ctype, "build": f.get("身形", ""),
-                "hair": f.get("头发", ""), "clothing": f.get("衣着", ""),
-                # 标志物（独眼/眼罩/巨剑/烙印…）并进外貌细节——人设图和视频提示词都从这取
-                "appearance_details": "；".join(x for x in (f.get("五官特征", ""),
-                                                         f.get("标志物", "")) if x),
-                "voice": f.get("声音", ""),
-                "personality": f.get("动作习惯", ""),
-                "identity_anchor": one,
-                "auto_incidental": _auto_incidental})
-        elif _arr and _places:
-            hit = _slm.place_in_table(name, _places)
-            if not hit:
-                skipped.append({"kind": "场景", "name": name, "why": "归不到本话安排的地点表"})
+            if not appears_in_source(name, prose, kind="场景", evidence=fields.get("出场证据") or ""):
+                skipped.append({"kind": kind, "name": name, "why": "正文无实际到场证据"})
                 continue
-            _one = card_one_line(kind, hit, f) if hit != name else one
-            _card = next((c for c in _scene_cards if str(c.get("name") or "").strip() == hit), None)
-            if _card is not None:
-                # 已有卡只补空栏：用户可能已经改过/挂过图，写了的一个字不动；
-                # 一栏都不用补就不落盘（连点两次 updated 不变、不回建）
-                _filled = []
-                for k, zh in _SCENE_F:
-                    v = str(f.get(zh, "") or "").strip()
-                    if v and not str(_card.get(k) or "").strip():
-                        _card[k] = v
-                        _filled.append(k)
-                if not str(_card.get("contract_text") or "").strip():
-                    _card["contract_text"] = _one
-                    _filled.append("contract_text")
-                if _filled:
-                    _card["updated"] = time.time()
-                    asset_core.save_asset(sid, "scenes", _card)
-                merged.append({"from": name, "to": hit, "filled": _filled})
-                continue
-            _new = asset_core.create_scene(sid, {
-                "name": hit, "space": f.get("空间", ""),
-                "light": f.get("光线", ""), "ground": f.get("地面墙面", ""),
-                "furniture": f.get("陈设", ""),
-                "landmarks": f.get("标志物", ""),
-                "contract_text": _one})
-            if _new:
-                _scene_cards.append(_new)            # 同一次里再归到这个名字的只补栏，不再建第二张
-            have_s.add(hit)
-            scenes_added.append(hit)
-            if hit != name:
-                merged.append({"from": name, "to": hit, "filled": ["new"]})
-        elif name not in have_s:
-            asset_core.create_scene(sid, {
-                "name": name, "space": f.get("空间", ""),
-                "light": f.get("光线", ""), "ground": f.get("地面墙面", ""),
-                "furniture": f.get("陈设", ""),
-                "landmarks": f.get("标志物", ""),
-                "contract_text": one})
+            card = asset_core.create_scene(sid, {"name": name, "space": fields.get("空间", ""),
+                "light": fields.get("光线", ""), "ground": fields.get("地面墙面", ""),
+                "furniture": fields.get("陈设", ""), "landmarks": fields.get("标志物", ""),
+                "contract_text": card_one_line(kind, name, fields)})
+            if card:
+                if fields.get("_explicit_destination"):
+                    card.update(explicit_destination=True, source_evidence=fields["出场证据"], first_episode=ep)
+                    asset_core.save_asset(sid, "scenes", card)
+                scene_cards.append(card)
+            else:
+                raise RuntimeError("第%d话新场景“%s”未能保存，已完成设定仍保留" % (ep, name))
             scenes_added.append(name)
-    _src = str(settings.get("one_line") or "") + " " + prose[:1500]
-    for _c in fresh:
-        _c["age"] = guess_age(_c, _src)
+    source = str(settings.get("one_line") or "") + " " + prose
+    for card in fresh:
+        card["age"] = guess_age(card, source)
     added = [c["name"] for c in _create_cards(sid, fresh)
              if isinstance(c, dict) and c.get("name")] if fresh else []
-    _dbg("建卡完成", {"人物": added, "场景": scenes_added, "跳过": skipped, "归并": merged,
-                      "按安排": bool(_arr), "人物表": sorted(_allow), "地点表": _places})
-    return {"added": added, "kept": sorted(have.keys()),
-            "scenes": scenes_added, "total": len(have) + len(added),
-            "skipped": skipped, "merged": merged}
+    _dbg("增量建卡完成", {"话": ep, "人物": added, "场景": scenes_added, "跳过": skipped,
+                            "归并": merged, "已有安排": bool(arrangement)})
+    return {"added": added, "kept": have_names, "scenes": scenes_added,
+            "total": len(existing) + len(added), "skipped": skipped, "merged": merged}
 
 
 def _extract_cards_raw(prose):
@@ -12222,7 +12157,11 @@ def _extract_cards_raw(prose):
     if len(src) < 50:
         return []
     raw = _q(_ins("正文提取人物场景_指令词.txt"),
-             "【故事正文】\n" + src, mt=2600, temperature=0.2)
+             "【故事正文】\n" + src + "\n\n【提取边界】仅提取正文实际出场的人物和已到达的场景。"
+             "只被提及、寻找、失踪未出场的人不建卡；计划前往但尚未到达的地点不建卡。"
+             "名字用原文叫法，不发明新身份。同一人别称放在单独一行‘别称：’。"
+             "每张卡另写‘出场证据：’并摘录正文原句。身份、基础服装和永久外观属于固定设定；"
+             "此刻受伤、湿透、疲惫、被谁抱着等临时状态不写入固定设定字段。", mt=3000, temperature=0.2)
     cards, cur = [], None
     for line in str(raw or "").splitlines():
         m = re.match(r"^\s*(人物|场景)\s*[：:]\s*(.+?)\s*$", line)
@@ -13403,8 +13342,11 @@ def split_narration_in_dialogue(pics):
     return ("\n".join(out) if n else pics), n
 
 
+LOSSLESS_PICTURES_VERSION = 'lossless-pictures-v1'
+
+
 def make_pictures(sid, ep=1, on_step=None):
-    """正文 → 画面稿，存回这一话。两次调用（写一次 + 有缺口补一次）。"""
+    """正文 → 画面稿；single无损直转，其他模式保留原有改编流程。"""
     from . import story_core, asset_core as _ac
     ep = int(ep or 1)
     _saga, e = _ep(sid, ep)
@@ -13413,6 +13355,21 @@ def make_pictures(sid, ep=1, on_step=None):
         raise RuntimeError("第%d话还没有原文，先生成原文" % ep)
     settings = (story_core.get_story(sid) or {}).get("settings") or {}
     chars = cast_cards(sid)                      # 安排确认后只认安排里的人（P261）
+    if str(settings.get('story_mode') or '').strip().lower() == 'single':
+        # The approved prose is the single source. This must return before the
+        # old rewrite/cleanup chain: even its "literal" route deduplicated real
+        # speech and removed short replies such as "好。" on a second pass.
+        from . import episode_contract as _source_contract
+        script, dialogue, source_report = _source_contract.prepare_source(prose, chars)
+        pics = _source_contract.plain_script(script)
+        source_report['conversion_version'] = LOSSLESS_PICTURES_VERSION
+        _update_ep(sid, ep, pictures=pics, body=pics, timeline_stale=True,
+                   pictures_conversion_version=LOSSLESS_PICTURES_VERSION,
+                   pictures_source_contract=source_report)
+        _dbg('单话原文无损整理剧本', {'正文': len(prose), '剧本': len(pics), '原话句数': len(dialogue)})
+        if on_step:
+            on_step('剧本已按原文无损整理，保留%d句原话；说话人疑点由分镜步骤核对' % len(dialogue))
+        return {'pictures': pics, 'problems': [], 'source_contract': source_report}
     _v2 = str((e or {}).get("script_v2") or "").strip()
     if _v2 and _story_v2():
         # 故事层 v2 已经直接写成画面剧本：不再小说→画面稿，只做清洗/说话人/顺序/残渣
@@ -13428,25 +13385,12 @@ def make_pictures(sid, ep=1, on_step=None):
         return {"pictures": pics, "problems": []}
     if on_step:
         on_step("把第%d话原文改编成剧本" % ep)
-    # 已确认的本话安排一起给：四段情节和结尾是用户点过头的，画面稿不许自己换
-    # 单话直写模式的正文已经由用户确认，剧本只负责把叙述和对白整理成
-    # 可拍顺序。再让模型整篇“改编”会随机出现两种坏结果：台词总表重复，
-    # 或每段原文后再抄一段扩写（STORY_213 四次实测）。导演创作留给后面的
-    # 深度 H3 提示词，这一层用确定性直转，保证故事不被改动。
-    if str(settings.get("story_mode") or "").strip().lower() == "single":
-        try:
-            from . import oral_story as _os454
-            prose = _os454.lift_inline_dialogue(prose, chars)                       # P454②
-        except Exception:
-            pass
+    # 旧模式仍按已确认安排改编；single已在上方按源契约返回。
+    pics = prose_to_pictures(prose, settings, characters=chars, arrangement=confirmed_arrangement(sid, ep))
+    _repeat_n = repeated_prose_dialogue(pics, prose)
+    if _repeat_n >= 3 or "```" in str(pics) or len(str(pics)) > len(prose) * 1.8:
+        _dbg("剧本改编异常，改用正文直转兜底", {"重复": _repeat_n, "长度": len(str(pics))})
         pics = literal_pictures_from_prose(prose, chars)
-        _dbg("单话正文直转剧本", {"正文": len(prose), "剧本": len(pics)})
-    else:
-        pics = prose_to_pictures(prose, settings, characters=chars, arrangement=confirmed_arrangement(sid, ep))
-        _repeat_n = repeated_prose_dialogue(pics, prose)
-        if _repeat_n >= 3 or "```" in str(pics) or len(str(pics)) > len(prose) * 1.8:
-            _dbg("剧本改编异常，改用正文直转兜底", {"重复": _repeat_n, "长度": len(str(pics))})
-            pics = literal_pictures_from_prose(prose, chars)
     # 【空稿不落盘】模型偶发返回空/被截断，原来会把空画面稿存进去、旧清单还挂着，
     # 分镜页显示"还没有剧本"却查不出原因（浏览器实测一次）。空了就明确报错，让用户再点一次。
     if len(str(pics or "").strip()) < 50:
@@ -13615,8 +13559,10 @@ def confirmed_arrangement(sid, ep=1):
 
 
 def cast_cards(sid):
-    """这一话的人物卡。有已确认的本话安排 → 只认安排人物表里的人（过期的自动卡不算）；
-    没有安排 → 全部卡。P261：重新分话/旧清单建过的卡混进画面稿，同一个人两个名字。"""
+    """可引用的人物身份库。旧安排不能丢掉后续正文已引入的新身份。
+
+    身份候选不代表本段全员出场；逐段出场/缺席由正文契约判断。
+    """
     from . import asset_core as _ac, story_core as _stc
     cards = _ac.list_assets(sid, "characters") or []
     arr = confirmed_arrangement(sid)
@@ -13624,7 +13570,12 @@ def cast_cards(sid):
         return cards
     names = {str(p.get("name") or "").strip() for p in (((arr.get("items") or {}).get("who") or {}).get("people") or []) if isinstance(p, dict)}
     try:
-        names |= {str(p.get("name") or "").strip() for p in (((_stc.get_story(sid) or {}).get("settings") or {}).get("plan_people") or []) if isinstance(p, dict)}
+        story = _stc.get_story(sid) or {}
+        names |= {str(p.get("name") or "").strip() for p in ((story.get("settings") or {}).get("plan_people") or []) if isinstance(p, dict)}
+        from .continuation_assets import appears_in_source, aliases
+        sources = [str(e.get("prose") or "") for e in (story.get("saga") or {}).get("episodes") or [] if isinstance(e, dict)]
+        names |= {str(c.get("name") or "").strip() for c in cards
+                  if any(appears_in_source(a, source) for a in aliases(c) for source in sources)}
     except Exception:
         pass
     names = {x for x in names if x}
@@ -13788,11 +13739,39 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
         # wardrobe, pose-inheritance or rewrite passes on its output.
         _allowed_names = {c["name"] for c in chars}
         _ordered_chars = [c for c in (_ac.list_assets(sid, "characters") or []) if c.get("name") in _allowed_names]
-        return director_flow.make_prompts(slices, _ordered_chars, [s["name"] for s in _scs_all], _q,
-            settings=settings, start=start, count=count, on_step=on_step, prev_tail=prev_tail, direction=direction,
-            on_prompt=on_prompt, on_error=on_error,
-            trace_dir=(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "节拍表",
-                                   "%s_e%d_连续写词" % (sid, ep)) if on_prompt else None))
+        from . import reference_ready
+        slices = reference_ready.canonical_scene_slices(sid, ep, slices, cards=_scs_all)
+        try:
+            return director_flow.make_prompts(slices, _ordered_chars, [s["name"] for s in _scs_all], _q,
+                settings=settings, start=start, count=count, on_step=on_step, prev_tail=prev_tail, direction=direction,
+                on_prompt=on_prompt, on_error=on_error,
+                trace_dir=(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "节拍表",
+                                       "%s_e%d_连续写词" % (sid, ep)) if on_prompt else None))
+        finally:
+            # 旧分镜的对白契约可原地修复；同时保存修复依据，重启后无需再猜。
+            # 每次重新读时间轴，保留 on_prompt 已保存的视频、提示词和失败记录。
+            from . import saga_core as _contract_saga
+            current = _contract_saga.ep_timeline(sid, ep) or {}
+            frozen = current.get("slicing") or {}
+            rows = frozen.get("slices") or []
+            if frozen.get("sig") == _pics_sig(pics) and len(rows) == len(slices):
+                changed = False
+                for index, (saved, repaired) in enumerate(zip(rows, slices), 1):
+                    duration_changed = repaired.get("seconds") is not None and saved.get("seconds") != repaired["seconds"]
+                    for key in ("director", "text", "seconds"):
+                        if key in repaired and saved.get(key) != repaired[key]:
+                            saved[key] = repaired[key]
+                            changed = True
+                    if duration_changed:
+                        for scene_row in current.get("scenes") or []:
+                            for segment in scene_row.get("segments") or []:
+                                if int(segment.get("no") or 0) == index:
+                                    if segment.get("video"):
+                                        segment["stale_video"] = True
+                                    segment["seconds"] = repaired["seconds"]
+                if changed:
+                    if not _contract_saga.save_ep_timeline(sid, ep, current):
+                        raise RuntimeError("修复后的分镜契约未能保存，已生成片段仍保留")
     out, _tail = [], str(prev_tail or "")
     # 【分镜表】导演一段一段写不知道全篇，先通读一次给每段定目的/关键动作/站位（用户 2026-09-03）
     _plan = plan_segments(slices, chars, settings=settings)
@@ -14598,7 +14577,7 @@ def build_timeline(sid, ep, prompts, replace=False):
             g["critical_problems"] = p.get("critical_problems") or []
             g["source_text"] = p.get("source_text") or ""
             g["over"] = bool(p.get("over"))
-            for _k in ("tail", "scene", "chars", "plan", "seconds", "relay", "done_all"):
+            for _k in ("tail", "scene", "chars", "plan", "seconds", "relay", "done_all", "source_contract", "director_contract"):
                 if p.get(_k):
                     g[_k] = p[_k]
             if p.get("beat_index") is not None:
@@ -14608,12 +14587,18 @@ def build_timeline(sid, ep, prompts, replace=False):
             g.setdefault("shot_ids", [])
             _kept_edited.append(n)
             continue
-        if str(_prev.get("video") or "").strip() and str(_prev.get("prompt") or "").strip()                 and _newp.strip() != str(_prev.get("prompt") or "").strip():
+        if (str(_prev.get("video") or "").strip() and
+                (_newp.strip() != str(_prev.get("prompt") or "").strip() or
+                 (p.get("seconds") is not None and p.get("seconds") != _prev.get("seconds")))):
             g["stale_video"] = True
         g["prompt"] = _newp
         g["problems"] = p.get("problems") or []
         g["critical_problems"] = p.get("critical_problems") or []
         g["source_text"] = p.get("source_text") or ""
+        for _key in ("source_contract", "director_contract"):
+            if p.get(_key) is not None:
+                g[_key] = p[_key]
+        g.pop("prompt_repair_pending", None)
         g["over"] = bool(p.get("over"))
         if p.get("tail"):
             g["tail"] = p["tail"]
@@ -14696,7 +14681,50 @@ def next_prompts(sid, ep, upto, on_step=None):
     tl = _sc.ep_timeline(sid, ep) or {"scenes": []}
     segs = sorted([g for sc0 in (tl.get("scenes") or []) for g in (sc0.get("segments") or [])],
                   key=lambda g: int(g.get("no") or 0))
-    have = {int(g.get("no") or 0): g for g in segs if str(g.get("prompt") or "").strip()}
+    # 非空不等于正确：旧对白识别故障留下的提示词也必须回源修复。
+    # 只检查连续导演格式；旧格式保留原入口规则，用户手改内容保留并明确提示。
+    from . import director_flow as _flow
+    frozen_rows = (tl.get("slicing") or {}).get("slices") or []
+    retry_prompt, changed = set(), False
+    for g in segs:
+        no = int(g.get("no") or 0)
+        if no < 1 or no > int(upto) or not str(g.get("prompt") or "").strip():
+            continue
+        source_row = frozen_rows[no - 1] if no <= len(frozen_rows) else {}
+        flow = (source_row.get("director") or {}).get("flow") or (g.get("plan") or {}).get("flow")
+        if flow != _flow.VERSION:
+            continue
+        source = str(source_row.get("text") or g.get("source_text") or "")
+        if not source.strip():
+            continue
+        try:
+            problems = _flow.prompt_problems(g["prompt"], source,
+                source_row.get("seconds") or g.get("seconds"), source_row.get("scene_hint") or g.get("scene"))
+        except (ValueError, KeyError, TypeError) as error:
+            problems = [str(error)]
+        if not problems:
+            if g.pop("prompt_repair_pending", None) is not None:
+                changed = True
+            if str(no) in (tl.get("prompt_failures") or {}):
+                tl["prompt_failures"].pop(str(no), None)
+                changed = True
+            continue
+        message = "第%d段提示词需按原文修复：%s" % (no, "；".join(problems))
+        if g.get("prompt_edited"):
+            message += "；已保留你手动修改的提示词，自动建议不会覆盖它"
+        else:
+            retry_prompt.add(no)
+        g["prompt_repair_pending"] = message
+        if str(g.get("video") or "").strip():
+            g["stale_video"] = True
+        tl.setdefault("prompt_failures", {})[str(no)] = message
+        changed = True
+        if on_step:
+            on_step(message)
+    if changed and not _sc.save_ep_timeline(sid, ep, tl):
+        raise RuntimeError("提示词修复进度未能保存，已有视频仍保留")
+    have = {int(g.get("no") or 0): g for g in segs
+            if str(g.get("prompt") or "").strip() and int(g.get("no") or 0) not in retry_prompt}
     total = total_segments(sid, ep)
     missing = [k for k in range(1, min(int(upto), total) + 1) if k not in have]
     ranges = []

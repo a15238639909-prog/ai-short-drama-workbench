@@ -233,7 +233,7 @@
          分镜页任务、正在生的 H3 一起停；已生成的部分保留（用户 2026-09-02 定）。 */
       var gc = document.getElementById("gCancel");
       if (gc) {
-        gc.hidden = !sagaProgress.running;
+        gc.hidden = !(sagaProgress.running || sagaProgress.status === "waiting_resource" || sagaProgress.status === "waiting_task");
         gc.onclick = function () {
           var sid = sagaProgress._storyId || state.storyId;
           if (!sid) return;
@@ -250,7 +250,7 @@
         window.__sagaBusy = true;
         var done = +sagaProgress.done || 0, total = +sagaProgress.total || 0;
         if (total > 0) {
-          var pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
+          var pct = Math.max(0, Math.min(99, Math.round(+sagaProgress.percent || done / total * 100)));
           /* 百分比、剩余时间和当前在干什么，必须**同时**出现在一行。
              以前步骤名由设定页另写一次，两个轮询交替覆盖，用户看到的是
              「45%　3/8　剩余约4分」和「画人物：张凡」来回跳。现在只有这一处写，
@@ -258,15 +258,19 @@
           var note = pct + "%　" + done + "/" + total + "　剩余约 " +
             fmtRemain(sagaProgress.eta_seconds) +
             (sagaProgress.step ? "　·　" + sagaProgress.step : "");
-          window.UIActions.progress.run(done / total, note);
+          window.UIActions.progress.run(pct / 100, note);
         } else {
           // 兼容升级前已经启动的任务：没有计数就如实显示步骤，不伪造百分比。
           window.UIActions.progress.busy("生成中 · " + (sagaProgress.step || "处理中"));
         }
-      } else if (window.__sagaBusy) {
+      } else if (window.__sagaBusy || sagaProgress.title) {
         window.__sagaBusy = false;
-        if (sagaProgress.err) window.UIActions.progress.stuck("失败 · " + sagaProgress.err);
-        else window.UIActions.progress.done("100%　已完成");
+        if (sagaProgress.cancel || sagaProgress.status === "cancelled") window.UIActions.progress.stuck("已取消 · 已完成的内容已保留");
+        else if (sagaProgress.status === "waiting_resource" || sagaProgress.status === "waiting_task" || sagaProgress.status === "paused") window.UIActions.progress.stuck("进度已保留 · " + (sagaProgress.err || sagaProgress.step));
+        else if (sagaProgress.partial || sagaProgress.blocked) window.UIActions.progress.stuck(sagaProgress.partial || sagaProgress.step || "等待处理 · 已完成的内容已保留");
+        else if (sagaProgress.err) window.UIActions.progress.stuck("失败 · " + sagaProgress.err);
+        else if (sagaProgress.status === "completed" || sagaProgress.step === "完成") window.UIActions.progress.done("100%　已完成");
+        else window.UIActions.progress.stuck(sagaProgress.step || "进度已保留");
       }
     }).catch(function () {});
   }

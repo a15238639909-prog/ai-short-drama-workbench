@@ -82,15 +82,16 @@ def build(sid, ep, q=None):
         tl = saga_core.ep_timeline(sid, int(ep)) or {}
         sl = ((tl.get("slicing") or {}).get("slices") or [])
         d = (sl[-1].get("director") or {}) if sl else {}
-        if d.get("end_state"):
-            tail = "\n【导演分段最后一段结束时（程序记录）】" + "；".join(
-                "%s：%s，%s，手里%s，%s" % (n, x.get("pos", ""), x.get("facing", ""), x.get("hands", "无"), x.get("posture", "")) for n, x in d["end_state"].items())
+        from .episode_contract import ending_text
+        if ending_text(d):
+            tail = "\n【导演分段最后一段结束时（分镜记录，人物进出和状态以此为准）】" + ending_text(d)
             tail += "；地点：" + str(sl[-1].get("scene_hint") or "")
     except Exception:
         pass
     raw = q(instruction(names), "【这一话正文】\n" + prose[-3500:] + tail, mt=900, temperature=0.2)
     led = parse(raw, names, scene_names)
     led["raw"] = str(raw or "")[:2000]
+    led['continuity'] = ending_snapshot(sid, ep)
     e["ledger"] = led
     saga_core.save_saga(sid, sg)
     return led
@@ -105,8 +106,7 @@ def get(sid, ep):
 def text(sid, ep):
     """第 ep 话结束时的账本文本（给第 ep+1 话用）。没有账本返回空串。"""
     led = get(sid, ep)
-    if not led:
-        return ""
+    led = led or {}
     lines = []
     for nm, d in (led.get("people") or {}).items():
         bits = ["%s=%s" % (k, d[k]) for k in ("衣着", "伤", "手里", "称呼") if d.get(k)]
@@ -117,7 +117,33 @@ def text(sid, ep):
     w = led.get("when") or {}
     if w:
         lines.append("· 结尾：" + "；".join("%s=%s" % (k, w[k]) for k in ("时间", "天气", "各人在哪") if w.get(k)))
+    # Older source-owned directors wrote target_state while the ledger read only
+    # legacy end_state dicts. Read the current timeline too, including old saves.
+    continuity = ending_snapshot(sid, ep) or led.get('continuity') or {}
+    if continuity.get('end_state_text'):
+        lines.append('· 上一话最后分镜结束状态：' + continuity['end_state_text'])
+    if continuity.get('scene'):
+        lines.append('· 上一话最后地点：' + continuity['scene'])
+    absence = (continuity.get('presence') or {}).get('absent') or []
+    if absence:
+        lines.append('· 最后分镜原文明确不在场：' + '、'.join(absence) + '；须有回归过程才能重新出场')
+    if continuity:
+        lines.append('· 下一话须接续人数、位置、姿势、携带关系和道具归属；状态变化写出过渡。分镜状态是计划，实际尾帧由视频生成步骤对齐。')
     return ("【上一话（第 %d 话）结束时的状态——照这个接，不重新设定】\n" % int(ep)) + "\n".join(lines) if lines else ""
+
+
+def ending_snapshot(sid, ep):
+    """Return the exact final director contract without a model call."""
+    from . import saga_core
+    from .episode_contract import ending_text
+    timeline = saga_core.ep_timeline(sid, int(ep)) or {}
+    slices = ((timeline.get('slicing') or {}).get('slices') or [])
+    if not slices:
+        return {}
+    last = slices[-1]
+    director = last.get('director') or {}
+    return {'end_state_text': ending_text(director), 'scene': str(last.get('scene_hint') or ''),
+            'presence': director.get('presence') or {}}
 
 
 def person_line(sid, ep, name):

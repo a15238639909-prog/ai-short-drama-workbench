@@ -178,12 +178,36 @@ def kill_stray_llama(keep_pid=None):
     return killed
 
 
+def assert_local_run_allowed():
+    """Check the user's game processes before every local model acquisition."""
+    if (_OWNER_FILE.parent / "game_mode.flag").exists():
+        raise RuntimeError("游戏模式暂停中——点右上角「恢复任务」再继续")
+    if os.name != "nt":
+        return True
+    command = ("$pubg = Get-Process -Name 'TslGame','TslGame_BE','PUBG' -ErrorAction SilentlyContinue; "
+               "if ($pubg) { 'PUBG_RUNNING' } else { 'PUBG_NOT_RUNNING' }")
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("无法确认PUBG运行状态，任务已保留并暂停") from exc
+    state = result.stdout.strip()
+    if result.returncode or state not in ("PUBG_RUNNING", "PUBG_NOT_RUNNING"):
+        raise RuntimeError("无法确认PUBG运行状态，任务已保留并暂停")
+    if state == "PUBG_RUNNING":
+        raise RuntimeError("PUBG正在运行，任务已保留并暂停；游戏结束后可继续")
+    return True
+
+
 def acquire(who, note=""):
     """要起/用模型之前占卡。别的活着的进程占着 → 抛错，绝不拉第二个模型进程。
 
     同一个进程再 acquire（工作台在 qwen/krea/h3 之间切换）永远放行，只更新记录。
     V41_GPU_FORCE=1 可强行接管（只在确认没有别的任务在跑时用）。
     """
+    assert_local_run_allowed()
     me = os.getpid()
     cur = owner()
     if cur and int(cur["pid"]) != me and not os.environ.get("V41_GPU_FORCE"):

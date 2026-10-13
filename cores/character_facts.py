@@ -7,6 +7,9 @@ _AGE = _NUMBER + r'(?:\s*[-—~to]\s*' + _NUMBER + r')?'
 _ROLE = r'(?:the|boy|girl|young\s+man|young\s+woman|elder|man|woman|brother|sister|master|teacher|doctor|owner|worker|manager)'
 _PREFIX = re.compile(r'(?<![\d])(' + _AGE + r')\s*(?:age|years?\s*old)\s*(?:' + _ROLE + r'\s*)*$')
 _SUFFIX = re.compile(r'^[\s(,:\s]*?(?:(?:m|f)[,\s]*)?(?:age|currently|is|is\s+)?[:\s]*(' + _AGE + r')\s*(?:age|years?\s*old)(?!\s+ago|before|after|of)')
+_CN_NUMBER = r'(?:\d{1,4}|[零一二两三四五六七八九十百]{1,6})'
+_CN_SUFFIX = re.compile(r'^[\s(,:]*?(?:年龄|今年|现年)?[:\s]*(' + _CN_NUMBER + r')\s*岁(?!前|后|时|那年)')
+_CN_PREFIX = re.compile(r'(?<![\d零一二两三四五六七八九十百])(' + _CN_NUMBER + r')\s*岁(?:的)?(?:男|女|男性|女性)?\s*$')
 
 def explicit_ages(source, names):
     source = unicodedata.normalize('NFKC', str(source or ''))
@@ -23,6 +26,12 @@ def explicit_ages(source, names):
             prefix = None
         suffix = _SUFFIX.match(source[hit.end():])
         values = {re.sub(r'\s+', '', m.group(1)) for m in (prefix, suffix) if m}
+        cn_suffix = _CN_SUFFIX.match(source[hit.end():])
+        cn_prefix = _CN_PREFIX.search(before)
+        if cn_prefix and previous and not before[previous[-1].end():cn_prefix.start()].strip(' (,:'):
+            cn_prefix = None
+        from .age_policy import _number
+        values |= {str(_number(m.group(1))) for m in (cn_prefix, cn_suffix) if m and _number(m.group(1)) is not None}
         if name in found:
             values.add(found[name])
         if len(values) > 1:

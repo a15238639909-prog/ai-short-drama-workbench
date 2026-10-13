@@ -48,16 +48,16 @@ window.Pages = window.Pages || {};
         return;
       }
       var requestedEp = (location.hash || "").match(/[?&]ep=(\d+)/);
-      if (requestedEp && ep(+requestedEp[1])) cur = +requestedEp[1];
+      cur = requestedEp ? +requestedEp[1] : +(localStorage.getItem("v43_episode_" + st.storyId) || 1);
       if (!ep(cur)) cur = +eps[0].no;
+      localStorage.setItem("v43_episode_" + st.storyId, String(cur));
       var e = ep(cur) || {};
       var locked = e.status === "LOCKED";
       var script = e.pictures || e.body || e.prose || "";
-      var nextNo = Math.max.apply(null, eps.map(function (x) { return +x.no || 0; })) + 1;
 
       main.innerHTML = '<div class="wrap"><div class="sgbody">' +
         '<div class="sgeps"><div class="col-h sub"><b>分话</b><span>' + eps.length + " 话</span>" +
-        '<span class="sp"></span><button class="btn small" id="sgAddEp">＋ 新建第 ' + nextNo + ' 话</button></div>' +
+        '</div>' +
         '<div class="eplist">' + eps.map(function (x) {
           return '<div class="epitem' + (+x.no === +cur ? " on" : "") + '" data-no="' + x.no + '">' +
             '<div class="epno">第' + x.no + "话</div>" +
@@ -197,30 +197,12 @@ window.Pages = window.Pages || {};
   function wire(main, st) {
     var id = function (x) { return document.getElementById(x); };
     [].forEach.call(document.querySelectorAll(".epitem"), function (x) {
-      x.onclick = function () { cur = +x.getAttribute("data-no"); render(main, st); };
+      x.onclick = function () {
+        cur = +x.getAttribute("data-no");
+        history.replaceState(null, "", "#story?ep=" + cur);
+        render(main, st);
+      };
     });
-    var addEpBtn = id("sgAddEp");
-    if (addEpBtn) addEpBtn.onclick = function () {
-      if (addEpBtn.disabled) return;
-      var originalLabel = addEpBtn.textContent;
-      addEpBtn.disabled = true;
-      addEpBtn.textContent = "正在新建…";
-      return api("/add-episode", {})
-        .then(function (r) {
-          cur = (r && r.no) || cur;
-          location.hash = "#story?ep=" + cur;
-          UI.toast("第 " + cur + " 话已建好，在右侧写这一话讲什么");
-          return render(main, st).then(function () {
-            var brief = id("sgBrief");
-            if (brief) brief.focus();
-          });
-        })
-        .catch(function (e) {
-          addEpBtn.disabled = false;
-          addEpBtn.textContent = originalLabel;
-          UI.toast("新建失败：" + e.message, "err");
-        });
-    };
     var unlockBtn = id("sgUnlock");
     if (unlockBtn) unlockBtn.onclick = function () {
       if (!confirm("解锁第 " + cur + " 话？\n后面已经写好的话可能要重新规划。")) return;
@@ -320,7 +302,7 @@ window.Pages = window.Pages || {};
         }).join("") : '<div class="sub">还没有人物卡。设定页「① 生成文字」会从剧本里整理人物。</div>';
       }
       if (box) {
-        var mine = (g.scenes || []).filter(function (s) { return +s.episode === +cur; });
+        var mine = (g.scenes || []).filter(function (s) { return +(s.episode || 1) <= +cur; });
         var n = document.getElementById("sgScnN");
         if (n) n.textContent = mine.length + " 个";
         box.innerHTML = mine.length ? mine.map(function (s) {

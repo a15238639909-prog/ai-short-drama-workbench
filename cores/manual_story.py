@@ -153,14 +153,17 @@ def write(sid, no, on_step=None):
             result["prose"], _fid = _os_.fidelity_pass(result["prose"], _ev, _au._q, brief=current["brief"], on_step=on_step,
                                                     preserve_story=True)
             result["review"]["fidelity"] = _fid
-        # P454②：段落中间的「女：台词」提成独立行、说话人对到卡名（否则台词编号器一句认不出，整话哑剧）
-        try:
-            from . import asset_core as _ac2
-            result["prose"] = _os_.lift_inline_dialogue(result["prose"], _ac2.list_assets(sid, "characters") or [])
-        except Exception:
-            pass
     except Exception as _fx:
         _fid = {"verdict": "error", "err": str(_fx)[:160]}
+    # First and later episodes use one lossless source contract. Keep the exact
+    # model source and unresolved metadata; never discard repeated/short speech.
+    from . import episode_contract as _contract, asset_core as _ac2
+    _script, _dialogue, _source_report = _contract.prepare_source(
+        result['prose'], _ac2.list_assets(sid, 'characters') or [])
+    result['prose'] = _contract.plain_script(_script)
+    result['review']['source_contract'] = _source_report
+    if _source_report['issues'] and on_step:
+        on_step('正文原话已完整保留；%d句说话人将在分镜前按上下文自动核对' % len(_source_report['issues']))
     latest = story_core.get_story(sid) or {}
     sg = saga_core.get_saga(sid)
     target = saga_core.episode(sg, no)

@@ -1,1242 +1,1647 @@
 [
   {
     "path": ".gitignore",
+    "bytes": 1621,
     "sha256": "6eecfc9c59a4d8482291c9ebecf45c62ea00fde8035778b11b1e6f0707e998d9"
   },
   {
     "path": "CHANGELOG.md",
-    "sha256": "606b6ac33ff2bc96c0e7c9056479dc00d2da42b157ba7cf612cf67f1a60f9670"
+    "bytes": 15814,
+    "sha256": "1743a3a86a25aaf2fcad16f244ab52dcbcf9972dd5ca33cb27c0fa0afcdf4ac5"
   },
   {
     "path": "FREEZE.json",
-    "sha256": "619ab809f3f724ef4d76d9be80b3a86d4ef9426a63b7b9480144551930f8b482"
+    "bytes": 1008,
+    "sha256": "16e97d5af7ace9ed8307518dc0e59160a3b08bcb932e84922abd187123e3797a"
   },
   {
     "path": "LICENSE",
+    "bytes": 1074,
     "sha256": "4ba4dc1ed4e02e25d8b4cce32fcd03df36cfb1a38371507fc673113ffc75c5b1"
   },
   {
     "path": "README.md",
-    "sha256": "a58d4de73cf0cc2cdbd421ce1c05ba51bbd17287b77c1e66370367f9fb589d03"
+    "bytes": 22222,
+    "sha256": "4f2b7f2ad1ed86809f3763f05e40311f9061de760df99157402e97d25724a315"
   },
   {
     "path": "RECOVERY.txt",
-    "sha256": "727afdfebcd8c97a9916677d2c3579fea94e3d15f4753f8305d43ec699811e55"
+    "bytes": 912,
+    "sha256": "303b647df03268e81f10286ae646f4daa5d6b7cbb592a48e89efeb979723607c"
   },
   {
     "path": "VERSION.txt",
-    "sha256": "aa27ce50b634da2bdf4eb39df35d819271519faedb3c3b45d441af96f1b94a8b"
+    "bytes": 5,
+    "sha256": "d88a30fe58c1903da23e3192f5303249a2e537caae12c40b867632175e5772e2"
   },
   {
     "path": "_legacy_8848/album_v3_core.py",
+    "bytes": 144984,
     "sha256": "daf1e78497bb69a8c5275508ddfc15d661ce63823f02fca035d142e9166881ce"
   },
   {
     "path": "_legacy_8848/app.py",
+    "bytes": 1714018,
     "sha256": "65b5f5a2e11b5a77ac7220f58cc678db301fa41b6e2d29b5ec56cc5e030e5805"
   },
   {
     "path": "_legacy_8848/character_asset_lib.py",
+    "bytes": 2980,
     "sha256": "b097ce0cea81bf280854e0397560d30d89f72cab3c383f595c822d3ab5564f4e"
   },
   {
     "path": "_legacy_8848/character_design_core.py",
+    "bytes": 41844,
     "sha256": "c965320977dbdc7e0d9229c2a6aeb602f5c1eeb65904d1dd8101e77509731a95"
   },
   {
     "path": "_legacy_8848/krea2_workflow.json",
+    "bytes": 4699,
     "sha256": "7884175f65556a23281d58198615f45d5d8ddbbf75d08b14b8222357252b007c"
   },
   {
     "path": "_legacy_8848/photo_v1_ui.js",
+    "bytes": 31858,
     "sha256": "33b7396f547a201cfd9cf7e795165d59171f21215dede3d32afd45eeec02c8f8"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/__init__.py",
+    "bytes": 520,
     "sha256": "99d4b6a94ecaa610008249309204bbc6b8d80175bd872ab20f421891990519b1"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/album_planner.py",
+    "bytes": 4583,
     "sha256": "72e777e033d42ea33b0df1bdd6ae98e6b2e37191012e7f526bd463c144c996b1"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/models.py",
+    "bytes": 2820,
     "sha256": "85260c53d92f20097363878240e3ebea7c8b86e0228d4dae067f0f893f2d36f4"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/photography.py",
+    "bytes": 4567,
     "sha256": "91206e39af5d924172bfe2534bf3788d6fb2a270e5460a93b940dd6fde5395a2"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/prompt_builder.py",
+    "bytes": 2257,
     "sha256": "0db6356e14531eb9a3802f3d64510a33f8f39902a54bcb7f4c53fadedca24552"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/scene_pool.py",
+    "bytes": 25002,
     "sha256": "d357ee98ca05334d31c4d7d5788b87ce5d33f85c3b5471511ac7871de68bed1f"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/core/portrait_kernel/wardrobe_pool.py",
+    "bytes": 2914,
     "sha256": "471d1f7f30f7f21513ea40a96f9188d60ef7515c327d21fdd205bd22551f7143"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/domains/__init__.py",
+    "bytes": 210,
     "sha256": "9aa7ca6f125bfedcf87f5ad0dd9abd036f82e4bf64fa38838532a3b436df2e18"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/domains/real_world.py",
+    "bytes": 2363,
     "sha256": "c9a29d60fb8695bf1519f6ec48410c74f15ea615fc86e8db9bc7d6f643067626"
   },
   {
     "path": "_legacy_8848/portrait_kernel_v1/domains/space_life.py",
+    "bytes": 2307,
     "sha256": "1eb24d3e7f0078e5de3e1b1ec813ba3adbd62e47d989b8d714bf438b0a1f71af"
   },
   {
     "path": "_legacy_8848/portrait_v1_core.py",
+    "bytes": 29173,
     "sha256": "3e58ef5cc100628b50bef3e4f02e518f97d21823647ad793e42c5910d22724b2"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/__init__.py",
+    "bytes": 401,
     "sha256": "8b4ab9fdb96d22ae04f7f2a8d4bb8ab2499a8ea21e4b295dffa5bd9cb9b48a03"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/audit.py",
+    "bytes": 9650,
     "sha256": "80fb98baa96bd4a338da96377d82d12377ced56632fa7e36ef7ae584c80bef31"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/contracts.py",
+    "bytes": 43922,
     "sha256": "47924eaa1bca9485b8917431a5f3755f05735fd112920b284c5f8efef8ef05ab"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/models.py",
+    "bytes": 45392,
     "sha256": "89a71fedd9f3ef5ec9237c2ab657357d51bb24803d91002641319a412c320352"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/pipeline.py",
+    "bytes": 26390,
     "sha256": "d5a6f805d0a88315b52293d03ebbf2b8f93c240477c6523721de4cd772557e0a"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/planning.py",
+    "bytes": 164218,
     "sha256": "dea6961ae2f883fc65dd90c333a76a69e1b2d37704f61eb084454b43a47a7bb0"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/prompt_compiler.py",
+    "bytes": 16140,
     "sha256": "6ba5ac925e021e6120b09442d6de7727d0b874f0deb89c7463d080049a8f0cb1"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/slim_planning.py",
+    "bytes": 32365,
     "sha256": "33ce5d2125c1bcb4296e361c5661c8fdd697bea3a49c16a467fb096803c8dad2"
   },
   {
     "path": "_legacy_8848/stable_fullpage_core/storage.py",
+    "bytes": 4941,
     "sha256": "8c025f6a9c7281b66a85a6c5338b7224fca7e54a705dbd064c09de87983aa49b"
   },
   {
     "path": "_legacy_8848/video-presets/minimaxH3官方提示词模版.txt",
+    "bytes": 21069,
     "sha256": "d86dd25a7f354a052ad9ee1e49dc6cd2a9ce922d0d131139d0137daf3201c8fc"
   },
   {
     "path": "_legacy_8848/video_gen_core.py",
+    "bytes": 32759,
     "sha256": "1975fce8d65aeaa21f5e9fb241ede2fedb884d8b3fd7956ad22ed221e70f685f"
   },
   {
     "path": "_legacy_8848/video_gen_workflows/i2va_fl2va.json",
+    "bytes": 2573,
     "sha256": "b2bc64bd6b158dc583c7d85d56d59f9e6630c8da5c789d8c87390e4ec97674ee"
   },
   {
     "path": "_legacy_8848/video_gen_workflows/ref2va.json",
+    "bytes": 2647,
     "sha256": "029ab0f7ef632bdb7117564a8ac48eb6dd8a02bdc8c33a486da4c649df916cbf"
   },
   {
     "path": "_legacy_8848/video_gen_workflows/t2va.json",
+    "bytes": 2538,
     "sha256": "c6e479149507bb6307bacd0a0951a8fbfe8fdca936b7dafc89407e8305e037bf"
   },
   {
     "path": "api/__init__.py",
+    "bytes": 3310,
     "sha256": "f1b5750512b8d73f88b32cdfb6eee90d6636ae5c9e0d910d6cdb46bc23b66cf6"
   },
   {
     "path": "api/_shared.py",
+    "bytes": 1112,
     "sha256": "f79a875e65cc3cebbb541ed397cecd963a8457203f901db03e687fa59e4a622c"
   },
   {
     "path": "api/assets_api.py",
+    "bytes": 3388,
     "sha256": "085b400919aa3a5727d1a0fa8ec014d8b453358e759a134a761bb0fc409d2c22"
   },
   {
     "path": "api/chain_api.py",
+    "bytes": 1430,
     "sha256": "1f79d6e831228d5ca12235d12ee3f9c23c69df737a7695167130ca711bf210fd"
   },
   {
     "path": "api/config_api.py",
+    "bytes": 10704,
     "sha256": "3fd4db9aff395e8bff86eace7b5ffbf86d7f09409532d9a123088808e23d5c1b"
   },
   {
     "path": "api/download_api.py",
+    "bytes": 6076,
     "sha256": "883f1bb71844d21277e83b27828b06d8949784f7d618e32b7d9e0c243a2eaab3"
   },
   {
     "path": "api/gpu_api.py",
+    "bytes": 2906,
     "sha256": "638e241d3a34258e82950db0fe32e27ee9bd153052a04844c07e62dc217278fc"
   },
   {
     "path": "api/history_api.py",
+    "bytes": 11446,
     "sha256": "92380cbd3a42e3ae260b95f3e554fe67074054349590650df176be1086125714"
   },
   {
     "path": "api/image_api.py",
+    "bytes": 5112,
     "sha256": "49e2eb4aca8341589fafa79cc8c06d1669fcbbed644d5f1021f8c804bd04923a"
   },
   {
     "path": "api/motion_api.py",
+    "bytes": 2626,
     "sha256": "f6cc649d3025e4fd2eeb01d92333dc8f8ede60ddd6d82afa5c729b19bba50d08"
   },
   {
     "path": "api/recovered.py",
+    "bytes": 8026,
     "sha256": "68a43f3735e1a900f2ae204e310ea48e12e54ec37cbee6240d8b5a3b52dd516a"
   },
   {
     "path": "api/saga_api.py",
-    "sha256": "e4b1c152787f651e7fe3be94df3c94e2d3ffd648dbf91fb74d07e21e47be5ee2"
+    "bytes": 238758,
+    "sha256": "2c22d8b960530f58782beda39d569c2676b6a29cc96ee4d5cd96e3d4e67bf85c"
   },
   {
     "path": "api/segment_api.py",
-    "sha256": "35d93ecafc59d839d030c41edafb803162bb84676c4709a1234be465cd6a031a"
+    "bytes": 107312,
+    "sha256": "16cea52ecfd76c593ff1dd853e5b7706f3c14ac31dae6a4ee18e77ebb5e1c850"
   },
   {
     "path": "api/settings_api.py",
+    "bytes": 40161,
     "sha256": "c3e832e1ccee69a3561cfb7f79157872e54bbe6e1b3c6f14b3e7461bb19a9fa2"
   },
   {
     "path": "api/story.py",
+    "bytes": 20020,
     "sha256": "9858d189b3c4517dc38f7955fb5733dde34259dac98a06aa95dd05db06c38039"
   },
   {
     "path": "api/system_api.py",
+    "bytes": 1251,
     "sha256": "7d657a29cf4d1aae70a4cd630fe09927a1a144d3070ad743aaec38f72a179e3b"
   },
   {
     "path": "api/timeline.py",
-    "sha256": "d05c1a2d1f5283b2bd01e841ab13dbf922c5e9b9146e88a802e1db8c908a89df"
+    "bytes": 89306,
+    "sha256": "d916d3381031e61b2b6216b463dcaf3c35e89a6fa56dd86fc9262406debd77e7"
   },
   {
     "path": "api/video_api.py",
+    "bytes": 9215,
     "sha256": "2715ade1afb8c605d82de29d5e03c9b0df7551c41a4097516fb0d0d7523b61f6"
   },
   {
     "path": "config.example.json",
+    "bytes": 358,
     "sha256": "d7de10c0eb883b31b5c6dd4e86a8e755fe48dcd1b4832f3a8f177426329b852b"
   },
   {
     "path": "cores/__init__.py",
+    "bytes": 0,
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
     "path": "cores/age_policy.py",
+    "bytes": 1632,
     "sha256": "11ba2964ff2054bd214b4566d952afe3d67890493155caa6cbac72de1b79fde1"
   },
   {
     "path": "cores/arrangement.py",
+    "bytes": 46384,
     "sha256": "0e627866ba115538a698d7b69fb321b277013f454193c86a6dc361cacbe9b910"
   },
   {
     "path": "cores/arrangement_ops.py",
+    "bytes": 7052,
     "sha256": "e4f4f55a234ddc06215a53ff9afbfb6187d20a15b5c9d314baa89c00a60444e1"
   },
   {
     "path": "cores/asset_core.py",
+    "bytes": 62691,
     "sha256": "c271d429c01e0367c2276bb36eb17f54be306c02b435089f9a139357c359b116"
   },
   {
     "path": "cores/authoring.py",
-    "sha256": "ba2a9f535668f706bede1323effb3c9d0b1d3d63b2a6a9f7258920e3e6917d06"
+    "bytes": 873882,
+    "sha256": "3a2a811ed6a630866a283651525156b9e4e6c293c8d736288f0eb57afe0bbdc1"
   },
   {
     "path": "cores/auto_repair.py",
+    "bytes": 5457,
     "sha256": "98a8d6be8afe2c7245883eb981b01cfd66c8609a27a4c0b077855acb24e03c58"
   },
   {
     "path": "cores/camera_view.py",
+    "bytes": 9277,
     "sha256": "0dd9c6454eb41ec20e28c471ffd59300627e6bbd14cadb124ebfdac41584099d"
   },
   {
     "path": "cores/canon_core.py",
+    "bytes": 9618,
     "sha256": "9187410584a3f8c9f01022993657e030ba296c40e56fd56d7f47385da1a2084d"
   },
   {
     "path": "cores/canon_guard.py",
+    "bytes": 6284,
     "sha256": "a6ab4544cfe46f20939902112cdacfdf5abbd535264b04699d764f0c4a15479e"
   },
   {
     "path": "cores/chain_core.py",
+    "bytes": 13443,
     "sha256": "5fab1c0b51367e2f96a352291569ee33c25eaf1cd30e192c4ab2cb42b32ec0e3"
   },
   {
+    "path": "cores/character_clothing.py",
+    "bytes": 3717,
+    "sha256": "9485346570cd33a65d05a2d37a2517e0f35d86767a5421a227b84ea029a7913e"
+  },
+  {
     "path": "cores/character_facts.py",
-    "sha256": "5b2cbd834193355a2aa6b4ceb0c8a1eff88e75d41438d729dc74d1a2c05a99d0"
+    "bytes": 3488,
+    "sha256": "947d5a9b10207c43497a79fa1d5a57cac028211c22bbb550b260913e0dc58222"
   },
   {
     "path": "cores/character_setup.py",
+    "bytes": 4638,
     "sha256": "7bc2d69b612d2bc224f3ddb3b38d2120787d366310bc70925f71d72784ceafe0"
   },
   {
     "path": "cores/consistency.py",
+    "bytes": 20078,
     "sha256": "cb2a5de9877b46ed8295c150b2c5f8a0eec5ff274f05d7d654612784499cebcd"
   },
   {
     "path": "cores/context_engine.py",
+    "bytes": 2987,
     "sha256": "17400c0e94c683332eab5c5b0910bd8d0bf59f1f8e6ef36c1a43b8d43ada854c"
   },
   {
+    "path": "cores/continuation_assets.py",
+    "bytes": 9788,
+    "sha256": "cc645d92d6b6cad382a5250240509e7a75d9ac5252b9c4631d0c6dbcbb6d0657"
+  },
+  {
     "path": "cores/decisions.py",
+    "bytes": 8154,
     "sha256": "74e597e129f6c958fdc1c8831c064c6fb1fd7135a73772dbd4b04b6fdf6ad2f4"
   },
   {
     "path": "cores/dialogue_ledger.py",
+    "bytes": 13239,
     "sha256": "d4a2d0fadcd11e39c150ec46378234636b17f6493f152955385e8ae8af9f323a"
   },
   {
     "path": "cores/director.py",
+    "bytes": 92143,
     "sha256": "06e509ca2a78c58e76b81e17534c8806abd9ef41d440b758624941f0b8d9b851"
   },
   {
     "path": "cores/director_flow.py",
-    "sha256": "296f5cdd5e12c6e47d8b11169410443fbea54d2a61c69cb27e582364c50e2f52"
+    "bytes": 48973,
+    "sha256": "b1bff725afd599ff973aba9356eff636598a47d3f3ae28897bb54009a483a532"
   },
   {
     "path": "cores/director_layer.py",
+    "bytes": 24959,
     "sha256": "e88284bac01fc055cec8d1e1a3671ff66e8f70ac63c20a40dcd7e514b9a09b71"
   },
   {
     "path": "cores/director_shots.py",
+    "bytes": 66563,
     "sha256": "d3dea1c487ac57e4074fcc42583899788f1a7bd058c2717df2b83bad8c93e89c"
   },
   {
     "path": "cores/doctor.py",
+    "bytes": 5008,
     "sha256": "e0a6d885790aa24d732daec0de98678712f53185cb46d3f106c002a9009a8613"
   },
   {
+    "path": "cores/episode_contract.py",
+    "bytes": 18991,
+    "sha256": "dcfa100ad04c5fa8595c15db7144c3f0bd4a51cb5791802b348465344fdd17ca"
+  },
+  {
     "path": "cores/episode_ledger.py",
-    "sha256": "63ee58901d584a2b447b94f5efe37b5e223c775c445bbe6f01316c128f9ec531"
+    "bytes": 7700,
+    "sha256": "a24605e8480f481c29a0bd86a5c6f56ae620f50de407eb5ee49fc3536d9fea6e"
   },
   {
     "path": "cores/episode_merge.py",
-    "sha256": "9db16217f30e973eacde309ec5da2b6fe616090fa23e3d9bae8ecf24cc41bdcb"
+    "bytes": 5629,
+    "sha256": "3d62d643c79711425f536b9020625cad399c02426585e8f8399a24b6c70a8b8b"
   },
   {
     "path": "cores/expand_core.py",
+    "bytes": 2902,
     "sha256": "7c24135ccee7b40767171eb8d688c0b4e4409477e3fafe9eeb07687356f9d13a"
   },
   {
     "path": "cores/gen_history.py",
+    "bytes": 2465,
     "sha256": "bfb79321c8e54c42204c03ccfdc39197a5e569ebf21bcca9e29b4058f219a200"
   },
   {
+    "path": "cores/generation_recovery.py",
+    "bytes": 4800,
+    "sha256": "f92b2518ceb5831f256e6b941986fbcf3b3443a58156c9b52eed0bbb62dd92b8"
+  },
+  {
     "path": "cores/graph_core.py",
+    "bytes": 6435,
     "sha256": "af6f3d5b39fc8244378b0674c7a8371b927dabb7788062e7b10a2e3cd4858003"
   },
   {
     "path": "cores/h3_format.py",
+    "bytes": 7311,
     "sha256": "5022723a22890320c08a4740598c9f9cb8bf458aa0198d9120c6330fbca3647e"
   },
   {
     "path": "cores/health.py",
+    "bytes": 13892,
     "sha256": "7bef07683f8ed5b86d3a2130840adfad87f19ffaf49ac66965c54cea723478c0"
   },
   {
     "path": "cores/kits.py",
+    "bytes": 16629,
     "sha256": "bc5981112cdd7f8716e1e3afdd88071d05ee9fb4923d57ea00f299949051b7ad"
   },
   {
     "path": "cores/manual_story.py",
-    "sha256": "3e02c48c37e1f57f2831b27a0fc9af2d9b4598d9a49fdfd5ad67d4cc302045c7"
+    "bytes": 10254,
+    "sha256": "ecc7f99561a2b55bd36be4a3f139f12661e194d47b263289f0489ba4b6226b11"
   },
   {
     "path": "cores/model_json.py",
+    "bytes": 4352,
     "sha256": "02f1656d08e68721d3acc83c29c4e7c82d68d1464387e139ee9e3f395f4e54e3"
   },
   {
     "path": "cores/motion_core.py",
+    "bytes": 20309,
     "sha256": "2b2e8bdfc06a1b34cc84b94a757e5f2145dd4349a0acf7db364a6087b59e533a"
   },
   {
     "path": "cores/motion_features.py",
+    "bytes": 5243,
     "sha256": "f80e62c8431c48d0a3b9a5fb0dff0783f02c94fe09b535c8b79688c3d01db49f"
   },
   {
     "path": "cores/motion_prompts.py",
+    "bytes": 7749,
     "sha256": "54d479d799e7b8e06812d64817bd7e2c73b340bd53526732849d8547a99f1e2e"
   },
   {
     "path": "cores/motion_timeline.py",
+    "bytes": 4021,
     "sha256": "4fb2c819fdd066ef6ecb4aeae4cd74342a0d6f673e09a225b78929ec4982f561"
   },
   {
     "path": "cores/motion_upload.py",
+    "bytes": 3181,
     "sha256": "608586ede25a66c3fbd165add25b86219b96c75c86f115bfc6e7551fdab97e5c"
   },
   {
     "path": "cores/narrative_core.py",
+    "bytes": 9215,
     "sha256": "8a14662387967f5952036ca30542cea99be5cb9864d6eec494aa447bcaf37fbb"
   },
   {
     "path": "cores/one_shot_setup.py",
+    "bytes": 17970,
     "sha256": "96a05f1891378eb600cee449ff31e5ffd246fec9b33ecf034b29c76c64262857"
   },
   {
     "path": "cores/opening.py",
+    "bytes": 9222,
     "sha256": "f21a66e82f89894365c9c0ebd2ec6f76d6570a0e8d17755f7493d04fd1ba8a25"
   },
   {
     "path": "cores/oral_story.py",
-    "sha256": "6c4d635ed271952707610a39b5469ced9cf255c136c05f88d0dd4f292f62c4aa"
+    "bytes": 107498,
+    "sha256": "37bcf8883d45dd8d374d0dfdf8670b8159eb550e4dfb99eb7219eeab1f2edf08"
   },
   {
     "path": "cores/pace.py",
+    "bytes": 4926,
     "sha256": "f652cda1fdbd83bbc9ec7a259d66498f7c6c5984247544b899b2417c41362f9d"
   },
   {
     "path": "cores/paths.py",
+    "bytes": 3341,
     "sha256": "d2730d5740f92bf88e489f80b66294555d8c0272dd4c6931ee6650ed14e65ff7"
   },
   {
     "path": "cores/premise_guard.py",
+    "bytes": 3660,
     "sha256": "2c552f9b489a5c076f8bf5a7ddf46204888da7513ea9c96ff3adb4ca1b2181e0"
   },
   {
     "path": "cores/profile_core.py",
+    "bytes": 1032,
     "sha256": "0a5eb167fb8272d07dc3fa77dac046e793d3eec134c56ef25b1f7e1e493ac892"
   },
   {
     "path": "cores/project_prompt.py",
+    "bytes": 52075,
     "sha256": "03da85678435dc1c74a32473dd3f808e05a985bc7999d764039eee69d159cf5f"
   },
   {
     "path": "cores/project_settings.py",
+    "bytes": 10790,
     "sha256": "ed97943cd761c478e88d66d20c7977649ca4ec0d71ec55a27bb43b6527986020"
   },
   {
     "path": "cores/prompt_hygiene.py",
+    "bytes": 5377,
     "sha256": "4535ba9211b6f99ad9ee0559c9e6cc298979c5630d8df07988af893dccb459b8"
   },
   {
     "path": "cores/prompt_writer.py",
+    "bytes": 24620,
     "sha256": "f1f10b383278c6b3aa07cc0d516f77f2f90fad2fd1a5c3f413ff5ed8759344e6"
   },
   {
     "path": "cores/prose_edit.py",
+    "bytes": 4505,
     "sha256": "90245a7345019e45f455ca185f5f6160626fcdc9ead4a802dc33b46ff201da5e"
   },
   {
     "path": "cores/quality_core.py",
+    "bytes": 83186,
     "sha256": "853bd95fa89779b117894e05ab4fc490546f2b7d1e5091ff9ed1d50c215f640e"
   },
   {
     "path": "cores/reasoning_policy.py",
+    "bytes": 2798,
     "sha256": "10a17204314839c89383a28525a9c02d5c27d73827409653b8fbb22a4bf8f3be"
   },
   {
     "path": "cores/reference_budgeter.py",
+    "bytes": 2755,
     "sha256": "36e8a69ea0ad3e43bc51e2a6bc47506aac2cf1ec536f153344d4022a9cf8ed84"
   },
   {
     "path": "cores/reference_ready.py",
-    "sha256": "d1316ec1e530d66b9bc71d599b32a7d33c5ef26a85d8f18e5965af9ba992322e"
+    "bytes": 8043,
+    "sha256": "987071b8f8e714ddbfa4dccf12abffef6b0a49744bf9412d473368d6a1978723"
   },
   {
     "path": "cores/runtime_core.py",
+    "bytes": 32704,
     "sha256": "a9c994264a36df9df5767927bc2f26bcf56921dbc695cc2d4b876f79bf6c645b"
   },
   {
     "path": "cores/saga_core.py",
-    "sha256": "7ba07fc4a7054b2efa750163e04eeb02a545ac88d85023479f0bad3fdaf315be"
+    "bytes": 36115,
+    "sha256": "7fbb85631f0da8cc9deaf2129a2017ddeaca282e2f9d969a41b486db4121214f"
   },
   {
     "path": "cores/scene_layer.py",
+    "bytes": 40518,
     "sha256": "cbe2aebd5413c75aa21e130515f49759edbba5971b0f4ea324f82843b41b56b0"
   },
   {
     "path": "cores/screenplay_norm.py",
+    "bytes": 16083,
     "sha256": "c63c3b26fedc2062dd0f2b63db9c916e1306b49715f802aa40fd83c51e39a9d2"
   },
   {
     "path": "cores/script_text.py",
+    "bytes": 4323,
     "sha256": "e401f04a5e5fcd1946e2f9741adfda4684e922f4e2d6bab3e18f55c69d5004d9"
   },
   {
     "path": "cores/seam_v2.py",
+    "bytes": 35638,
     "sha256": "bdf68da14ed6f0045eee0e6ffab2f33296ad4edec9daddf767231e91e2254ba5"
   },
   {
     "path": "cores/shot_edit.py",
+    "bytes": 12042,
     "sha256": "6aa19efab474eea520b38e5746526e29f7f74181820a5c6869708743cca3eb8d"
   },
   {
     "path": "cores/shotlist.py",
+    "bytes": 80782,
     "sha256": "abb1c9fdc190834bd07a04ae6b8ebbf97cf43eb74a8d82e32ac9c4beb8f1a15b"
   },
   {
     "path": "cores/stage1_core.py",
+    "bytes": 31299,
     "sha256": "a8ab05753748d5bf337392d958b4996be04a9a4c001c96c8612abf876c23d983"
   },
   {
     "path": "cores/state_core.py",
+    "bytes": 11942,
     "sha256": "57aa414df3917120ba59df4455c3f89735c7666d4f359f2d1247d94a2f71cd4c"
   },
   {
     "path": "cores/store.py",
-    "sha256": "cdde1c8020a1a68085c59729f40f23b9a0c39064902f4b814434ba395b386186"
+    "bytes": 1755,
+    "sha256": "bd5feffebb32bfa66e7691047b9e95274657e0e04a3146d7e79ef84c41ae3950"
   },
   {
     "path": "cores/story_core.py",
+    "bytes": 5949,
     "sha256": "99914a7f3f4a437b76f6e461eb6883305396fc70c95c06515bdff3ad2c203a4b"
   },
   {
     "path": "cores/story_gen.py",
+    "bytes": 57107,
     "sha256": "ed83fe1374624dfb2aa16a3dfbbeb33c81a0d840d6cdff3c77a66c929af44525"
   },
   {
     "path": "cores/story_layer.py",
+    "bytes": 6185,
     "sha256": "664c648a73243d33749cb9ed234e1519df0ff849924035c181c7d5d83384f777"
   },
   {
     "path": "cores/story_plan.py",
+    "bytes": 249481,
     "sha256": "54e4082f21a4e052f370fb749f4bf792a3ce518ffc7740cc951c5aa4cf237487"
   },
   {
     "path": "cores/story_profile.py",
+    "bytes": 10097,
     "sha256": "a45baf73e33d4b0fa67cbd2ca5378aa494edf7f2784f2530dac870581e737046"
   },
   {
     "path": "cores/story_shape.py",
+    "bytes": 18293,
     "sha256": "a9ae727a155cd5d044b4702c94cfcf37d337928ff1a25c1e1211ce0967ae96ac"
   },
   {
     "path": "cores/style_instruction.py",
+    "bytes": 12648,
     "sha256": "342d2f35b326fb3f50ce29584a7ecadb9dc7dd119b01c082912f4e47ff81dc73"
   },
   {
     "path": "cores/style_presets.py",
+    "bytes": 47273,
     "sha256": "d030f4ce75a2d1946b181edd354665b314e7182d0937ed8925317f40f4ecf406"
   },
   {
     "path": "cores/text_checks.py",
+    "bytes": 25070,
     "sha256": "fdd4c84907dc075637339e03c7c7afde2ed4e28251395cb184229aac5845a7ce"
   },
   {
     "path": "cores/textchain.py",
+    "bytes": 20917,
     "sha256": "0adea4089b4c01ed8aba710caf59ad01205232b5603f00d462b074d8fd1389dc"
   },
   {
     "path": "cores/universal_writer.py",
-    "sha256": "61b93d4f43e5d9203dd45158aa3c12258a07f1a351d3b2a43f77d6bf41ff1e5c"
+    "bytes": 41231,
+    "sha256": "59cd44a3f4281cc307d930061505e67770d9274bc6e96394eacb037a36221887"
+  },
+  {
+    "path": "cores/video_continuity.py",
+    "bytes": 18902,
+    "sha256": "fdd556cf391b814efb17e69d274399e4f8e36fddea345b353a4ef943feaee8dd"
   },
   {
     "path": "cores/video_layer.py",
+    "bytes": 14168,
     "sha256": "3ddb78e7275b64d069426ff8b9e0e3d6de4a3999323c21aa31ab5d95ed82c148"
   },
   {
     "path": "cores/wardrobe.py",
+    "bytes": 21916,
     "sha256": "8365d60048e572e8344cf30d1cb817bfce61c59851058fd3d314358f103da51a"
   },
   {
     "path": "cores/whole_plan.py",
+    "bytes": 85992,
     "sha256": "70c8e6139993cb7299b8929f2e1eae074d234b9994fd0ac88c218e26e27b633e"
   },
   {
     "path": "data/global_defaults.json",
+    "bytes": 141,
     "sha256": "6ff6f843581a0f8e1d752591c2f37ccb8c214b8d00f361038c711abc41c75a7d"
   },
   {
     "path": "docs/ARCHITECTURE.md",
+    "bytes": 5318,
     "sha256": "b7155b1b01932d4fb7329d3e9829fa196e9a2d9620f23db88035c63a66e2d515"
   },
   {
     "path": "docs/BUNDLED_TOOLS.md",
+    "bytes": 4201,
     "sha256": "e6220bc2a3422cd68a28d8bfa758347798e80771a2d0d326bb13118c913a6519"
   },
   {
     "path": "docs/MOTION_AND_ANIMA.md",
+    "bytes": 5124,
     "sha256": "1d089cf0892c61b2fe38f1d810e6f7ba88413c98531851aeb833ba16fe083539"
   },
   {
     "path": "docs/RELEASE_v1.02.md",
+    "bytes": 3173,
     "sha256": "2f1df5d660d35f7c9461c795d08baac3a3d9015723758516cd1a553b5a5edaac"
   },
   {
+    "path": "docs/RELEASE_v1.05.md",
+    "bytes": 3973,
+    "sha256": "7865a3106a56232226c6bc5e444d48041ff04c483bb0ef522a47b756801f2660"
+  },
+  {
+    "path": "docs/RELEASE_v1.05_CHECKS.json",
+    "bytes": 854,
+    "sha256": "d3ad759923dd0bac9875ae5f82c5ee758bff0c525bd99d0d88da61ef419351cb"
+  },
+  {
     "path": "docs/data_schema.md",
+    "bytes": 5646,
     "sha256": "ad24b4d9050a5dedd915027b265927662a25996a8b4a6a3dcd7c39d26eb554b6"
   },
   {
     "path": "docs/id_relations.md",
+    "bytes": 2250,
     "sha256": "4c4dd8d8d13b096bfec0c8bb9e0961df545904c4e65530bdab94cec1f6190c13"
   },
   {
     "path": "models/__init__.py",
+    "bytes": 0,
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
     "path": "models/anima_client.py",
+    "bytes": 8871,
     "sha256": "aade5a4461e8edd6dab944e5edcd37d536e49b7adaeb74280c1d3f0811e19106"
   },
   {
     "path": "models/anima_workflow.json",
+    "bytes": 1212,
     "sha256": "3a4cdc0008b5bf0bf76b15ee272088178a7e79446b3453ed658b36b8af1578c3"
   },
   {
     "path": "models/gpu_manager.py",
-    "sha256": "29ebcce130ceaae0333d37dd1de10301dcfa8161150ebdf03289a7ea39f761be"
+    "bytes": 11254,
+    "sha256": "e25a3a5e371ea3b048bdadd41405ea1d0ca8efa45755cfc852d481aa3886a424"
   },
   {
     "path": "models/h3_client.py",
-    "sha256": "21c8488a7835c7fa88d5860bce2c6b401a6b77e9ffcdb2ccb7a48c1c70cca170"
+    "bytes": 25405,
+    "sha256": "48d35bbf96930ecc4014c527b85708a59dec8b74da81291f46c4cc9aea731aa3"
   },
   {
     "path": "models/krea2_2stage_workflow.json",
+    "bytes": 6230,
     "sha256": "c15ceca408e4ade100b2133ebdd476f1ad7068dab7d6f8f79c37ed0da55b266f"
   },
   {
     "path": "models/krea2_workflow.json",
+    "bytes": 4699,
     "sha256": "7884175f65556a23281d58198615f45d5d8ddbbf75d08b14b8222357252b007c"
   },
   {
     "path": "models/krea_client.py",
+    "bytes": 9263,
     "sha256": "1e8a5ea5bbe434634e8c9e75e76d8d08ef4589154e0480db8868f692cc169c9e"
   },
   {
     "path": "models/krea_edit_client.py",
+    "bytes": 7427,
     "sha256": "6cfcac7644b518c3f0a4178911a65875f46f4c7f250868f4ef51f85148ecff99"
   },
   {
     "path": "models/qwen_client.py",
+    "bytes": 15084,
     "sha256": "9c2391a8ca60a5d43103137dba610c9b6152cc9f4564e36f0efc579d7f20dacc"
   },
   {
     "path": "models/video_workflows/i2va_fl2va.json",
+    "bytes": 2573,
     "sha256": "b2bc64bd6b158dc583c7d85d56d59f9e6630c8da5c789d8c87390e4ec97674ee"
   },
   {
     "path": "models/video_workflows/ref2va.json",
+    "bytes": 2647,
     "sha256": "029ab0f7ef632bdb7117564a8ac48eb6dd8a02bdc8c33a486da4c649df916cbf"
   },
   {
     "path": "models/video_workflows/t2va.json",
+    "bytes": 2538,
     "sha256": "c6e479149507bb6307bacd0a0951a8fbfe8fdca936b7dafc89407e8305e037bf"
   },
   {
     "path": "portable_start.py",
+    "bytes": 2864,
     "sha256": "669f6f6303442e6d5078e2e91dabb9b22a5586bd37d9b833b05e212680e975f3"
   },
   {
     "path": "presets/8848_底层定义原文.js",
+    "bytes": 43085,
     "sha256": "b756594ba453efd31f8b4fd70a5dec558aeeae9436567c26caf536fe5b6aa21f"
   },
   {
     "path": "presets/_指令词清单.json",
+    "bytes": 11886,
     "sha256": "21e332a1fa4eb08ae1e85b5d2d74944414cfb5967a308cc7a96e6bf9ade143b3"
   },
   {
     "path": "presets/character_settings/示例·华丽东方玄幻主角.json",
+    "bytes": 1800,
     "sha256": "0e460d59e099893aaa075d8ab5edc1545926af5f8502e2e0351b19418652bda8"
   },
   {
     "path": "presets/comic_styles/3D游戏.txt",
+    "bytes": 533,
     "sha256": "5666cc2e25434d0bf6908fff94a2ab500ac4630877f8a0c86f9488e32bb26ac0"
   },
   {
     "path": "presets/comic_styles/Krea2·3D游戏模型.txt",
+    "bytes": 739,
     "sha256": "e78c144b94d57b4305c2d3314d2c07d74b479375c7c89849240775720750216e"
   },
   {
     "path": "presets/comic_styles/Krea2·80年代胶片电影.txt",
+    "bytes": 580,
     "sha256": "c1c21ba3a9c4d3bd7072be9b8c762870e191bd892701d05abe91d963cc1d524a"
   },
   {
     "path": "presets/comic_styles/Krea2·仙侠偶像剧.txt",
+    "bytes": 1228,
     "sha256": "a1f654182d88d75189c79baeb73bc0b93364ad00cfa2556ed6b07ba647a174d9"
   },
   {
     "path": "presets/comic_styles/Krea2·像素复古游戏.txt",
+    "bytes": 521,
     "sha256": "afd22acf02a9738e2a6a6a2e902d4bd1538b6fbe20f447df880838c288cd6941"
   },
   {
     "path": "presets/comic_styles/Krea2·厚涂插画.txt",
+    "bytes": 571,
     "sha256": "49aefd32b2a07fc9d55691158a0a5a527a6a280e6ec442947c736e7762483d4b"
   },
   {
     "path": "presets/comic_styles/Krea2·国风水墨写意.txt",
+    "bytes": 508,
     "sha256": "b22016f3222ffe1c1d73a74b7ca0d82ba1dfce169aa8e666b89fab7cf37c8359"
   },
   {
     "path": "presets/comic_styles/Krea2·复古赛璐璐80年代.txt",
+    "bytes": 597,
     "sha256": "e0ecbed8b49822ce194edb98f4e115590518ae811d3fa086a21f098225537b3a"
   },
   {
     "path": "presets/comic_styles/Krea2·尼尔式机械美学.txt",
+    "bytes": 931,
     "sha256": "586200f238b5547513baa749b2d1ae66294045983c0fe06c3b98e010107b9e07"
   },
   {
     "path": "presets/comic_styles/Krea2·日式小清新.txt",
+    "bytes": 859,
     "sha256": "cd8e45684bf34c446e77ae8beaeb16692332e9503bcb68996ef3d5a329764c73"
   },
   {
     "path": "presets/comic_styles/Krea2·水彩油画手绘.txt",
+    "bytes": 538,
     "sha256": "9db751e50574117f4fe3d9f112374086b18063d01a53e91efa06aaae6a4de6f6"
   },
   {
     "path": "presets/comic_styles/Krea2·电影级剧照.txt",
+    "bytes": 778,
     "sha256": "1837a33842cb0c5423a751ca11db4c3e68f88d2fdce6d0eb0f415e9818e22733"
   },
   {
     "path": "presets/comic_styles/Krea2·赛博霓虹蒸汽波.txt",
+    "bytes": 550,
     "sha256": "a74a50fd9eb6428fae04006b3e827170165f5f62f5a3be4dcc5d256e91b77941"
   },
   {
     "path": "presets/comic_styles/Krea2·超仿真生活照.txt",
+    "bytes": 744,
     "sha256": "9cf0e2eccd9f6c19819191d08bb31e2c6d35a83f2b1775bc7dda9e12a91e0669"
   },
   {
     "path": "presets/comic_styles/Krea2·高质量日漫.txt",
+    "bytes": 715,
     "sha256": "6a2170b122f951f6747a3d9ff8cc4641cc5fb601d99abc52d96b1edec74a7ab8"
   },
   {
     "path": "presets/comic_styles/Krea2·黑白日漫.txt",
+    "bytes": 541,
     "sha256": "c087ef574b4d4547b5d434f992a2dd8cc518edb00a6735c423e7c86d3f4ad395"
   },
   {
     "path": "presets/comic_styles/写实生活.txt",
+    "bytes": 1696,
     "sha256": "c7058229342e05bc94da09d2f0bc20f1450f2673f3f2a575a0b900f105a5b45a"
   },
   {
     "path": "presets/comic_styles/平面动漫.txt",
+    "bytes": 553,
     "sha256": "f9e1c3e63969729ba552eafe20f5914f7b301df7a49757a647f2939eafd0e3f4"
   },
   {
     "path": "presets/comic_styles/电影级写实.txt",
+    "bytes": 560,
     "sha256": "d954a49bb14b628d1535bc3b1aa4241cfcc64d05ef6fe71032996e18eff6d070"
   },
   {
     "path": "presets/comic_styles/电影质感.txt",
+    "bytes": 943,
     "sha256": "7d5ed06dc763be92761e7e823d4dd9cdb68643c24305f470ca5f764658b1e4d5"
   },
   {
     "path": "presets/comic_styles/网红自然感.txt",
+    "bytes": 499,
     "sha256": "ebbf8ec13697e69b8f3f1f88d2768cd152d026b1f6196eff0a193849221099a9"
   },
   {
     "path": "presets/content_scale.json",
+    "bytes": 6404,
     "sha256": "92fc1ef34e3d4aef9b57ecd74a950f68d549e44b063c7c400acff0f2a2215ab3"
   },
   {
     "path": "presets/face_library.json",
+    "bytes": 18163,
     "sha256": "3ee64d43d1cc1500a70f6e53a992a3bc0c10e752062d0a28cf17075282aa4dbe"
   },
   {
     "path": "presets/instructions/AI扩写_指令词.txt",
+    "bytes": 1301,
     "sha256": "1cfae7c8a10f86097538fe244a53be3758e5acca448838c80d8b28e4fc800224"
   },
   {
     "path": "presets/instructions/Anima_人物三视图.txt",
+    "bytes": 2202,
     "sha256": "2242a72a3053d22ffe38b3fb7ae727fbd5fd275f6dc37adec6c4d5c0eedadcd9"
   },
   {
     "path": "presets/instructions/Anima_英文词组.txt",
+    "bytes": 4930,
     "sha256": "f05689e222771d99ee589a299c9f81dd469bd32929eb8f5fd84e599f071866f2"
   },
   {
     "path": "presets/instructions/Motion_Ref2VA.txt",
+    "bytes": 2937,
     "sha256": "4630907349cc15b4008476bc8e567106e6296eb81d9eb4a57f115f5502d4ecbd"
   },
   {
     "path": "presets/instructions/_lab_武戏连续提示词_指令词.txt",
+    "bytes": 3621,
     "sha256": "4e98dbde6717455d41e00a9ff51bb79ed60bcdd8c9c52a8951be4308a69b978e"
   },
   {
     "path": "presets/instructions/人物_12.0_指令词.txt",
+    "bytes": 23605,
     "sha256": "8cdfdc75d663f4a81f0e2055e2f87742d6ade8641cabd4e0842c9464ffc14613"
   },
   {
     "path": "presets/instructions/人物_分段编译_指令词.txt",
+    "bytes": 4026,
     "sha256": "306eda5d29ef972b85037036676e869bb1e20b175ef994b1d75000ef2740fa6c"
   },
   {
     "path": "presets/instructions/人物外观详述_指令词.txt",
+    "bytes": 2098,
     "sha256": "f5dc84998d99db1e7b6d05633038dd78c2b50c146c9e8f6c8f6650009f356f75"
   },
   {
     "path": "presets/instructions/人物补全_指令词.txt",
+    "bytes": 2843,
     "sha256": "e839cc998070e4d62f1aee9fd1d519c9395d69272e1ef43baf0212ef2b0eaa2f"
   },
   {
     "path": "presets/instructions/人物设定_指令词.txt",
+    "bytes": 13830,
     "sha256": "47a02c5f3995c503729d74a9644b84c25dccd9045938032d824818d50e8cb1a8"
   },
   {
     "path": "presets/instructions/人物设定图_用户版_指令词.txt",
+    "bytes": 3676,
     "sha256": "3c5fa6cd134eeeca781170921db04b7e5c4b13de02b275ebcd35ae830bf1a890"
   },
   {
     "path": "presets/instructions/人物设定板_指令词.txt",
+    "bytes": 9433,
     "sha256": "15df1ed6ed40919038e826959fce5b1a184a478a870a680fe06900646f90a72e"
   },
   {
     "path": "presets/instructions/人设图_资料整理_指令词.txt",
+    "bytes": 1902,
     "sha256": "d24c68741b68db2f6429e2077398cefd0630835322482f0ac0fae2cfbd3b5076"
   },
   {
     "path": "presets/instructions/出片前门_对话修复_指令词.txt",
+    "bytes": 2134,
     "sha256": "4f839ce437af76ea189dc51f905c2822de593bc22d9dd6076b82f7b66d2a9806"
   },
   {
     "path": "presets/instructions/剧本方法论.md",
+    "bytes": 14496,
     "sha256": "aff5445bcded946606c65ff197c77aa3c322feab9f9b1784cbc8d96bbfc4bc02"
   },
   {
     "path": "presets/instructions/原文改剧本_指令词.txt",
+    "bytes": 10694,
     "sha256": "7db9a313115f0741051351b14c56b129fcad37ad2863796fbd949604f7c88b20"
   },
   {
     "path": "presets/instructions/发型设计_指令词.txt",
+    "bytes": 1357,
     "sha256": "cca0baa78c29ed28cd95fc56458f76354654beffc626275f870eaa6a733ad42e"
   },
   {
     "path": "presets/instructions/场景_导演分镜.txt",
+    "bytes": 1473,
     "sha256": "657c20e2db87774b9aea94dfda3f9680ae24bd34f278f965050bf44d7f56fc49"
   },
   {
     "path": "presets/instructions/场景_文戏单元.txt",
+    "bytes": 2598,
     "sha256": "7a03c4e5016dfe4449e6af63c28e729520f682b1b526566ccf97272c5032a854"
   },
   {
     "path": "presets/instructions/场景_节拍拆解.txt",
+    "bytes": 2782,
     "sha256": "c7531c15526992d6d4968cab26dc05e40ea7cbd1ed9d493a1a5aef2327e4a3bd"
   },
   {
     "path": "presets/instructions/场景图C_读剧本_指令词.txt",
+    "bytes": 5012,
     "sha256": "812b7cf57803d5c8077d06b106c468c0cf983162783bdabb7f34709dafd077b3"
   },
   {
     "path": "presets/instructions/场景图_指令词.txt",
+    "bytes": 3197,
     "sha256": "ac6fc72746e97a88fc680ef418a080b3cbd458a25f3893b1557ab5d48d6e8e1c"
   },
   {
     "path": "presets/instructions/场景设计稿_指令词.txt",
+    "bytes": 5366,
     "sha256": "d6a7b279f6c8505f3d196264050959c8b376e9474d50ea74e41807a0a277b7e4"
   },
   {
     "path": "presets/instructions/实验_时间轴_剪辑式_指令词.txt",
+    "bytes": 4272,
     "sha256": "89b673211f2b9c009f11d675b4f176af6f549c163665d44262921da8768de734"
   },
   {
     "path": "presets/instructions/实验_时间轴_单主机位_指令词.txt",
+    "bytes": 3921,
     "sha256": "6325d9461a4658cbec14afdcc15f16f50f5f353557aa4f23b80c8930b2cb5e33"
   },
   {
     "path": "presets/instructions/实验_时间轴_接力_指令词.txt",
+    "bytes": 9859,
     "sha256": "607ae6ec68d2d63d4077cbc30851b28eb02d13394709076c24fd7f952fcb00bf"
   },
   {
     "path": "presets/instructions/实验_镜头行_指令词.txt",
+    "bytes": 11561,
     "sha256": "66a6c6bb2878986441014b0c5a23cfb00ec3166fe21664e32d8d72381dd3aa9b"
   },
   {
     "path": "presets/instructions/导演_分镜_指令词.txt",
+    "bytes": 19530,
     "sha256": "8d8b5adeba4511e57112d4a6d399be3d467fb80d4080fe3dad6f821f0b466a45"
   },
   {
     "path": "presets/instructions/导演_连续分镜.txt",
+    "bytes": 2647,
     "sha256": "0861e7b5aba8a6ecc07c9d96ee354c22f96f5f325f388e16089455f378d4906b"
   },
   {
     "path": "presets/instructions/导演_连续镜头写词.txt",
+    "bytes": 2289,
     "sha256": "87060cb47eba47aa921c07fb44a7750f94ee2627dee9b7cd2aa64cd82e0b6b2a"
   },
   {
     "path": "presets/instructions/导演段_H3提示词_指令词.txt",
+    "bytes": 1465,
     "sha256": "8ec12e197088896c16d6a01363c5f76fcde8cc4f92eac5fdc46132cc29270403"
   },
   {
     "path": "presets/instructions/拍摄清单_指令词.txt",
+    "bytes": 4316,
     "sha256": "9954af51f8eee24a973242e54d8b87e8a02d09069f41ce0fd85031acaa67559a"
   },
   {
     "path": "presets/instructions/故事_分话框架_指令词.txt",
+    "bytes": 5599,
     "sha256": "157eb5d2be70db51e3638147afe1e64d61a28dad629426ae23f64f841e2d2a12"
   },
   {
     "path": "presets/instructions/故事_分话框架修复_指令词.txt",
+    "bytes": 2699,
     "sha256": "a34c088d5e5efd55ae7dd4b599b5b5b79b38f77d4f4627a93f49ba47ffdb6299"
   },
   {
     "path": "presets/instructions/故事_完整正文.txt",
+    "bytes": 3457,
     "sha256": "8c4b1560e5f5823a7fe0bf00c3b98a7e24d69d4b46042f2c68e5f51f156f0718"
   },
   {
     "path": "presets/instructions/故事_故事核_指令词.txt",
+    "bytes": 1881,
     "sha256": "6c7d00bf501ec49ebe0d595f82f75c5461065c26fffd1a7ea51eadd3ac3bcce1"
   },
   {
     "path": "presets/instructions/故事_正文_按骨架_指令词.txt",
+    "bytes": 6136,
     "sha256": "855be6fa725dbae68313d6ec8d80e49bd7341ffcf58ed5bd640ec2b4e742d63e"
   },
   {
     "path": "presets/instructions/故事_骨架_指令词.txt",
+    "bytes": 5552,
     "sha256": "d69220a1b8f1953b34269b81659d03fbd685a05ebe56985d9ce2fb554f65ec85"
   },
   {
     "path": "presets/instructions/本话安排_指令词.txt",
+    "bytes": 3764,
     "sha256": "e6e82386418ee3c00edabecd1c46a2e3d9cfec360e81352a078a71777e0a67b7"
   },
   {
     "path": "presets/instructions/本话安排修改_指令词.txt",
+    "bytes": 1697,
     "sha256": "01e98b317aafec669a31962d45ae09393a507f702b427d9df5c988bfe6d6f62b"
   },
   {
     "path": "presets/instructions/正文_提取设定.txt",
+    "bytes": 4389,
     "sha256": "2c24b3b544da6421e34f601378ce07253cf4f5a5278d557336418af37102eb60"
   },
   {
     "path": "presets/instructions/正文提取人物场景_指令词.txt",
+    "bytes": 2527,
     "sha256": "463cbac0103ef8ffb10a6a913228a3236957bd9b54482350f05c9cd761e4fdfd"
   },
   {
     "path": "presets/instructions/正文改画面稿_指令词.txt",
+    "bytes": 10109,
     "sha256": "b93c7379b8d2fe82c76867524105dd3c2faede34fabcde7ef9da96cd8633ef94"
   },
   {
     "path": "presets/instructions/画面稿改H3提示词_指令词.txt",
+    "bytes": 11268,
     "sha256": "b99cb6d574ac0106ad30485cab63a06eb2160ca8a8de0f88448abcf83b99aebf"
   },
   {
     "path": "presets/instructions/画面稿改H3提示词_时间轴_指令词.txt",
+    "bytes": 10132,
     "sha256": "20cb22aeb5c94d0e969fa53a87235332ecd070f9d3d2c25e4c7993c08b63e9a1"
   },
   {
     "path": "presets/instructions/画面稿改H3提示词_时间轴_指令词_旧P322版.txt",
+    "bytes": 9981,
     "sha256": "1d48ce7f61cf0831009759594bdfe5f014b0a8fd90cbdb5b6feea8b640287b92"
   },
   {
     "path": "presets/instructions/第一话剧本_指令词.txt",
+    "bytes": 1862,
     "sha256": "08c39235c0043ab5428f46b854a19e7b1fe6c27cbec68a53760a7f73b88c7f14"
   },
   {
     "path": "presets/instructions/第一话原文_指令词.txt",
+    "bytes": 2765,
     "sha256": "6f530362542a094f26e43d2bb383b79564fd4eba9babafa46b69714b257d278d"
   },
   {
     "path": "presets/instructions/第一话简介_指令词.txt",
+    "bytes": 1937,
     "sha256": "7d5b6df960d5ca2265026aabb2c3c0b90eda10e56150aa89fad51647a0daa8a8"
   },
   {
     "path": "presets/instructions/第一话简介提炼_指令词.txt",
+    "bytes": 663,
     "sha256": "89c51da47b01aacd4d99d45ca7a2ad8e392a17206f23aeb7a9e3a28f22eb1807"
   },
   {
     "path": "presets/instructions/续写简介_指令词.txt",
+    "bytes": 1619,
     "sha256": "f8251e7f3fc82edfbf53329c9e56da19bc99a5501688a7a010274e0b1ad57b09"
   },
   {
     "path": "presets/instructions/脸部设计_指令词.txt",
+    "bytes": 1672,
     "sha256": "77e46e48bd6963a8bb15e8a0fea20b8eb010e7a5c5169cd7fd58896ce778a36c"
   },
   {
     "path": "presets/instructions/节拍_分镜.txt",
+    "bytes": 4678,
     "sha256": "edee3df30eea53f59f1d11bef28b646de18abbc7a11ca04b046d438da6056963"
   },
   {
     "path": "presets/instructions/节拍段_H3提示词_指令词.txt",
+    "bytes": 3183,
     "sha256": "fbf08c2e9716894b514fabbd5db9a2c53eddd455a0ac642f1a52103834ca1c3d"
   },
   {
     "path": "presets/instructions/补镜头_指令词.txt",
+    "bytes": 615,
     "sha256": "cf8eda6b87f4eba5ad23a348be169352805c3ad3b65a5a08c74e2cbc8512607c"
   },
   {
     "path": "presets/instructions/视频_MiniMax单元_指令词.txt",
+    "bytes": 7863,
     "sha256": "10e91e88e78a4ac51cbc3a3328f9a4d9a0bc244a911ccf8d49c24c0b22c38158"
   },
   {
     "path": "presets/instructions/视频_六段式补写.txt",
+    "bytes": 2413,
     "sha256": "991f9c73d8860be98e93f2b918ba12912412d661d8fae0651437c51d2add3bc5"
   },
   {
     "path": "presets/instructions/视频导演_总规则.txt",
+    "bytes": 2937,
     "sha256": "1f7269e5bf43ce23c50dd7cd4f914b9f73203bbbdcd1807dd4f0940def127160"
   },
   {
     "path": "presets/instructions/通用_扩写.txt",
+    "bytes": 2668,
     "sha256": "5139d293623873d49685b0af5051096f3e869f736241e6d8ccbfd914540f7e3b"
   },
   {
     "path": "presets/instructions/通用写作_分话结构.txt",
+    "bytes": 5778,
     "sha256": "e88ec65377f1b26f7e5764915b76477e8b355f29dba325c66bcb8b8090356eba"
   },
   {
     "path": "presets/instructions/通用写作_分话结构_B.txt",
+    "bytes": 3662,
     "sha256": "7fb27dfa85081dc4486e327b8eda00313c42d7eca0ddcf3092064fe2439132e9"
   },
   {
     "path": "presets/instructions/通用写作_完整故事.txt",
+    "bytes": 2193,
     "sha256": "9d8ded446f32cec9a925b3c2ea7939e8fe69e77bc9f210abf10ac3edcfc516a4"
   },
   {
     "path": "presets/instructions/通用写作_小说正文.txt",
+    "bytes": 3623,
     "sha256": "3c66eaf56aa6abbaa663c5dd7368097156823e99f3e9d9cf3e7382eb78c01f57"
   },
   {
     "path": "presets/instructions/通用写作_小说正文_B.txt",
+    "bytes": 1419,
     "sha256": "4673d169e3db34dcc7b07383295be7429da179b323145ed0641bcde71f4cf732"
   },
   {
     "path": "presets/instructions/通用写作_局部修订.txt",
+    "bytes": 784,
     "sha256": "33c999027d7e0efe2b3ce24f6cb5431b0dae21a719cb2088354c474e3392b85c"
   },
   {
     "path": "presets/instructions/通用写作_整部规划修改.txt",
+    "bytes": 2355,
     "sha256": "b845297b0b377af76ed220543391ee9175d4165d6fcd7d2c61e8fe7dc9a8e361"
   },
   {
     "path": "presets/instructions/通用写作_正文核对.txt",
+    "bytes": 2346,
     "sha256": "0ecc4fca79d9b9a2eea11543e170aabb4b810b70a836c3e8f7fec6b389382ed0"
   },
   {
     "path": "presets/instructions/通用写作_逐话正文.txt",
+    "bytes": 3275,
     "sha256": "8eeccf636e8bb6879dad278524b5e0a7e8d073639bb46d966cb9409701c8cf64"
   },
   {
     "path": "presets/instructions/长篇_故事圣经.txt",
+    "bytes": 6181,
     "sha256": "4e78087d52ea30a63f644a4a4113f247b8a5d30b10ffec11b117b8d192fd8372"
   },
   {
     "path": "presets/instructions/长篇_重新规划后续.txt",
+    "bytes": 846,
     "sha256": "8e31437561caad41630cfa06eda63b3b75ef411f7ad4335ed48f08654e19b225"
   },
   {
     "path": "presets/option_defs.json",
+    "bytes": 52858,
     "sha256": "b290df5eccdaa1dadf3ca8b6f74dd39227221b30724826f19ca82ee22881387d"
   },
   {
     "path": "presets/outfit_library.json",
+    "bytes": 19467,
     "sha256": "0ffd62ef9035fd21e5500815d5b562ecc4c9b999c1a70f01b363dc0beca6778f"
   },
   {
     "path": "presets/place_library.json",
+    "bytes": 20303,
     "sha256": "cb4da613648539810cb4b72da9fc884aba9dc0785bedf878304dc721011bd874"
   },
   {
     "path": "presets/render_notes.json",
+    "bytes": 30687,
     "sha256": "fc13f7cff5413979b3a4bd09fd39562f99ce638b5b637196acedd9a23e5f8687"
   },
   {
     "path": "presets/style_kits.json",
+    "bytes": 31043,
     "sha256": "6c882c7115fb481e6428ac6c5dc73e5535567094206ab1d1a149bdfc49a33c57"
   },
   {
     "path": "presets/预设表.json",
+    "bytes": 46224,
     "sha256": "741b615260c3443b452f4d12e94dc5195b73df5575a3959291a2e1d783420d8f"
   },
   {
     "path": "production/__init__.py",
+    "bytes": 0,
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
     "path": "production/album_core.py",
+    "bytes": 4890,
     "sha256": "739bfbfd81f532eedc1afbe331a14034d57418c75d989230720ef5912a6db87b"
   },
   {
     "path": "production/cinematic_director.py",
+    "bytes": 3708,
     "sha256": "690c09f104900e1d6719500b6bdad28c00fa2ff66c7ecc807633cfe101f9a588"
   },
   {
     "path": "production/comic_core.py",
+    "bytes": 11718,
     "sha256": "55b1dea12b04cbf47172347d5763eef80bbfbbc04b36b2c864f24b77a053d899"
   },
   {
     "path": "production/director_core.py",
+    "bytes": 10364,
     "sha256": "7ccd057c236cac8d9190adf4dd040d1b363995ec452a71efd8ae26fd7a7e960a"
   },
   {
     "path": "production/novel_core.py",
+    "bytes": 8722,
     "sha256": "ba2c6fdd070ed760bdbb48f3cb517115f8af201db21029c6d144a552a318d3b7"
   },
   {
     "path": "production/video_core.py",
+    "bytes": 6641,
     "sha256": "ace9cfdadcba3b6085ad2e567373c5779955aeb3b12ef0ff5417c7a71bceaab5"
   },
   {
     "path": "production/video_plan.py",
+    "bytes": 10385,
     "sha256": "5b6970e6843b505744975d70ddc8e93a39bd2cbe0837559598ca0332a993ba31"
   },
   {
     "path": "requirements.txt",
+    "bytes": 14,
     "sha256": "a0580b0f518e87b45f3990ea705c3fbfcda70629071ec1dabf9f3e2355c909b1"
   },
   {
     "path": "server.py",
-    "sha256": "95b761d34f809b2d7df384e4da4e542fd828f78640d1c94ad8cf8012a0113f5b"
+    "bytes": 44863,
+    "sha256": "e5de837d95b793451f0a018221642db46dc1c3baf4da4ee1ee95e88e2a0c1ff9"
   },
   {
     "path": "tests/test_age_policy.py",
+    "bytes": 12501,
     "sha256": "bfcb7c6a22700e3a64ae43d003aa448c551b7a202eff5ddb8efac2c7ea2ec212"
   },
   {
     "path": "tests/test_bundled_tools.py",
+    "bytes": 5798,
     "sha256": "09d46dbcd50cc69d0d57b9d07ffd3ff819cd9681519a7ed8a90f68278e4a67bb"
   },
   {
+    "path": "tests/test_character_clothing_visibility.py",
+    "bytes": 5275,
+    "sha256": "cc648c12c085dd26e9f3c3b7c5eeca76dd2455ebd58a8f023f78e00d6ce9e3db"
+  },
+  {
     "path": "tests/test_character_display_template.py",
+    "bytes": 2868,
     "sha256": "378b9ac22fcc3a0aa0a8c3f805d642ede6a18719b86a7ae69a2fa95b840181ea"
   },
   {
+    "path": "tests/test_character_image_versions.py",
+    "bytes": 2079,
+    "sha256": "a299b38c15f54f77a4d957441a4a77511ca0403173cf3f1b964bfaf8c72e96fe"
+  },
+  {
+    "path": "tests/test_continuation_assets.py",
+    "bytes": 24737,
+    "sha256": "b6131f5240430ae5d51ec074cddad4a8b62367128f8a9f96397de71a3e48cccc"
+  },
+  {
     "path": "tests/test_dialogue_timing.py",
+    "bytes": 2941,
     "sha256": "c768c985479439198d7f595233db5d504007488aafa312a50febd3bd64f3744e"
   },
   {
+    "path": "tests/test_episode_contract.py",
+    "bytes": 36785,
+    "sha256": "919d0b6224f3f10321468299cbf02d24b9b013c4cf21941918a8438bb0fe7614"
+  },
+  {
+    "path": "tests/test_episode_scene_references.py",
+    "bytes": 5955,
+    "sha256": "1fc744834da415f5e0139aeb3aa1390d62828ed27950b48f3109817d060e2cb1"
+  },
+  {
+    "path": "tests/test_generation_recovery.py",
+    "bytes": 15347,
+    "sha256": "5b1771e675165684f7ab5f5cf8673ff8640fbb959461402593f4eb013d185f16"
+  },
+  {
+    "path": "tests/test_h3_request_recovery.py",
+    "bytes": 10884,
+    "sha256": "ce57291b750fbe6c888015883385a6dc642333f1ea662aaa972b2430dbe1a921"
+  },
+  {
     "path": "tests/test_motion_anima_release.py",
+    "bytes": 4431,
     "sha256": "8adf998fb8755b1b54683ed8ed7cf490f475e1a6bc92c10bc3c090ed509a92a0"
   },
   {
     "path": "tests/test_motion_v104.py",
+    "bytes": 5105,
     "sha256": "55e24d7da4b0f9f5f67aa2273daf414bfc2c50683aacf4e1a3286e8caa23881c"
   },
   {
+    "path": "tests/test_new_episode_assets.py",
+    "bytes": 6235,
+    "sha256": "873c11ee92f6691fdfc1b2ad245e80bd220ddf3cbef1861dd4d3ff74ee51477a"
+  },
+  {
+    "path": "tests/test_segment_render_recovery.py",
+    "bytes": 25464,
+    "sha256": "a277bac217f593614298246db932c22aec7f644f426d3e161203c6b5a18c3ad9"
+  },
+  {
+    "path": "tests/test_short_episode_pipeline.py",
+    "bytes": 2601,
+    "sha256": "6130b68eb23e491c3fb6126a36d0e8c62ac3015709a4a1f0d317a64218136188"
+  },
+  {
+    "path": "tests/test_timeline_generation_completion.py",
+    "bytes": 6561,
+    "sha256": "58f9c708b5236e268cfa2a2feb57211db85b85a583742c52909f4367701c3a55"
+  },
+  {
+    "path": "tests/test_video_continuity.py",
+    "bytes": 11194,
+    "sha256": "08c0cecbd8e7f9abdd2f472cccacea8c6fb1b9f0857353509e15d0f0ba63eacf"
+  },
+  {
     "path": "tests/test_口述与节拍.py",
+    "bytes": 92548,
     "sha256": "21b6cbea287e66a74c001a3df2cf32f363c444339e6a8a0e8b9dcf7d881491e9"
   },
   {
     "path": "tools/douyin-downloader/app.py",
+    "bytes": 12367,
     "sha256": "d52a43ff2e5d27a87a632ede92779b253d0ce59b6f8b5e14f7cba0b4fbb8ac55"
   },
   {
     "path": "tools/douyin-downloader/downloader.py",
+    "bytes": 14218,
     "sha256": "a8fe6ba675c015f25cc0ece7d9c15d844697cd88154c6e1af5bdecaad4e5eb1b"
   },
   {
     "path": "tools/douyin-downloader/folder_picker.py",
+    "bytes": 450,
     "sha256": "a18b65ac2886f84f1984934376393d1b018085120fbed5fb806254fab345a105"
   },
   {
     "path": "tools/douyin-downloader/index.html",
+    "bytes": 11781,
     "sha256": "9f71d4b37b9215c37bde239ab63c2d362c7ca82c4c862f62c3bdb818ad6323e3"
   },
   {
     "path": "tools/douyin-downloader/launch.pyw",
+    "bytes": 1031,
     "sha256": "c0a225aec601829985b6930d28bc72622c84d81325c0df450931b895d3b48984"
   },
   {
     "path": "tools/douyin-downloader/test_downloader.py",
+    "bytes": 5161,
     "sha256": "25430dc494b8cbec111803c677acf32f83bdd8a63eed244c3cca1f739be101d1"
   },
   {
     "path": "tools/douyin-downloader/使用说明.txt",
+    "bytes": 1382,
     "sha256": "00e6a0f563c985adb7342df5f637615152aaaff15f3900c06ce913c7380e7ca9"
   },
   {
     "path": "tools/douyin-downloader/启动下载器.vbs",
+    "bytes": 841,
     "sha256": "62020b619e1b9c2c8c87bb7be321a58f93cb770feaf3e7c185ae1a3771aa3427"
   },
   {
     "path": "web/api.js",
+    "bytes": 853,
     "sha256": "da5c265fd351c02d6316e46ebfa6e599e3731f9fa46678774a3080be306db808"
   },
   {
     "path": "web/design-preview.html",
+    "bytes": 17523,
     "sha256": "d5d2405a3fc2102830a14f13774d4bf6ef7358ef96c2da73c49caaec097e80a9"
   },
   {
     "path": "web/gate_chat.js",
+    "bytes": 6239,
     "sha256": "25a55b49e6c36e5e23e3081de868daa1694982a02d476943950adb9482ba5d35"
   },
   {
     "path": "web/index.html",
+    "bytes": 38898,
     "sha256": "6bb77c67234545ba6b8ed4f00a66b541daa4e19f1d732f8679f24fd26d669488"
   },
   {
     "path": "web/pages/assets.js",
+    "bytes": 23608,
     "sha256": "97cfae059bc46596886389bd828a22df78dcf747a09f69be8ad6e1dc727128ea"
   },
   {
     "path": "web/pages/config.js",
+    "bytes": 30167,
     "sha256": "8560d0f46168b687314d9b92d4bee62fb39892a9c8f3e5c579198afdfa4bea3f"
   },
   {
     "path": "web/pages/downloads.js",
+    "bytes": 1163,
     "sha256": "f232b369a05f64b4c22e9c255487e0ab26b709876461e66fcb06afb6901a4256"
   },
   {
     "path": "web/pages/history.js",
+    "bytes": 8777,
     "sha256": "55971df300edf2e2136b130ae9b5783953b268d8c80ccbbdc41dedb40e2bcf32"
   },
   {
     "path": "web/pages/legacy.js",
+    "bytes": 1119,
     "sha256": "67f47baca9ff9c7555caa34e4e337776b01ee93e844338edd1fbcbd269b33afc"
   },
   {
     "path": "web/pages/motion.js",
+    "bytes": 21233,
     "sha256": "bc2f09e81c1184b7f394a033c742b9493d566b77253af37081f0b9323fa02912"
   },
   {
     "path": "web/pages/productions.js",
+    "bytes": 7685,
     "sha256": "881e615f2e3643ce140b1c681066c6e8bfa1c830dfcae43919e98d8c4296e52e"
   },
   {
     "path": "web/pages/project.js",
+    "bytes": 12409,
     "sha256": "30937e4337900c5fd0df574754c8f9d24ac5f86d96af5d897f618e314c1a14ff"
   },
   {
     "path": "web/pages/review.js",
+    "bytes": 3725,
     "sha256": "927f1806ff38bdee9cd551c06c455020a686ef444d452ac9b72dab37f18e011e"
   },
   {
     "path": "web/pages/script.js",
+    "bytes": 9895,
     "sha256": "ca5a842f76e18a83757653849bb89377c9496f5bbc9a46b347ee4df25d263e4c"
   },
   {
     "path": "web/pages/settings.js",
-    "sha256": "45d674a20f559acaca3b39879085b3cf3ab8a2ba7ea1d84cdb54cc80c14ce471"
+    "bytes": 162897,
+    "sha256": "d7dcae96814e6fe84d1f03cdcd9f51c9bc3b79bf0dde8df81949734e9c800b6a"
   },
   {
     "path": "web/pages/story.js",
-    "sha256": "666f05aec3b5938e3b170dd11ff4e16afc04ca2b87557c970ddca876ade8d255"
+    "bytes": 19504,
+    "sha256": "09c405ef9afcf19c95b525a278530e7abb784dbf96a700b493c4f9df01d1077a"
   },
   {
     "path": "web/pages/timeline.js",
+    "bytes": 70290,
     "sha256": "c4bc4a228f26e55b9a5b92b997f2f5201096eed068816b73557a695f9ed9ba02"
   },
   {
     "path": "web/pages/video.js",
+    "bytes": 6388,
     "sha256": "b52972028084408c104149864bed5bbb896003073dd6ae807b7246a04bd39fc7"
   },
   {
     "path": "web/prose_editor.js",
+    "bytes": 7051,
     "sha256": "944149fb880303ea6dcc3d41236cd3666b1a5ee13bbbd42ea42890e0e0364383"
   },
   {
     "path": "web/shell.js",
-    "sha256": "ad5152615ac95e5743dc8e47ba49ff1ca48c0279b8a2faf3763117bf032105d3"
+    "bytes": 24043,
+    "sha256": "a73c55fb9f91dfa1d76bd712369dbb07facebf5f1ebacbbfdb4bd37ae2f7d071"
   },
   {
     "path": "web/ui.js",
+    "bytes": 3986,
     "sha256": "28cb42bec1cc76425e73406025e81ac5c28091f4171adddc22102c1fc383572d"
   },
   {
     "path": "web/ui_actions.js",
+    "bytes": 9435,
     "sha256": "f7f53b5927b7cff85b720ebd8c47eab75ba11a6ae5268f1268f8b6765ead4712"
   },
   {
     "path": "便携版使用说明.md",
+    "bytes": 1964,
     "sha256": "5f167406a6573618cf76ee0d0fdc6798a08491e803df9e14221bca9add1711bc"
   },
   {
     "path": "启动 AI视频工作台.vbs",
+    "bytes": 1125,
     "sha256": "c282f054b0a3a72185d9e5419892fed0f1b1559f9ccf40295f51d518718c9739"
   },
   {
     "path": "启动便携版.bat",
+    "bytes": 285,
     "sha256": "51e2f75a46707f9a4dfce3c2314a2781509aeb3aba46a295e982c1d85394263b"
   },
   {
     "path": "启动（带窗口看报错）.bat",
+    "bytes": 182,
     "sha256": "637e8595e22fdee3a1f5af4baaf6d7115404390632e37a7f481cdbb39f8ae350"
   }
 ]

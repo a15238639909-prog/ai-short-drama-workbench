@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """一话的段合成一条成片（P342）：outputs/成片_<项目>_第N话.mp4。ffmpeg，不碰模型。"""
-import os, re, subprocess
+import json, os, re, subprocess, uuid
+from pathlib import Path
 
 
 def _target_size(sid, ep):
@@ -62,18 +63,45 @@ def merge_episode(sid, ep, dst=None, segs=None):
         dst = os.path.join("outputs", "成片_%s_第%d话_段%s.mp4" % (title, int(ep or 1), ("%d-%d" % (_ns[0], _ns[-1])) if len(_ns) > 1 else str(_ns[0])))
     dst = dst or os.path.join("outputs", "成片_%s_第%d话.mp4" % (title, int(ep or 1)))
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    args = ["ffmpeg", "-loglevel", "error", "-y"]
+    target = Path(dst).resolve()
+    # Encode separately: a failed retry must never overwrite an accepted film.
+    pending = target.parent / ("合成中_" + uuid.uuid4().hex + ".mp4")
+    args = ["ffmpeg", "-loglevel", "error", "-nostdin"]
+    media = []
     for _, v in vids:
+        probed = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
+                                 "-of", "json", str(v)], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=60)
+        try:
+            info = json.loads(probed.stdout)
+            video = next(s for s in info.get("streams", []) if s.get("codec_type") == "video")
+            duration = float(video.get("duration") or info["format"]["duration"])
+            if probed.returncode or duration <= 0:
+                raise ValueError()
+            media.append((duration, any(s.get("codec_type") == "audio" for s in info["streams"])))
+        except (ValueError, KeyError, StopIteration, TypeError):
+            raise RuntimeError("合成输入视频无效，已有成片保留：" + str(v)) from None
         args += ["-i", v]
     parts, maps = [], ""
     W, H = _target_size(sid, ep)
     for i in range(len(vids)):
-        parts.append("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v%d]" % (i, W, H, W, H, i))
-        maps += "[v%d][%d:a]" % (i, i)
+        parts.append("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,setpts=PTS-STARTPTS[v%d]" % (i, W, H, W, H, i))
+        duration, has_audio = media[i]
+        source = ("[%d:a]aresample=48000,aformat=channel_layouts=stereo,apad" % i
+                  if has_audio else "anullsrc=r=48000:cl=stereo")
+        parts.append(source + ",atrim=duration=%.6f,asetpts=PTS-STARTPTS[a%d]" % (duration, i))
+        maps += "[v%d][a%d]" % (i, i)
     fc = ";".join(parts) + ";" + maps + "concat=n=%d:v=1:a=1[v][a]" % len(vids)
     args += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
-             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", dst]
+             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", str(pending)]
     r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
     if r.returncode != 0:
         raise RuntimeError("ffmpeg 合并失败：%s" % (r.stderr or "")[-300:])
-    return dst
+    from .video_continuity import validate_video
+    validate_video(str(pending), sum(seconds for seconds, _ in media))
+    if target.exists():
+        target = target.with_name(target.stem + "__" + uuid.uuid4().hex[:8] + target.suffix)
+    if target.parent != pending.parent:
+        raise RuntimeError("合成目标目录改变，已保留待合成文件")
+    pending.rename(target)
+    return str(target)

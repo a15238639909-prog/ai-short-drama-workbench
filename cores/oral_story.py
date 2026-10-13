@@ -162,7 +162,7 @@ def quoted_lines_all(brief, q=None):
     return out
 
 
-_GARMENT_W = re.compile(r"T恤|t恤|内裤|校服|水手服|衬衫|连衣裙|裙|睡衣|睡裙|西装|外套|制服|比基尼|泳装|泳衣|盔甲|铠甲|皮甲|长袍|道袍|袈裟|旗袍|和服|运动服|背心|短裤|牛仔|风衣|毛衣|卫衣|夹克|皮衣|长裙|短裙|丝袜|长袜|围裙|斗篷|披风|军装|警服|护士服|女仆装|婚纱|礼服|汉服|长衫|马甲|裸")
+_GARMENT_W = re.compile(r"T恤|t恤|内裤|校服|水手服|衬衫|连衣裙|裙|睡衣|睡裙|西装|外套|制服|比基尼|泳装|泳衣|盔甲|铠甲|皮甲|长袍|道袍|袈裟|旗袍|和服|运动服|背心|长裤|短裤|裤子|牛仔裤|牛仔|风衣|毛衣|卫衣|夹克|皮衣|长裙|短裙|丝袜|长袜|围巾|围裙|斗篷|披风|军装|警服|护士服|女仆装|婚纱|礼服|汉服|长衫|马甲|裸")
 _WEAR_W = re.compile(r"穿|套上|裹着|披着|换上|脱")
 
 
@@ -176,6 +176,31 @@ def outfit_hints(text, card_names=(), aliases=None, sexes=None):
     males = [n for n in (card_names or []) if sx.get(n) == "男"]
     females = [n for n in (card_names or []) if sx.get(n) == "女"]
     keys = sorted((k for k in al if k), key=len, reverse=True)
+    # 用户常用「姓名（年龄、衣着）」列角色，不一定写“穿”。括号是
+    # 明确的归属边界，不能把同句另一个人的服装串到这张卡上。
+    for key in keys:
+        for match in re.finditer(re.escape(key) + r"\s*[（(]([^）)\n]*)[）)]", str(text or "")):
+            parts = [p.strip() for p in re.split(r"[，,、；;]", match[1]) if _GARMENT_W.search(p)]
+            if parts:
+                value = "、".join(parts)
+                values = out.setdefault(al[key], [])
+                if value not in values:
+                    values.append(value)
+        # Plain character definitions also use commas: 姓名，55岁男性，白发、棕色夹克。
+        # The adjacent explicit age provides an ownership boundary without
+        # treating every narrative comma as a new clothing instruction.
+        pattern = re.escape(key) + r"\s*[，,:：]\s*(?:\d{1,4}|[零一二两三四五六七八九十百]{1,6})\s*岁[^。！？；;\n]*"
+        for match in re.finditer(pattern, str(text or "")):
+            detail = match[0][len(key):]
+            other = [m.start() for k in keys if k != key for m in re.finditer(re.escape(k), detail)]
+            if other:
+                detail = detail[:min(other)]
+            parts = [p.strip() for p in re.split(r"[，,、；;]", detail) if _GARMENT_W.search(p)]
+            if parts:
+                value = "、".join(parts)
+                values = out.setdefault(al[key], [])
+                if value not in values:
+                    values.append(value)
     carry = ""
     for s in sents:
         names_here = [(m.start(), al[k]) for k in keys for m in re.finditer(re.escape(k), s)]
@@ -218,6 +243,51 @@ def outfit_words(hints):
             if m.group(0) not in ws:
                 ws.append(m.group(0))
     return ws
+
+
+def fixed_outfit_description(hints, designed=""):
+    """Keep explicit garment phrases, including their colours, without a model call.
+
+    A specified top/outer garment plus trousers/skirt is a complete outfit. Its
+    original pieces are authoritative; a designer cannot add another compulsory
+    layer, accessory or colour scheme. A partial requirement keeps other slots.
+    """
+    pieces = []
+    for hint in hints or []:
+        for raw in re.split(r"[，,、；;。\n]|(?:以及|和|及)(?=.{0,12}(?:衫|裤|裙|外套|夹克|披风))", str(hint)):
+            garments = list(_GARMENT_W.finditer(raw))
+            if not garments:
+                continue
+            value = raw[:garments[-1].end()]
+            wear = list(re.finditer(r"穿着|穿上|穿|套上|裹着|披着|换上", value))
+            if wear:
+                value = value[wear[-1].end():]
+            value = value.strip(" ：:（()）")
+            if value and value not in pieces:
+                pieces.append(value)
+    if not pieces:
+        return str(designed or ""), []
+    def slots(text):
+        result = set()
+        if re.search(r"裤|短裙|长裙|半身裙", text):
+            result.add('bottom')
+        if re.search(r"衫|T恤|t恤|外套|风衣|夹克|皮衣|背心|马甲|毛衣|卫衣|披风|斗篷", text):
+            result.add('top')
+        if re.search(r"连衣裙|长袍|道袍|袈裟|旗袍|和服|汉服|婚纱|礼服|校服|制服|运动服|泳衣|泳装|比基尼|盔甲|铠甲|皮甲", text):
+            result.add('complete')
+        return result
+    required = slots("；".join(pieces))
+    if 'complete' in required or {'top', 'bottom'} <= required:
+        return "；".join(pieces), pieces
+    words = set(outfit_words(pieces))
+    extra = []
+    for line in re.split(r"[。；\n]", str(designed or "")):
+        # Global palettes and silhouette summaries may refer to removed clothes.
+        if (not line.strip() or re.search(r"主色|副色|点缀色|配色|剪影|露肤设计|不对称|身份细节|性格细节", line)
+                or slots(line) & required or words & set(outfit_words([line]))):
+            continue
+        extra.append(line.strip())
+    return "；".join(pieces + extra), pieces
 
 
 def quote_covered(prose, q):

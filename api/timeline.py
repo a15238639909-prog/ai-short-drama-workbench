@@ -1053,7 +1053,7 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
 
     # 自动补图可以分别失败，但缺图不能静默进入 H3。
     from cores import reference_ready
-    reference_ready.assert_references(sid, tg)
+    reference_ready.assert_references(sid, tg, ep=ep)
 
 
 def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
@@ -1062,8 +1062,10 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
     j = _job(sid)
     try:
         j.pop("blocked", None)          # 上一次停在"需要你确认"，这次重跑要把它清掉，页面才不会一直画旧问题
+        j.pop("partial", None)
+        j.pop("missing_prompt_segments", None)
         j.update(running=True, err="", step="准备", done=0, total=n * 2, note="",
-                 cancel=False)
+                 cancel=False, status="running")
 
         def _chk(msg=None):
             """每步之间看一眼取消标志；on_step 也走这里。"""
@@ -1128,16 +1130,45 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
         except Exception as _rx:
             j.setdefault("logs", []).append({"level": "error", "msg": "按答案重写提示词失败：%s" % str(_rx)[:100]})
         segs = [g for sc0 in (tl.get("scenes") or []) for g in (sc0.get("segments") or [])]
-        # 从最后一段有视频的往后数 N 段
-        # P282：按旧剧本出的段（stale_video）不算"已出"，它们要按新剧本重出（旧文件留着，出成功才顶替）
-        done_v = [int(g.get("no") or 0) for g in segs
-                  if str(g.get("video") or "").strip() and os.path.exists(str(g.get("video")))
-                  and not g.get("stale_video")]
-        first = (max(done_v) if done_v else 0) + 1
-        if prompts_only:
-            # P381：只写提示词时从最后一段有提示词的往后数（一次最多 10 段，页面循环叫；按视频数算会永远卡在前 10 段）
-            done_p = [int(g.get("no") or 0) for g in segs if str(g.get("prompt") or "").strip()]
-            first = max(first, (max(done_p) if done_p else 0) + 1)
+        source_story = story_core.get_story(sid) or {}
+
+        def _prompt_issues(current, no):
+            row = next((g for scene in current.get("scenes") or [] for g in scene.get("segments") or []
+                        if int(g.get("no") or 0) == no), None)
+            failures = current.get("prompt_failures") or {}
+            pending = (row or {}).get("prompt_repair_pending") or failures.get(str(no)) or failures.get(no)
+            if pending:
+                return [str(pending)]
+            if not row or not str(row.get("prompt") or "").strip():
+                return ["没有可用提示词"]
+            return _seg._render_critical_problems(source_story, current, row, row["prompt"], ep, no)
+
+        def _stop_for_prompts(current, wanted, before_video=True):
+            problems = {no: _prompt_issues(current, no) for no in wanted}
+            missing = [no for no, issues in problems.items() if issues]
+            if not missing:
+                return False
+            message = "提示词仅完成 %d/%d 段；第 %s 段待补或待修，已完成内容保留，%s" % (
+                len(wanted) - len(missing), len(wanted), "、".join(map(str, missing)),
+                "尚未生成视频" if before_video else "停止后续生成")
+            detail = "；".join("第%d段：%s" % (no, "；".join(map(str, problems[no]))) for no in missing)
+            j.update(running=False, status="partial", step="提示词未齐，进度已保留", partial=message,
+                     err=detail[:500], missing_prompt_segments=missing)
+            if before_video:
+                j["done"] = min(int(j.get("done") or 0), len(wanted) - len(missing))
+            j.setdefault("logs", []).append({"level": "error", "msg": message + "；" + detail})
+            return True
+
+        # A later successful segment must not hide a hole in the middle. Keep
+        # the requested window bounded to n consecutive segment numbers.
+        by_no = {int(g.get("no") or 0): g for g in segs}
+        scene_nos = {int(g.get("no") or 0): int(scene.get("no") or 1)
+                     for scene in tl.get("scenes") or [] for g in scene.get("segments") or []}
+        first = 1
+        while first in by_no and not _prompt_issues(tl, first):
+            if not prompts_only and not _seg.is_segment_current(sid, ep, scene_nos[first], first, size_tier=size_tier):
+                break
+            first += 1
         targets = list(range(first, first + n))
 
         # 【剪到下一话】安排说只出到某个 beat：目标段只到剪的位置，提示词也只写到那儿（契约 D）
@@ -1169,12 +1200,14 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                      note="这一话剧本只够切 %d 段，前 %d 段视频都已出完" % (total, total))
             return
         targets = [t for t in targets if t <= (total or targets[-1])]
-        j["total"] = n + len(targets)
-        j["done"] = n
+        j["total"] = len(targets) * (1 if prompts_only else 2)
+        j["done"] = len(targets)
         j["note"] = ("新写提示词 %d 段" % len(new_ps)) if new_ps else \
             (("按新剧本重写提示词 %d 段" % _rewrote) if _rewrote else "提示词已有，直接出片")
         if _cut_note:
             j["note"] += "；" + _cut_note
+        if _stop_for_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets):
+            return
 
         # ①b 出片前门（第二次确认，契约 H）：写完提示词、烧 GPU 之前先看这条片子能不能讲清故事。
         #    懒加载 saga_api 防循环 import；门本身出错照旧出片，不让检查器把出片链拖死。
@@ -1199,9 +1232,12 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                 return
             _chk()
 
+        if _stop_for_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets):
+            return
+
         if prompts_only:
             # P312：只写/重写提示词，不出图不出视频（文字按钮、验收用）
-            j.update(running=False, step="提示词已写好（没出图没出视频）", note=(j.get("note") or "") + "；只写提示词")
+            j.update(running=False, status="completed", step="提示词已写好（没出图没出视频）", note=(j.get("note") or "") + "；只写提示词")
             return
         # ①c 参考图（P266）：目标段绑的人物/场景还没有设定图的先出，不然出片那步只会抛「没有参考图」
         _ensure_refs(sid, ep, targets, j, _chk, _JC)
@@ -1228,11 +1264,11 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
             tl = _sc.ep_timeline(sid, ep) or {"scenes": []}
             g = next((x for sc0 in (tl.get("scenes") or []) for x in (sc0.get("segments") or [])
                       if int(x.get("no") or 0) == t), None)
-            if not g or not str(g.get("prompt") or "").strip():
-                j["note"] += "；第 %d 段没有提示词，跳过" % t
-                j["done"] += 1
-                continue
-            if str(g.get("video") or "").strip() and os.path.exists(str(g.get("video")))                     and not g.get("stale_video"):
+            if _stop_for_prompts(tl, [t], before_video=False):
+                return
+            current_scene = next((int(scene.get("no") or 1) for scene in tl.get("scenes") or []
+                                  if any(int(row.get("no") or 0) == t for row in scene.get("segments") or [])), 1)
+            if _seg.is_segment_current(sid, ep, current_scene, t, size_tier=size_tier):
                 j["done"] += 1
                 continue
             _chk("生成第 %d 段视频（%d/%d）" % (t, len(outs) + 1, len(targets)))
@@ -1259,7 +1295,7 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                          note=j["note"] + "；已出 %d 段" % len(outs))
                 return
             j["done"] += 1
-        j.update(running=False, step="完成",
+        j.update(running=False, status="completed", step="完成",
                  note=j["note"] + "；本次出片 %d 段（第 %d~%d 段）" % (
                      len(outs), targets[0], targets[-1]) if targets else j["note"])
     except _Cancelled:
@@ -1277,6 +1313,7 @@ def cancel_project(sid):
     """取消这个项目所有正在跑的生成：分镜页任务 + 设定页任务 + 正在生的 H3。"""
     out = {"timeline": False, "saga": False}
     j = _job(sid)
+    active_generation = bool(j.get("running"))
     if j.get("running"):
         j["cancel"] = True
         j["step"] = "正在取消…"
@@ -1284,17 +1321,24 @@ def cancel_project(sid):
     try:
         from api import saga_api as _sa
         js = _sa._job(sid)
-        if js.get("running"):
+        active_generation = active_generation or bool(js.get("running"))
+        if js.get("running") or (js.get("_recovery") and js.get("status") in ("waiting_resource", "waiting_task")):
             js["cancel"] = True
             js["step"] = "正在取消…"
+            if js.get("_recovery"):
+                js["status"] = "cancelled"
+                _sa._persist_job(js)
             out["saga"] = True
     except Exception:
         pass
-    try:
-        from models import h3_client as _h3
-        _h3.request_cancel()
-    except Exception:
-        pass
+    # A waiting project has no active call to interrupt. Its cancellation only
+    # revokes recovery; a global H3 flag could cancel another project's render.
+    if active_generation:
+        try:
+            from models import h3_client as _h3
+            _h3.request_cancel()
+        except Exception:
+            pass
     return out
 
 
