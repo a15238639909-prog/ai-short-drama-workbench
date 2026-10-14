@@ -131,10 +131,40 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None, fallb
             'dialogue_placeholders': ['{{D%d}}' % u['dialogue_id'] for u in payload['source_order'] if u.get('dialogue_id')],
             'character_labels': [r['subject_label'] for r in payload['references'] if r['role'] == 'character'],
         }
+    def source_format(trigger):
+        if fallback is None:
+            return None
+        entry = {'stage': 'source_fallback' if stage == 'write' else 'source_plan_fallback',
+                 'clip_id': payload.get('clip_id'), 'trigger': str(trigger), 'status': 'checking'}
+        if trace is not None:
+            trace.append(entry)
+        try:
+            fixed = fallback(payload)
+            result = validate(fixed)
+            entry.update(status='accepted', repaired_data=fixed,
+                         auto_repair='文字结构回复不完整，已按当前原文直接完成格式转换；动作、对白和顺序保留')
+            return result
+        except (ValueError, KeyError, TypeError, IndexError) as error:
+            entry.update(status='blocked', validation_error=str(error))
+            raise contract.ContractError('当前原文格式转换未完成：' + str(error), stage=stage,
+                code='prompt_contract' if stage == 'write' else 'plan_contract',
+                details={'clip_id': payload.get('clip_id'), 'error': str(error)}) from error
+
     # One initial request and at most two local repairs; never retry the whole story.
     for attempt in range(3):
-        raw = q(system, json.dumps(current, ensure_ascii=False), mt=4200 if stage == 'plan' else 5000,
-                temperature=.2, _tries=1, response_format={'type': 'json_object', 'schema': schema})
+        try:
+            raw = q(system, json.dumps(current, ensure_ascii=False), mt=4000 if stage == 'plan' else 5000,
+                    temperature=.2, _tries=1, response_format={'type': 'json_object', 'schema': schema})
+        except RuntimeError as error:
+            if not hasattr(error, 'partial_text'):
+                raise
+            if trace is not None:
+                trace.append({'stage': stage, 'attempt': attempt + 1, 'length_error': str(error),
+                              'discarded_partial_reply': True, 'scope': payload.get('current_scope')})
+            result = source_format(error)
+            if result is not None:
+                return result
+            raise
         if trace is not None:
             trace.append({'stage': stage, 'attempt': attempt+1, 'raw': raw,
                           'scope': payload.get('current_scope'), 'clip_id': payload.get('clip_id'),
@@ -161,20 +191,9 @@ def _request(q, stage, payload, schema, validate, trace=None, repair=None, fallb
                         return result
                     except (ValueError, KeyError, TypeError, IndexError):
                         pass
-                if stage == 'write' and fallback is not None:
-                    entry = {'stage': 'source_fallback', 'clip_id': payload.get('clip_id'),
-                             'trigger': str(error), 'status': 'checking'}
-                    if trace is not None:
-                        trace.append(entry)
-                    try:
-                        fixed = fallback(payload)
-                        result = validate(fixed)
-                        entry.update(status='accepted', repaired_data=fixed,
-                            auto_repair='模型写词连续校验失败，已使用原文保底写词；动作、对白和顺序保留')
-                        return result
-                    except (ValueError, KeyError, TypeError, IndexError) as fallback_error:
-                        entry.update(status='blocked', validation_error=str(fallback_error))
-                        error = ValueError(str(error) + '；原文保底写词未通过：' + str(fallback_error))
+                result = source_format(error)
+                if result is not None:
+                    return result
                 raise contract.ContractError('导演文字格式自动修复后仍未通过：'+str(error),
                     stage=stage, code='prompt_contract' if stage == 'write' else 'plan_contract',
                     details={'clip_id': payload.get('clip_id'), 'error': str(error)}) from error
@@ -233,7 +252,8 @@ def source_fallback(clip):
     characters = {name: ref for name, ref in by_name.items() if ref['role'] == 'character'}
     presence = clip.get('presence_contract') or {}
     needed = list(presence.get('actors') or []) + [row['name'] for row in presence.get('visual_identity_candidates') or []]
-    if any(name not in characters for name in needed):
+    collectives = {row['name']: row for row in clip.get('collectives') or []}
+    if any(name not in characters and name not in collectives for name in needed):
         raise ValueError('原文保底写词缺少行动或可见人物引用')
     name_pattern = re.compile('|'.join(re.escape(name) for name in sorted(characters, key=len, reverse=True))) if characters else None
     def bind_names(text):
@@ -248,10 +268,13 @@ def source_fallback(clip):
             raise ValueError('原文保底写词发现空白原文')
         did = unit.get('dialogue_id')
         if did is not None:
-            ref = characters.get(unit.get('speaker'))
             prefix = unit.get('speech_prefix', '')
-            if (type(did) is not int or did <= 0 or did in ids or not ref
-                    or not re.fullmatch(re.escape(ref['subject_label']) + r' \(S[1-9]\d*\)', prefix)):
+            ref = characters.get(unit.get('speaker'))
+            identity = re.escape(ref['subject_label']) if ref else None
+            if unit.get('binding') in ('source_voice', 'collective'):
+                identity = re.escape(unit.get('speech_identity', ''))
+            if (type(did) is not int or did <= 0 or did in ids or not identity
+                    or not re.fullmatch(identity + r' \(S[1-9]\d*(?:,S[1-9]\d*)*\)', prefix)):
                 raise ValueError('原文保底写词的对白编号或说话人未确认')
             ids.append(did)
             speech += contract.speech_seconds(words)
@@ -282,73 +305,130 @@ def source_fallback(clip):
 TEXT = {'type': 'string', 'minLength': 1}
 
 
+def source_plan_fallback(payload):
+    """Only lay out the current source units; never draft a replacement story."""
+    units, places = payload['units'], payload['scenes']
+    spoken = {row['id']: row for row in payload.get('dialogue') or []}
+    names = set(payload.get('characters') or [])
+    scene = next((p for p in places if p in str(payload.get('state_context') or '')), places[0])
+    shots, current, speech = [], [], 0.0
+
+    def finish(end):
+        nonlocal current, speech
+        if not current:
+            return
+        body = '\n'.join(u['text'] for u in current)
+        presence = contract.presence_evidence(body, [{'name': name} for name in names])
+        cast = list(dict.fromkeys(presence['actors'] + [spoken[u['dialogue_id']]['speaker']
+            for u in current if u.get('dialogue_id') and spoken[u['dialogue_id']]['speaker'] in names]))
+        narrative = [u['text'] for u in current if not u.get('dialogue_id')]
+        end_state = '\n'.join(narrative[-2:]) or '当前原文第%d条台词已说完，承接上一镜状态。' % end
+        shots.append({'scene_name': scene, 'cast': cast, 'camera': '平视中景，连续呈现当前原文行动。',
+                      'purpose': '按原文顺序呈现当前行动与台词。', 'end_unit': end,
+                      'seconds': max(4, math.ceil(speech + .4 * len(narrative))), 'end_state': end_state})
+        current, speech = [], 0.0
+
+    for index, unit in enumerate(units):
+        did = unit.get('dialogue_id')
+        words = spoken[did]['text'] if did else ''
+        duration = contract.speech_seconds(words) if did else 0.0
+        next_scene = scene
+        if not did:
+            matches = [(unit['text'].find(p), p) for p in places if p in unit['text']]
+            if matches:
+                next_scene = min(matches)[1]
+        if current and (speech + duration + .4 * sum(not u.get('dialogue_id') for u in current) > 12
+                        or sum(len(u['text']) for u in current) + len(unit['text']) > 320
+                        or next_scene != scene):
+            finish(index)
+        scene = next_scene
+        current.append(unit)
+        speech += duration
+        if speech >= 12:
+            finish(index + 1)
+    finish(len(units))
+    return {'initial_state': str(payload.get('state_context') or places[0]), 'shots': shots}
+
+
+def _source_speaker(script, dialogue_id, chars, aliases):
+    """Recover an explicit source label, without an extra model judgement."""
+    marker = re.search(r'^【D%d】[^\n]*' % dialogue_id, script, re.M)
+    if not marker:
+        return '未具名说话者', ''
+    before = script[:marker.start()]
+    # Quoted dialogue cannot supply an identity for the following spoken line.
+    before = re.sub(r'^【D\d+】[^\n]*', '', before, flags=re.M)
+    tail = before[-400:].rstrip()
+    cue = re.search(r'([^。！？!?；;\n：:]*?)(?:说道|问道|答道|喊道|叫道|说|问|答|喊|道|回应|提醒|宣布)[：:]?\s*$', tail)
+    if not cue:
+        return '未具名说话者', ''
+    label = re.split(r'[，,]', cue[1])[-1].strip()
+    direct = [(a, n) for a, n in aliases.items() if a and a not in ('我', '你', '他', '她', '他们', '她们') and label.startswith(a)]
+    if direct and not re.search(r'(?:和|与|及|、).*(?:齐声|异口同声|同时|一起)', label):
+        alias, name = max(direct, key=lambda item: len(item[0]))
+        return name, cue[0]
+    # A named addressee is not the speaker: "她向陈安说" must not be
+    # rebound to 陈安 simply because he is the only name in that clause.
+    subject = re.split(r'(?:向|对|朝|冲着|望着|看着)', label, maxsplit=1)[0]
+    pronoun = re.match(r'^(他|她)(?!们)', subject)
+    if pronoun:
+        label = subject = pronoun[1]
+    candidates = [(a, n) for a, n in aliases.items() if a and a not in ('我', '你', '他', '她', '他们', '她们') and a in subject]
+    owners = {n for _, n in candidates}
+    if len(owners) == 1:
+        return next(iter(owners)), cue[0]
+    # A pronoun with one explicitly named matching antecedent is source metadata,
+    # not a second editorial/model review. Multiple candidates stay anonymous.
+    if label in ('他', '她'):
+        preceding = tail[:cue.start()].rstrip()
+        clauses = [c.strip() for c in re.split(r'[。！？!?；;\n]', preceding) if c.strip()]
+        previous = clauses[-1] if clauses else ''
+        mentioned = {n for a, n in aliases.items() if a and a not in ('我', '你', '他', '她') and a in previous}
+        gender = '女' if label == '她' else '男'
+        matches = {c['name'] for c in chars if isinstance(c, dict) and c.get('name') in mentioned
+                   and c.get('entity_type') != 'group' and str(c.get('sex') or c.get('gender') or '') == gender}
+        if len(matches) == 1:
+            evidence_start = script[:marker.start()].rfind(previous)
+            return next(iter(matches)), script[evidence_start:marker.start()].strip() if evidence_start >= 0 else cue[0]
+    return label or '未具名说话者', cue[0]
+
+
 def resolve_speakers(script, dialogue, chars, q, on_step=None, trace=None):
-    """Resolve speaker metadata only; dialogue text/order and original source stay intact."""
+    """Use the generated source as authority; never re-review it with a model.
+
+    Names/aliases and explicit nearby source cues can normalize metadata. An
+    anonymous voice keeps its source label, complete words and order. It does
+    not trigger an extra model call, an output-limit failure or a manual gate.
+    """
     from . import oral_story
     names = [n for n, _, _ in oral_story._char_items(chars)]
     aliases = contract._aliases(chars)
-    fixed = [(name if name in names else aliases.get(name, name), text) for name, text in dialogue]
-    pending = [{'dialogue_id': i + 1, 'speaker': name, 'text': text}
-               for i, (name, text) in enumerate(fixed) if name not in names]
-    if pending:
-        if on_step:
-            on_step('自动核对%d句台词的说话人（保留原话）' % len(pending))
-        system = ('你是剧本说话人核对员。只为待核对台词确认人物卡中的真实姓名。'
-                  '依据上下文、身份和明确别称判断，每句分别处理；同一个“他”可以在不同句子指不同人。'
-                  'evidence摘抄原文中包含该人物姓名或身份称呼的连续证据。'
-                  '明确对应时certain=true、speaker填卡名；无法确定时certain=false、speaker和evidence填空。'
-                  '台词原文与顺序由程序保留。输出JSON对象resolutions数组，每项为dialogue_id、speaker、evidence、certain。')
-        payload = {'script': script, 'characters': [{'name': c.get('name'),
-                   'identity': c.get('char_type') or c.get('identity') or '',
-                   'aliases': [a for a, n in aliases.items() if n == c.get('name')]}
-                  if isinstance(c, dict) else {'name': c} for c in chars], 'pending': pending}
-        schema = _object(resolutions={'type': 'array', 'minItems': len(pending), 'maxItems': len(pending),
-            'items': _object(dialogue_id={'type': 'integer', 'enum': [p['dialogue_id'] for p in pending]},
-                             speaker={'type': 'string', 'enum': names + ['']}, evidence={'type': 'string'},
-                             certain={'type': 'boolean'})})
-        for attempt in range(2):
-            raw = q(system, json.dumps(payload, ensure_ascii=False), mt=2200, temperature=.1,
-                    _tries=1, response_format={'type': 'json_object', 'schema': schema})
-            entry = {'stage': 'speakers', 'attempt': attempt + 1, 'raw': raw}
-            if trace is not None:
-                trace.append(entry)
-            try:
-                data = json.loads(re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip()))['resolutions']
-                expected = [p['dialogue_id'] for p in pending]
-                if sorted(x['dialogue_id'] for x in data) != sorted(expected):
-                    raise ValueError('逐句返回全部待核对编号，每个编号一次')
-                replacements = {}
-                for row in data:
-                    who, evidence = row['speaker'], row['evidence']
-                    tokens = [a for a, n in aliases.items() if n == who and a not in ('你', '我', '他', '她')]
-                    if (row.get('certain') is not True or who not in names or not isinstance(evidence, str)
-                            or not evidence.strip() or evidence not in script or not any(a in evidence for a in tokens)):
-                        raise ValueError('第%d句说话人尚无明确原文对应，请确认其人物卡姓名' % row['dialogue_id'])
-                    replacements[row['dialogue_id']] = who
-                for did, who in replacements.items():
-                    fixed[did - 1] = (who, dialogue[did - 1][1])
-                break
-            except (ValueError, KeyError, TypeError) as error:
-                entry['validation_error'] = str(error)
-                if attempt:
-                    raise contract.ContractError('说话人自动核对两次仍未确认：' + str(error),
-                        code='speaker_unresolved', details={'pending': pending}) from error
-                payload['validation_feedback'] = {'error': str(error), 'draft': raw}
+    fixed, bindings = [], []
+    for did, (name, text) in enumerate(dialogue, 1):
+        who = name if name in names else aliases.get(name, name)
+        evidence = ''
+        if not who or who == '待核对说话人':
+            who, evidence = _source_speaker(script, did, chars, aliases)
+        fixed.append((who, text))
+        bindings.append({'dialogue_id': did, 'speaker': who, 'text': text,
+                         'source_evidence': evidence, 'binding': 'character' if who in names else 'source_voice'})
     changes = [{'dialogue_id': i + 1, 'from': old[0], 'to': new[0]}
                for i, (old, new) in enumerate(zip(dialogue, fixed)) if old[0] != new[0]]
     if changes:
-        # Only the numbered speaker prefix changes, never names mentioned inside dialogue.
+        # Only the numbered speaker prefix changes, never dialogue words.
         script = re.sub(r'^(【D(\d+)】)[^：:\n]+[：:]',
                         lambda m: m[1] + fixed[int(m[2]) - 1][0] + '：', script, flags=re.M)
-        if trace is not None:
-            trace.append({'stage': 'speaker_resolution', 'changes': changes})
-        if on_step:
-            on_step('已自动统一%d句说话人，继续分镜' % len(changes))
+    if trace is not None:
+        trace.append({'stage': 'source_speaker_bindings', 'model_review': False,
+                      'bindings': bindings, 'changes': changes})
+    if on_step and changes:
+        on_step('已按正文绑定%d句台词，继续分镜' % len(changes))
     return script, fixed
 
 
 def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
-    from . import director_shots as ds, oral_story
+    from . import director_shots as ds, oral_story, group_entities
+    chars = group_entities.scoped_cards(chars, pics)
     script, dialogue, source_contract = contract.prepare_source(pics, chars, split_long_dialogue=True)
     names = [n for n, _, _ in oral_story._char_items(chars)]
     places = [n for n, _ in oral_story._scene_items(scenes)]
@@ -403,6 +483,9 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                     visible = contract.camera_identity_evidence(shot.get('camera'), chars, presence['absent'])
                     presence['visual_identity_candidates'] = visible['evidence']
                     required = list(dict.fromkeys([dialogue[d-1][0] for d in ids] + presence['actors'] + visible['names']))
+                    # A source voice without an individual card is still valid
+                    # speech. It is not an instruction to invent another person.
+                    required = [name for name in required if name in names]
                     missing = [name for name in required if name not in cast]
                     if missing:
                         cast.extend(missing)
@@ -433,7 +516,7 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
 
             if on_step:
                 on_step('连续导演分段：第%d/%d部分' % (index+1,len(events)))
-            shots = _request(q,'plan',payload,schema,validate,log)
+            shots = _request(q,'plan',payload,schema,validate,log, fallback=source_plan_fallback)
             for shot in shots:
                 shot['start_state']=state
                 state=shot['target_state']
@@ -454,9 +537,22 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
 
 
 def _clip(sl, number, chars, speakers, prior, settings, direction):
+    from . import group_entities
+    from .authoring import h3_char_order
     d=sl['director']
     names=set(d['cast'])
     content=ordered_content(d)
+    chars=group_entities.scoped_cards(chars, '\n'.join((prior or '', d.get('start_state') or '', sl.get('text') or '')))
+    occurrences={row['id']: row for row in d.get('source_dialogue') or []
+                 if row.get('entity_type') == 'group' and row.get('id') in {u.get('dialogue_id') for u in content}}
+    # First vocal occurrence, rather than the end of the whole episode, owns
+    # this shot's initial group. Later occurrences add their own real refs.
+    seen_groups=set()
+    for unit in content:
+        row=occurrences.get(unit.get('dialogue_id'))
+        if row and row['speaker'] not in seen_groups:
+            chars=_group_occurrence_cards(chars, row)
+            seen_groups.add(row['speaker'])
     names.update(u['speaker'] for u in content if u.get('dialogue_id'))
     camera=direction or d['camera']
     # Re-evaluate frozen slices too: an earlier source-contract version may
@@ -470,22 +566,61 @@ def _clip(sl, number, chars, speakers, prior, settings, direction):
     presence['visual_identity_candidates']=visible['evidence']
     names.update(presence['actors'])
     names.update(visible['names'])
-    if names - {c['name'] for c in chars}:
-        raise ValueError('分段人物已不存在，请重新保存人物或分段')
     d['cast']=[c['name'] for c in chars if c['name'] in names]
     d['presence']=presence
-    # Same card order as segment_api.new_pack; IDs are compact per render job.
-    refs=[{'name':c['name'],'subject':i,'picture':i,'role':'character','voice':c.get('voice','')}
-          for i,c in enumerate([c for c in chars if c['name'] in names],1)]
+    # Same expanded card order as segment_api.new_pack; collective member cards
+    # retain their own identities instead of receiving a made-up group picture.
+    selected = [c for c in chars if c['name'] in names]
+    for row in occurrences.values():
+        card=next((c for c in _group_occurrence_cards(chars, row) if c.get('name') == row['speaker']), None)
+        if card and card['name'] in names:
+            selected.append(card)
+    ordered, camera_owner = h3_char_order(group_entities.reference_cards(selected, chars), settings)
+    ordered = [c for c in ordered if c['name'] != camera_owner]
+    refs=[{'name':c['name'],'subject':i,'picture':i,'role':'character','voice':c.get('voice',''),
+           'entity_type': 'group' if group_entities.is_group(c) else 'person',
+           'group_count': c.get('group_count'), 'group_appearance': c.get('group_appearance') or c.get('appearance') or ''}
+          for i,c in enumerate(ordered,1)]
     refs.append({'name':sl['scene_hint'],'subject':len(refs)+1,'picture':len(refs)+1,'role':'scene'})
     for ref in refs:
         ref['subject_label']='<Subject %d>' % ref['subject']
         ref['picture_label']='<Picture %d>' % ref['picture']
     by_name={r['name']:r for r in refs}
+    collectives=[]
+    for card in selected:
+        if group_entities.is_group(card):
+            members=group_entities.member_names(card, chars)
+            complete=len(members) >= 2 and (card.get('group_count') is None or card.get('group_count') == len(members))
+            descriptor={'name':card['name'], 'members':members, 'complete_members':complete,
+                'subject_labels':[by_name[n]['subject_label'] for n in members if n in by_name],
+                'group_count':card.get('group_count'), 'group_appearance':card.get('group_appearance') or ''}
+            if descriptor not in collectives:
+                collectives.append(descriptor)
     for unit in content:
         if unit.get('dialogue_id'):
-            unit['speech_prefix']='<Subject %d> (S%d)' % (by_name[unit['speaker']]['subject'],speakers[unit['speaker']])
+            name=unit['speaker']
+            local_chars=_group_occurrence_cards(chars, occurrences[unit['dialogue_id']]) if unit['dialogue_id'] in occurrences else chars
+            local_card=next((c for c in local_chars if c.get('name') == name), None)
+            local_members=group_entities.member_names(local_card, local_chars) if local_card and group_entities.is_group(local_card) else []
+            complete=len(local_members) >= 2 and (local_card.get('group_count') is None or local_card.get('group_count') == len(local_members))
+            _assign_speaker(speakers, name, local_chars)
+            sid=speakers[name]
+            vocal_ids=sid if isinstance(sid, tuple) else (sid,)
+            identifier='(' + ','.join('S%d' % value for value in vocal_ids) + ')'
+            if complete:
+                labels=[by_name[n]['subject_label'] for n in local_members if n in by_name]
+                identity='The collective "%s" comprising %s' % (name, ' and '.join(labels) or 'the source-defined members')
+                unit.update(binding='collective', speech_identity=identity, speech_delivery='say together in unison')
+            elif name in by_name:
+                identity=by_name[name]['subject_label']
+                if by_name[name].get('entity_type') == 'group':
+                    unit.update(binding='collective', speech_identity=identity, speech_delivery='say together in unison')
+            else:
+                identity='The source voice "%s"' % name
+                unit.update(binding='source_voice', speech_identity=identity, speech_delivery='says')
+            unit['speech_prefix']=identity + ' ' + identifier
     return {'clip_id':number,'seconds':sl['seconds'],'scene':sl['scene_hint'], 'references':refs,
+            'collectives':collectives,
             'camera':camera,'purpose':d['purpose'],'source_order':content,
             'earlier_source':prior,'start_state':d.get('start_state',''), 'end_state':contract.ending_text(d),
             'presence_contract': presence,
@@ -533,7 +668,7 @@ def assemble(data, clip):
         raise ValueError('对白占位符须按原文顺序各出现一次：应为%s，实际为%s' % (expected, actual))
     text=raw['text']
     for line in dialogue:
-        text=text.replace('{{D%d}}'%line['dialogue_id'],line['speech_prefix']+' says, <d>[Chinese] '+line['text']+'</d>')
+        text=text.replace('{{D%d}}'%line['dialogue_id'],line['speech_prefix']+' '+line.get('speech_delivery','says')+', <d>[Chinese] '+line['text']+'</d>')
     # Cast/reference slots can include off-screen people. Availability is not
     # an instruction that every card must appear in every frame or action.
     definitions=[]
@@ -544,8 +679,15 @@ def assemble(data, clip):
             definitions[-1] += ' Reference scope: fixed architecture, fixed furniture layout and lighting only; movable props and any people in the image are not fixed scene content.'
         else:
             definitions[-1] += ' Reference scope: character identity, face, hair and clothing only; pose, hand occupancy and carried objects follow the current action and preceding state.'
+            if r.get('entity_type') == 'group':
+                definitions[-1] += ' This subject is a collective group, not one individual. Preserve the source-defined group count%s, appearance and shared positions: %s.' % (
+                    ' (%s people)' % r['group_count'] if r.get('group_count') else '', r.get('group_appearance') or 'follow the current source')
         if r.get('voice') and r['name'] in {u.get('speaker') for u in dialogue}:
             definitions[-1] += ' Voice reference: '+str(r['voice'])+'.'
+    for collective in clip.get('collectives') or []:
+        if collective.get('members') and collective.get('complete_members', True):
+            definitions.append('The collective "%s" consists of %s; these are the same source-defined people, not additional background duplicates. Use their own identities and voices when speaking together.' % (
+                collective['name'], ' and '.join(collective['subject_labels']) or 'the source-defined members'))
     object_scope = ('Movable object count, location, holder and completed actions follow the confirmed source and preceding state, '
                     'advanced only by the written actions; do not duplicate an object or restore its earlier placement from a reference image.')
     fields=dict(subject_definitions='\n'.join(definitions),summary='[reference generation] '+raw['summary'],
@@ -679,6 +821,34 @@ def repair_slice_source(sl, chars, q, on_step=None, trace=None):
     return changed
 
 
+def _group_occurrence_cards(chars, row):
+    """Apply already-saved source occurrence facts to a runtime card copy."""
+    return [dict(c, group_members=list(row.get('group_members') or []), group_count=row.get('group_count'))
+            if c.get('name') == row.get('speaker') else c for c in chars]
+
+
+def _assign_speaker(speakers, name, chars):
+    """Assign a stable ID per actual voice; named collectives reuse member IDs."""
+    from . import group_entities
+    card=next((c for c in chars if c.get('name') == name), None)
+    members=group_entities.member_names(card, chars) if card and group_entities.is_group(card) else []
+    if card and card.get('group_count') is not None and card.get('group_count') != len(members):
+        members=[]
+    def individual(who):
+        if who not in speakers:
+            used=[value for sid in speakers.values() for value in (sid if isinstance(sid, tuple) else (sid,))]
+            speakers[who]=max(used, default=0) + 1
+        return speakers[who]
+    if members:
+        speakers[name]=tuple(individual(who) for who in members)
+    elif card and group_entities.is_group(card):
+        # A partly known collective has its own stable combined vocal source;
+        # two named members cannot stand in for the rest of a larger crowd.
+        speakers[name]=individual(('collective_voice', name))
+    else:
+        individual(name)
+
+
 def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, on_step=None, prev_tail='', direction=None,
                  on_prompt=None, trace_dir=None, on_error=None):
     """Return the existing make_h3_prompts contract; one writer call per requested clip."""
@@ -688,10 +858,18 @@ def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, o
     check_design_scale(chars, settings)
     assert_allowed(cards=chars,settings=settings,text='\n'.join(s['text'] for s in slices),media='video_prompt')
     speakers={}
+    from . import group_entities
+    prior_source=''
     for sl in slices:
-        for line in (sl.get('director') or {}).get('says') or []:
+        d=sl.get('director') or {}
+        scoped=group_entities.scoped_cards(chars, '\n'.join((prior_source, d.get('start_state') or '', sl.get('text') or '')))
+        occurrences=[row for row in d.get('source_dialogue') or [] if row.get('entity_type') == 'group']
+        for line in d.get('says') or []:
             if isinstance(line, (list, tuple)) and len(line) == 2:
-                speakers.setdefault(line[0],len(speakers)+1)
+                row=next((r for r in occurrences if r.get('speaker') == line[0] and r.get('text') == line[1]), None)
+                local=_group_occurrence_cards(scoped, row) if row else scoped
+                _assign_speaker(speakers,line[0],local)
+        prior_source+='\n' + str(sl.get('text') or '')
     end=len(slices) if count is None else min(len(slices),start+max(0,int(count)))
     out=[]
     for k in range(start,end):
@@ -704,7 +882,7 @@ def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, o
                 raise ValueError('分段场景已不存在，请重新选择场景')
             repair_slice_source(sl, chars, q, on_step, trace)
             for name, _ in sl['director'].get('says') or []:
-                speakers.setdefault(name, len(speakers) + 1)
+                _assign_speaker(speakers,name,chars)
             prior='\n'.join(s['text'] for s in slices[:k])
             clip=_clip(sl,k+1,chars,speakers,prior,settings,str(direction or '').strip())
             if k==start and prev_tail:

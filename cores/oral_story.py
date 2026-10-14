@@ -931,12 +931,24 @@ _GENERIC_TYPE = {"人物", "角色", "主角", "配角", "路人", "其他", "�
 def card_aliases(chars):
     """P454⑨：卡名别名表 {别名: 卡名}。名字、去括号短名之外，再加卡的「人物类型」词（精灵队长 → 瑟琳娜、小个子精灵 → 艾拉）、
     去掉性别字的写法（小个子女精灵）、类型词的尾两字（队长）——只有唯一一张卡符合的才算；再并上按年龄性别的称呼（role_aliases）。"""
-    items = _char_items(chars)
+    from .group_entities import is_group, group_aliases
+    individuals = [c for c in chars or [] if not is_group(c)]
+    items = _char_items(individuals)
     names = [n for n, _s, _a in items]
-    al = aliases_of(names)
+    al = aliases_of([str(c.get("name") or "") if isinstance(c, dict) else str(c) for c in chars or []])
+    owners = {}
+    for c in chars or []:
+        if is_group(c):
+            for alias in group_aliases(c):
+                owners.setdefault(alias, set()).add(c["name"])
+    for alias, owners_for_alias in owners.items():
+        if len(owners_for_alias) == 1:
+            al[alias] = next(iter(owners_for_alias))
     words, tails = {}, {}
     for c in chars or []:
         if not isinstance(c, dict):
+            continue
+        if is_group(c):
             continue
         nm = str(c.get("name") or "").strip()
         if not nm:
@@ -966,7 +978,7 @@ def card_aliases(chars):
         if len(who) == 1 and w not in al and not any(w in n for n in names if n != next(iter(who))):
             al[w] = next(iter(who))
     try:
-        for w, nm in role_aliases(chars).items():
+        for w, nm in role_aliases(individuals).items():
             al.setdefault(w, nm)
     except Exception:
         pass

@@ -40,10 +40,11 @@ def speech_seconds(words):
 
 
 def split_speech(words, limit=15):
-    """Split only at written punctuation, preserving the exact concatenation.
+    """Split for the spoken-time budget, preserving exact original text.
 
-    No boundary in a long clause means no safe automatic split; the caller keeps
-    it intact and records the need for a source-level repair.
+    Prefer written punctuation, then whitespace. A long Chinese clause without
+    punctuation can continue across clips at a character boundary; it does not
+    require rewriting the approved dialogue or stopping the whole story.
     """
     words = str(words or '')
     if speech_seconds(words) <= limit:
@@ -57,8 +58,32 @@ def split_speech(words, limit=15):
         usable = [end for end in boundaries if cursor < end < len(words)
                   and speech_seconds(words[cursor:end]) <= limit]
         if not usable:
-            return [words]
-        end = usable[-1]
+            # Advance over at least one spoken character without losing any
+            # punctuation, space, or newline. The estimator and splitter use
+            # the same alphabet, so the resulting fragment obeys its budget.
+            hard_end, spoken = cursor, 0
+            for position in range(cursor, len(words)):
+                char = words[position]
+                increment = bool(re.match(r'[一-龥A-Za-z0-9]', char))
+                if (spoken + increment) / 4.5 + .5 > limit:
+                    break
+                spoken += increment
+                hard_end = position + 1
+            if hard_end <= cursor or spoken == 0:
+                # An impossible caller budget is reported by the contract; it
+                # must not cause an infinite loop or discard original words.
+                return [words]
+            spaces = [m.end() + cursor for m in re.finditer(r'\s+', words[cursor:hard_end])
+                      if speech_seconds(words[cursor:cursor + m.end()]) > .5]
+            end = spaces[-1] if spaces else hard_end
+            # Preserve common Unicode combining marks/variation selectors and
+            # a CRLF pair with the preceding chunk rather than bisecting them.
+            while end < len(words) and re.match(r'[\u0300-\u036f\ufe00-\ufe0f]', words[end]):
+                end += 1
+            if end < len(words) and words[end - 1:end + 1] == '\r\n':
+                end += 1
+        else:
+            end = usable[-1]
         fragments.append(words[cursor:end])
         cursor = end
     assert ''.join(fragments) == words
@@ -72,7 +97,7 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
     recalled speech and thoughts remain narrative. Repeated/short utterances are
     not deduplicated. The complete input is retained in the report.
     """
-    from . import oral_story, dialogue_ledger
+    from . import oral_story, dialogue_ledger, group_entities
     source = str(source or '')
     aliases = _aliases(chars)
     people = [{'name': name, 'aliases': [a for a, n in aliases.items() if n == name]}
@@ -80,7 +105,7 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
     dialogue, lines, evidence, issues = [], [], [], []
     source_dialogue_count = 0
 
-    def add(who, words, proof, pos):
+    def add(who, words, proof, pos, source_end=None):
         nonlocal source_dialogue_count
         who = aliases.get(who, who) or '待核对说话人'
         words, cues = oral_story.dialogue_performance(words)
@@ -95,6 +120,14 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
             evidence.append({'id': number, 'speaker': who, 'text': fragment,
                              'evidence': proof, 'pos': pos, 'source_dialogue_id': source_dialogue_count,
                              'fragment_index': index, 'fragment_count': len(fragments), 'original_text': words})
+            card = next((c for c in chars if isinstance(c, dict) and c.get('name') == who), None)
+            if card and group_entities.is_group(card):
+                # A generic collective is scoped to this dialogue occurrence,
+                # before any later arrivals/departures in the source.
+                scoped = group_entities.scoped_cards(chars, source[:source_end] if source_end is not None else source[:pos] + proof)
+                card = next((c for c in scoped if isinstance(c, dict) and c.get('name') == who), card)
+                evidence[-1].update(entity_type='group', group_count=card.get('group_count'),
+                                    group_members=group_entities.member_names(card, chars))
             if who == '待核对说话人':
                 issues.append({'code': 'speaker_unresolved', 'dialogue_id': number, 'pos': pos})
             if split_long_dialogue and speech_seconds(fragment) > 15:
@@ -115,7 +148,7 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
         offset += len(raw_line)
     for offset, line in segments:
         body = line.rstrip('\r\n')
-        explicit = oral_story._DLG_LINE.match(body.strip())
+        explicit = oral_story._DLG_LINE.match(re.sub(r'^\s*【D\d+】\s*', '', body).strip())
         # These labels describe narration, not an on-screen speaking character.
         if explicit and explicit[1] in ('旁白', '画外音', '内心', '心声', '音效', '场景', '地点', '时间'):
             lines.append(body)
@@ -126,7 +159,7 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
                 lines.append(who + '，' + explicit[2][1:-1] + '。')
             if len(words) > 1 and (words[0], words[-1]) in (('“', '”'), ('「', '」'), ('"', '"')):
                 words = words[1:-1]
-            add(who, words, body, offset)
+            add(who, words, body, offset, source_end=offset + len(body))
         else:
             # Use the established quote classifier, not every pair of quotation marks.
             entries = dialogue_ledger.ledger(body, people)
@@ -151,7 +184,8 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
                 before = body[cursor:match.start()]
                 if before.strip():
                     lines.append(before)
-                add(row['speaker'], row['text'], row.get('evidence', ''), offset + row['pos'])
+                collective, proof = group_entities.collective_speaker(body, row['pos'], chars, end=match.end())
+                add(collective or row['speaker'], row['text'], proof or row.get('evidence', ''), offset + row['pos'], source_end=offset + match.end())
                 cursor = match.end()
             if body[cursor:].strip() or not quotes:
                 lines.append(body[cursor:])
@@ -235,7 +269,7 @@ _ACTION = (r'递|接|拿|握|持|提|抱|背(?!影)|扶|拉|推|扛|举|放|捡|
 _ABSENT = re.compile(r'^(?:(?:已经|已|仍然|仍|早已|突然|却|也|并|不知何时|此时|现在|竟然|竟)\s*)*'
                      r'(?:失踪|不见了|不在(?:场|这里|此处|屋内)|消失(?:了|无踪)|下落不明|尚未到场)')
 _MENTION = re.compile(r'(?:想起|想念|回忆|记得|寻找|找到|提起|提到|关于|听说|梦见|照片中的|画像上的)$')
-_ACTION_MODIFIER = r'(?:(?:正在|正|又|已经|已|先|再|随即|缓缓|慢慢|轻轻|稳稳|立刻|连忙|悄悄|仍然|仍|也|一边)\s*)*'
+_ACTION_MODIFIER = r'(?:(?:正在|正|又|已经|已|先|再|随即|缓缓|慢慢|轻轻|稳稳|立刻|连忙|悄悄|仍然|仍|也|一边|一起|一齐|齐声|异口同声|同时|纷纷|都|共同)\s*)*'
 _BODY_PART = r'(?:左手|右手|双手|手指|指尖|左臂|右臂|双臂|左脚|右脚|双脚|双腿|头部|肩膀|肩头)'
 _NAMED_ACTION = re.compile(r'^' + _ACTION_MODIFIER + r'(?:(?:的)?' + _BODY_PART + r'\s*' + _ACTION_MODIFIER + r')?(?:' + _ACTION + r')')
 _GAZE_ACTION = re.compile(r'^' + _ACTION_MODIFIER + r'(?:的)?(?:目光|视线|眼神)' + _ACTION_MODIFIER + r'(?:落在|移向|转向|停在|扫过|追随|注视)')
@@ -314,8 +348,28 @@ def presence_evidence(source, chars=()):
     for match in re.finditer(r'(?<![\w一-龥])(?:其余|剩下的?|在场的?)?([一两二三四五六七八九十]|\d+)人', narrative):
         count = digits.get(match[1], int(match[1]) if match[1].isdigit() else None)
         counts.append({'count': count, 'evidence': match[0], 'pos': match.start()})
+    from . import group_entities
+    by_name = {c.get('name'): c for c in chars if isinstance(c, dict)}
+    participants, anonymous_minimum, groups = set(), 0, []
+    for name in actions:
+        card = by_name.get(name) or {}
+        if group_entities.is_group(card):
+            members = group_entities.member_names(card, chars)
+            count = card.get('group_count')
+            count = count if isinstance(count, int) and not isinstance(count, bool) and count >= 2 else None
+            groups.append({'name': name, 'count': count, 'members': members})
+            if members:
+                participants.update(members)
+                anonymous_minimum += max(0, (count if count is not None else 2) - len(members))
+            else:
+                # A plural identity needs more than one actor. This lower bound
+                # is not a fabricated exact count for an unknown-size group.
+                anonymous_minimum += count if count is not None else 2
+        else:
+            participants.add(name)
     return {'actors': actions, 'absent': absent, 'evidence': facts,
-            'minimum_action_participants': len(actions), 'explicit_group_counts': counts}
+            'minimum_action_participants': len(participants) + anonymous_minimum,
+            'group_entities': groups, 'explicit_group_counts': counts}
 
 
 def normalize_anchors(data):

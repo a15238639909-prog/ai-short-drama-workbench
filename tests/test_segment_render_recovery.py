@@ -215,17 +215,40 @@ class SegmentRenderRecoveryTests(unittest.TestCase):
         prepare.assert_called_once_with(previous)
         self.assertEqual(rendered['render_request']['handoff_version'], 'h3-handoff-v3')
 
-    def test_handoff_appearance_over_reference_limit_stops_without_submission(self):
+    def test_handoff_appearance_over_reference_limit_keeps_tail_and_continues(self):
         previous, appearance = self.previous_fixture()
         # Eight declared slots plus tail and appearance would exceed H3's limit.
         self.refs = [self.refs[0]] * 8
         with patch.object(vc, 'previous_segment', return_value=previous), \
-             patch.object(vc, 'prepare_handoff', return_value=appearance, create=True) as prepare:
-            with self.assertRaisesRegex(ValueError, '9张.*外观参考帧'):
-                self.render()
+             patch.object(vc, 'prepare_handoff', return_value=appearance, create=True) as prepare, \
+             patch.object(vc, 'handoff_prompt', side_effect=lambda prompt, *a, **kw: prompt):
+            rendered = self.render()
         prepare.assert_not_called()
-        self.generate.assert_not_called()
-        self.assertNotIn('render_request', self.current())
+        self.generate.assert_called_once()
+        self.assertEqual(len(rendered['render_request']['final_refs']), 9)
+        self.assertEqual(rendered['render_request']['handoff_version'], 'h3-handoff-v2')
+
+    def test_full_identity_reference_slots_continue_without_visual_relay(self):
+        previous, _ = self.previous_fixture()
+        self.refs = [self.refs[0]] * 9
+        with patch.object(vc, 'previous_segment', return_value=previous), \
+             patch.object(vc, 'prepare_handoff', side_effect=AssertionError('no free slot')) as prepare, \
+             patch.object(vc, 'handoff_prompt', side_effect=AssertionError('no invented picture')):
+            rendered = self.render()
+        prepare.assert_not_called()
+        self.generate.assert_called_once()
+        self.assertEqual(rendered['render_request']['final_refs'], [str(path) for path in self.refs])
+
+    def test_unavailable_optional_appearance_keeps_actual_tail_and_continues(self):
+        previous, _ = self.previous_fixture()
+        with patch.object(vc, 'previous_segment', return_value=previous), \
+             patch.object(vc, 'prepare_handoff', side_effect=RuntimeError('optional frame unavailable')) as prepare, \
+             patch.object(vc, 'handoff_prompt', side_effect=lambda prompt, *a, **kw: prompt):
+            rendered = self.render()
+        prepare.assert_called_once()
+        self.generate.assert_called_once()
+        self.assertEqual(len(rendered['render_request']['final_refs']), 3)
+        self.assertEqual(rendered['render_request']['handoff_version'], 'h3-handoff-v2')
 
     def test_pending_handoff_snapshot_does_not_add_new_appearance(self):
         previous, _appearance = self.previous_fixture()

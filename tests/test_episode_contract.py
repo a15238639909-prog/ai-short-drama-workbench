@@ -74,11 +74,31 @@ class SourceContractTests(unittest.TestCase):
         _, thoughts, _ = contract.prepare_source('林雨心想：“' + words + '”', CARDS, split_long_dialogue=True)
         self.assertEqual(thoughts, [])
 
-    def test_long_clause_without_punctuation_stays_intact_with_issue(self):
+    def test_long_clause_without_punctuation_continues_losslessly_within_budget(self):
         words = '字' * 80
         _, says, report = contract.prepare_source('林雨：' + words, CARDS, split_long_dialogue=True)
-        self.assertEqual(says, [('林雨', words)])
-        self.assertEqual(report['issues'][0]['code'], 'dialogue_timing')
+        self.assertGreater(len(says), 1)
+        self.assertEqual(''.join(fragment for _, fragment in says), words)
+        self.assertTrue(all(who == '林雨' and contract.speech_seconds(fragment) <= 15 for who, fragment in says))
+        self.assertFalse(report['issues'])
+
+    def test_english_long_speech_prefers_spaces_without_losing_them(self):
+        words = 'Please carry the blue toolbox through the door and wait beside the bench. ' * 6
+        fragments = contract.split_speech(words)
+        self.assertEqual(''.join(fragments), words)
+        self.assertTrue(all(contract.speech_seconds(fragment) <= 15 for fragment in fragments))
+        # Existing sentence punctuation remains preferred; other splits are
+        # word boundaries and keep every original whitespace character.
+        self.assertTrue(all(fragment.endswith((' ', '.', '\n')) for fragment in fragments[:-1]))
+
+    def test_long_unspaced_word_and_unicode_marks_keep_exact_text(self):
+        for words in ('A' * 200, '字' * 65 + 'a\u0301' + '字' * 80, '字' * 65 + '\r\n' + '字' * 80):
+            with self.subTest(words=words[:20]):
+                fragments = contract.split_speech(words)
+                self.assertGreater(len(fragments), 1)
+                self.assertEqual(''.join(fragments), words)
+                self.assertTrue(all(contract.speech_seconds(fragment) <= 15 for fragment in fragments))
+                self.assertFalse(any(fragment.startswith(('\u0301', '\n')) for fragment in fragments[1:]))
 
     def test_presence_does_not_promote_missing_or_mentioned_person(self):
         presence = contract.presence_evidence('林雨递给陈安水瓶。周宁已经失踪。林雨寻找周宁。', CARDS)
@@ -185,16 +205,17 @@ class DirectorContractTests(unittest.TestCase):
         self.assertEqual(says, [('林雨', '门锁住了。')])
         self.assertIn('【D1】林雨：门锁住了。', fixed)
 
-    def test_source_failure_is_bounded_and_classified(self):
+    def test_source_voice_is_preserved_without_a_model_review_gate(self):
         calls = []
         def q(system, payload, **kwargs):
             calls.append(payload)
-            return json.dumps({'resolutions': [{'dialogue_id': 1, 'speaker': '', 'evidence': '', 'certain': False}]})
-        with self.assertRaises(contract.ContractError) as caught:
-            director.resolve_speakers('有人说话。', [('待核对说话人', '走吧。')], CARDS, q)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(caught.exception.code, 'speaker_unresolved')
-        self.assertTrue(caught.exception.retryable)
+            self.fail('the source must not trigger another speaker review')
+        trace = []
+        script, dialogue = director.resolve_speakers('有人说话。', [('待核对说话人', '走吧。')], CARDS, q, trace=trace)
+        self.assertEqual(calls, [])
+        self.assertEqual(script, '有人说话。')
+        self.assertEqual(dialogue, [('未具名说话者', '走吧。')])
+        self.assertEqual(trace[-1]['bindings'][0]['binding'], 'source_voice')
 
     def test_newly_recovered_long_speech_does_not_render_in_short_clip(self):
         original = '林雨说：“' + '路很远' * 25 + '。”'
@@ -249,12 +270,16 @@ class DirectorContractTests(unittest.TestCase):
         self.assertTrue(all(4 <= sl['seconds'] <= 15 for sl in slices))
         self.assertEqual({row['source_dialogue_id'] for sl in slices for row in sl['director']['source_dialogue']}, {1})
 
-    def test_unbreakable_long_clause_stops_before_wasting_model_retries(self):
+    def test_unpunctuated_long_clause_splits_losslessly_and_continues(self):
         def q(*args, **kwargs):
-            self.fail('no valid punctuation boundary, should preserve and report before model')
-        with self.assertRaises(contract.ContractError) as caught:
-            director.plan('林雨：' + '字' * 80, [{'name': '桥边'}], CARDS, q)
-        self.assertEqual(caught.exception.code, 'dialogue_timing')
+            error = RuntimeError('文字输出达到长度上限')
+            error.partial_text = '{"shots": ['
+            raise error
+        words = '字' * 80
+        slices = director.plan('林雨：' + words, [{'name': '桥边'}], CARDS, q)
+        self.assertGreater(len(slices), 1)
+        self.assertEqual(''.join(line[1] for sl in slices for line in sl['director']['says']), words)
+        self.assertTrue(all(4 <= sl['seconds'] <= 15 for sl in slices))
 
 
 class PromptContractTests(unittest.TestCase):

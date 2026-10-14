@@ -666,7 +666,9 @@ def write(settings, ep=1, previous=None, brief="", characters=None, model=None, 
     # P318：完整故事梗概**要给写手**——原来这里 pop 掉了，用户改了整部梗概（怀表背面有蓝鲸标记）写手根本收不到；
     # 「后话内容」那一栏已经把不该写的圈出来，不怕写手抢写后面
     writer_data.pop("分话概览（计划，尚未发生）", None)
-    if str(settings.get("story_mode") or "").strip().lower() in ("single", "episode", "manual"):
+    source_authority = str(settings.get("story_mode") or "").strip().lower() in ("single", "episode", "manual")
+    if source_authority:
+        writer_data.pop("核对目标", None)
         tail = ("\n\n现在写第%d话。把本话构想中明确安排的事情完整写完，写出人物行动、对白、原因、过程和结果；"
                 "不要自动拆话，也不要为了留下悬念把本话事件截断。" % ep)
     else:
@@ -682,6 +684,14 @@ def write(settings, ep=1, previous=None, brief="", characters=None, model=None, 
         prose = error.partial_text
         return {"prose": prose, "review": {"verdict": "unknown", "issues": [{"detail": str(error)}],
                 "summary": "", "outcomes": [], "state": [], "prose_sig": signature(prose)}}
+    if source_authority:
+        if on_step:
+            on_step("正文已完成，人物、对白和画面按正文继续制作")
+        return {"prose": prose, "request": request, "review": {
+            "verdict": "accepted", "source_authority": True,
+            "summary": "以生成的故事正文为后续制作依据，不再按原构想回审或改写。",
+            "issues": [], "outcomes": [], "state": [], "checks": [],
+            "prose_sig": signature(prose)}}
     if on_step:
         on_step("核对第%d话事实、衔接和结果" % ep)
     review = review_prose(prose, data, model)

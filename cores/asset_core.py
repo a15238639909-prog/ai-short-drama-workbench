@@ -43,10 +43,13 @@ def normalize_character(data, for_storage=False):
     if not appearance:
         appearance = "；".join(x for x in (str(c.get("look") or "").strip(),
                                             str(c.get("other") or "").strip()) if x)
+    from .group_entities import is_group
+    group = is_group(c)
     try:
         from . import style_presets
-        c["build"] = style_presets.normalize_body_option(c.get("sex"), c.get("build"))
-        c["face_type"] = style_presets.normalize_face_option(c.get("sex"), c.get("face_type"))       # P354：旧长相标签 → 骨相档
+        if not group:
+            c["build"] = style_presets.normalize_body_option(c.get("sex"), c.get("build"))
+            c["face_type"] = style_presets.normalize_face_option(c.get("sex"), c.get("face_type"))       # P354：旧长相标签 → 骨相档
         c["clothing_requirement"] = style_presets.normalize_cloth_option(c.get("clothing_requirement"))
     except Exception:
         pass
@@ -116,6 +119,12 @@ def create_character(story_id, fields):
     ] if x and x.split("：", 1)[-1].strip())
     char = {
         "character_id": cid, "story_id": story_id, "name": fields.get("name") or "未命名",
+        "entity_type": fields.get("entity_type") or "individual",
+        "aliases": fields.get("aliases") or [],
+        "group_count": fields.get("group_count"),
+        "group_members": fields.get("group_members") or fields.get("members") or [],
+        "group_appearance": fields.get("group_appearance") or "",
+        "source_evidence": fields.get("source_evidence") or "",
         "age": fields.get("age") or "", "sex": fields.get("sex") or "",
         "height": fields.get("height") or "",                                 # P323①：身高（可改；进人设图硬事实）
         # 只给人物设定图用，不写入 identity_anchor，也不进入故事/视频提示词。
@@ -965,6 +974,7 @@ def re_upper(s):
 #     而那七个正是编译器真正要读的 —— 用户在界面上改完一保存就没了
 #   · 人物清单少了 face_type，长相选了等于没选
 CHARACTER_FIELDS = ("name", "age", "sex", "sheet_body_ratio", "char_type", "face_type", "build",
+                    "entity_type", "aliases", "group_count", "group_members", "group_appearance", "source_evidence",
                     "hair", "hair_preset", "voice", "personality",
                     "behavior_anchor", "appearance_details",
                     "clothing", "clothing_requirement", "outfit_preset", "note",

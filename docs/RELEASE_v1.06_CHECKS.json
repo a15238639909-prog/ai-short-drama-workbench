@@ -1,0 +1,41 @@
+{
+  "version": "1.06",
+  "tests": 276,
+  "groups": [
+    {
+      "label": "continuation_source_and_recovery",
+      "tests": 239,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "bundled_tools_and_motion",
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 8,
+      "passed": true
+    },
+    {
+      "label": "downloader",
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "syntax": {
+    "python_files": 171,
+    "json_files": 25
+  },
+  "credential_candidates": 0,
+  "public_file_range_passed": true,
+  "model_inference_run": false,
+  "real_video_generated": false,
+  "known_legacy_age_test_failures_changed": false,
+  "scope_note": "Existing legacy age-policy failures from v1.05 are documented; this release is not a complete safety audit."
+}

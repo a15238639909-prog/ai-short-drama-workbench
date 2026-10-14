@@ -68,7 +68,8 @@ def approve(sid, no):
     e = saga_core.episode(sg, no) or {}
     if not str(e.get("prose") or "").strip():
         raise ValueError("这一话还没有正文")
-    if e.get("writing_review", {}).get("brief_sig") != uw.signature(e.get("brief", "")):
+    generated_brief = e.get("writing_review", {}).get("brief_sig")
+    if generated_brief and generated_brief != uw.signature(e.get("brief", "")):
         raise ValueError("本话想法已经改动，请先按新想法重写正文")
     e["prose_approved_sig"] = approval_signature(e)
     saga_core.save_saga(sid, sg)
@@ -144,26 +145,18 @@ def write(sid, no, on_step=None):
         except Exception as _tx:
             settings["_writer_table"] = ""
     result = uw.write(settings, no, previous, brief=current["brief"], on_step=on_step, brief_override=True)
-    # P366：口述剧情——程序按事件卡核对（缺事件/多数字/多人物 → 一次定向修；越过本话结尾的段砍掉）
-    _ev, _fid = [], {}
-    try:
-        from . import oral_story as _os_, authoring as _au
-        _ev = settings.get("_events") or _os_.event_card(current["brief"])
-        if _ev:
-            result["prose"], _fid = _os_.fidelity_pass(result["prose"], _ev, _au._q, brief=current["brief"], on_step=on_step,
-                                                    preserve_story=True)
-            result["review"]["fidelity"] = _fid
-    except Exception as _fx:
-        _fid = {"verdict": "error", "err": str(_fx)[:160]}
+    # The user's idea guides the writer. Once returned, the actual prose is
+    # authoritative: no second comparison/revision against the initial idea.
+    _ev = settings.get("_events") or _os_.event_card(current["brief"])
+    _fid = {"verdict": "not_reviewed", "source_authority": True}
     # First and later episodes use one lossless source contract. Keep the exact
     # model source and unresolved metadata; never discard repeated/short speech.
     from . import episode_contract as _contract, asset_core as _ac2
     _script, _dialogue, _source_report = _contract.prepare_source(
         result['prose'], _ac2.list_assets(sid, 'characters') or [])
-    result['prose'] = _contract.plain_script(_script)
     result['review']['source_contract'] = _source_report
     if _source_report['issues'] and on_step:
-        on_step('正文原话已完整保留；%d句说话人将在分镜前按上下文自动核对' % len(_source_report['issues']))
+        on_step('正文原话已完整保留；分镜按原文称呼和上下文继续，不回审原构想')
     latest = story_core.get_story(sid) or {}
     sg = saga_core.get_saga(sid)
     target = saga_core.episode(sg, no)
@@ -174,7 +167,7 @@ def write(sid, no, on_step=None):
         target.update(prose_draft=result["prose"], writing_attempt=result["review"])
         saga_core.save_saga(sid, sg)
         raise ValueError("本轮正文留作草稿，没有覆盖旧稿：" + ("生成期间输入有变化" if changed else "模型正文为空"))
-    if result['review']['verdict'] in ('fail', 'unknown') and on_step:
+    if result['review']['verdict'] in ('fail', 'unknown') and not result['review'].get('source_authority') and on_step:
         on_step('正文核对仍有提示，保留核对记录并继续；未标记为核对通过')
     if plot_warning:
         result['review'].setdefault('warnings', []).append(plot_warning)

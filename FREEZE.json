@@ -1,29 +1,21 @@
 {
-  "tag": "v1.05-complete-20261013",
-  "version": "1.05",
+  "version": "1.06",
   "edition": "完整版",
-  "date": "2026-10-13",
-  "branch": "complete/v1.05-20261013",
-  "model_weights_included": false,
+  "date": "2026-10-14",
+  "tag": "v1.06-complete-20261014",
+  "branch": "complete/v1.06-20261014",
+  "previous_commit": "cb881bc082147c36b3e7798ebe016deade40917e",
   "private_config_included": false,
   "private_data_included": false,
-  "python_runtime_included": false,
+  "media_included": false,
+  "model_weights_included": false,
+  "source_archive_python_runtime_included": false,
+  "validation": {
+    "formal_related_tests_passed": 239,
+    "new_generated_video_tested": false,
+    "models_run_during_packaging": false
+  },
   "public_defaults_retained": [
     "presets/content_scale.json"
-  ],
-  "validation": {
-    "real_episodes": 3,
-    "real_segments": 10,
-    "sample_frames_at_2fps": 208,
-    "related_regression_tests_passed": 176,
-    "audio_heard": false,
-    "production_update_verified": true
-  },
-  "known_limitations": [
-    "Finite recovery attempts; some failures require user action",
-    "Generation may contain brief flashes or detail drift; no automatic reliable visual QA",
-    "Audio speech and lip synchronization have not been audited",
-    "Legacy age_policy checks remain no-ops; active character_facts checks are unchanged",
-    "External model installation and runtime are required"
   ]
 }

@@ -70,11 +70,23 @@ def new_pack(sid, g, ep=None):
     from cores import authoring as _au
     _settings = (story_core.get_story(sid) or {}).get("settings") or {}
     _all = asset_core.list_assets(sid, "characters") or []
+    _source_cards = list(_all)
     _want_chars = [str(x) for x in ((g or {}).get("chars") or [])]      # 这一段只绑出场的人（提示词里也只列了他们）
     if (g or {}).get("no_chars") or ((g or {}).get("shot") and not _want_chars) or ('chars' in (g or {}) and not _want_chars and ((g or {}).get('plan') or {}).get('flow') == 'source-v1'):
         _all = []                                                          # P316：开场的空场段不带任何人物图；P388：节拍段的空镜（在场为空）也不带——带了 Picture 1 就不是场景
     elif _want_chars:
         _all = [c for c in _all if str(c.get("name") or "") in _want_chars]
+    from cores import group_entities as _groups
+    _group_source = str((g or {}).get('source_text') or '')
+    if not _group_source and ep is not None:
+        _group_story = story_core.get_story(sid) or {}
+        _group_episode = next((item for item in (_group_story.get('saga') or {}).get('episodes') or []
+                               if int(item.get('no') or 0) == int(ep)), {})
+        _group_source = str(_group_episode.get('prose') or '')
+    if _group_source:
+        _source_cards = _groups.scoped_cards(_source_cards, _group_source)
+        _all = _groups.scoped_cards(_all, _group_source)
+    _all = _groups.reference_cards(_all, _source_cards)
     _order, _cam = _au.h3_char_order(_all, _settings)
     for c in _order:
         if c.get("name") == _cam:
@@ -450,8 +462,10 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             prev['end_frame'] = pef
             signature = vc.segment_signature(g, params, previous, base_refs)
         if pef and os.path.exists(pef) and len(imgs) >= 9:
-            raise ValueError('本段已占满9张参考图，无法加入上一段尾帧；请减少本段引用后继续')
-        if pef and os.path.exists(pef):
+            # Preserve all actual identity/scene slots. The saved director
+            # start-state still carries continuity when a visual relay won't fit.
+            g['reference_notes'] = ['参考图已满，本段沿正文和前段文字状态衔接，未追加可选接力帧']
+        if pef and os.path.exists(pef) and len(imgs) < 9:
             imgs = imgs + [pef]
             frame_number = len(imgs)
             appearance_number = None
@@ -465,14 +479,16 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             # Only a written departure-to-arrival transition needs old setting
             # appearance; later shots must not reintroduce the departure room.
             if (not same_pending_request() and (g.get('plan') or {}).get('flow') == 'source-v1'
-                    and departure and arrival and departure != arrival):
-                if len(imgs) >= 9:
-                    raise ValueError('本段参考图已占满9张，无法加入上一段外观参考帧；请减少本段引用后继续')
-                appearance_frame = vc.prepare_handoff(previous)
-                if not appearance_frame or not os.path.isfile(appearance_frame):
-                    raise ValueError('上一段外观参考帧未准备好，已保留视频，稍后继续')
-                imgs = imgs + [appearance_frame]
-                appearance_number = len(imgs)
+                    and departure and arrival and departure != arrival and len(imgs) < 9):
+                try:
+                    appearance_frame = vc.prepare_handoff(previous)
+                except Exception:
+                    appearance_frame = None
+                if appearance_frame and os.path.isfile(appearance_frame):
+                    imgs = imgs + [appearance_frame]
+                    appearance_number = len(imgs)
+                else:
+                    g['reference_notes'] = ['可选外观参考帧未准备好，使用当前尾帧与正文状态继续']
             handoff_version = 'h3-handoff-v3' if appearance_number else 'h3-handoff-v2'
             h3p = vc.handoff_prompt(h3p, frame_number, g, previous, d,
                                     appearance_number=appearance_number)

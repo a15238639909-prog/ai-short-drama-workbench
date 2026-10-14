@@ -1965,6 +1965,17 @@ def _preflight_gate(sid, j, ready, ep=1, force=False, fix_only=False):
     from cores import authoring, shotlist as SL, asset_core as _ac, saga_core as sc
     ep = int(ep or 1)
     j["_sid"], j["_ep"] = sid, ep                                          # P328②：停下时开对话框要知道是哪一话
+    from cores import manual_story as _source_mode
+    _source_story = story_core.get_story(sid) or {}
+    _source_episode = sc.episode(_source_story.get("saga") or {}, ep) or {}
+    if (_source_mode.enabled(_source_story.get("settings"))
+            and str(_source_episode.get("prose") or "").strip()):
+        # New source-first episodes are transformed from the saved prose.
+        # Legacy arrangements must not reinterpret/rewrite that prose or gate it.
+        if j.get("cancel"):
+            raise JobCancelled("已取消")
+        _job_event(j, "info", "按已保存正文继续制作，不回审原构想或旧拍摄安排")
+        return {"blocked": False, "source_authority": True}
     sl = authoring.fresh_shotlist(sid, ep)
     arr = _confirmed_arrangement(sid, ep)
     if not sl and not arr:
@@ -3155,9 +3166,8 @@ def saga_auto_all(h, path, d):
                     # P445②：续话——已有的人不重建，新人只认口述里点了名的（写手起的名字不建卡）
                     from cores import asset_core as _ac445
                     _have445 = {str(c.get("name") or "") for c in (_ac445.list_assets(sid, "characters") or [])}
-                    _brief445 = str((authoring._ep(sid, _ep, create=False)[1] or {}).get("brief") or "")
                     _designed = [c for c in (_designed or []) if isinstance(c, dict) and str(c.get("name") or "") not in _have445
-                                 and str(c.get("name") or "") and str(c.get("name")) in _brief445]
+                                 and str(c.get("name") or "")]
                 _cards = authoring._create_cards(sid, _designed) if _designed else []
                 _complete_step(j)
                 _r = {"characters": len(_cards or []), "images_failed": [], "cards_failed": []}
@@ -3968,9 +3978,8 @@ def _text_chain_to_shots(sid, j, ep, one):
         _designed, _dropped = authoring._ground_cards(_designed, _prose_now, _ss)
         if int(ep) > 1:
             _have = {str(c.get("name") or "") for c in (_ac.list_assets(sid, "characters") or [])}
-            _brief = str((authoring._ep(sid, ep, create=False)[1] or {}).get("brief") or "")
             _designed = [c for c in (_designed or []) if isinstance(c, dict) and str(c.get("name") or "") not in _have
-                         and str(c.get("name") or "") and str(c.get("name")) in _brief]
+                         and str(c.get("name") or "")]
         _cards = authoring._create_cards(sid, _designed) if _designed else []
         _job_event(j, "info", "人物卡 %d 张：%s" % (len(_cards or []), "、".join(str(c.get("name") or "") for c in (_cards or [])[:6])))
         _complete_step(j)
@@ -3980,6 +3989,8 @@ def _text_chain_to_shots(sid, j, ep, one):
         _added = _cast_result.get("added") or []
         _job_event(j, "info", "新增人物卡：" + "、".join(_added) if _added else "本话沿用已有人物卡和图片")
         _complete_step(j)
+    from cores import group_entities as _groups
+    _groups.ensure_group_cards(sid, ep, on_step=lambda m: _set_step(j, m))
     _st_now = _light_status(sid, ep)
     _e_now = authoring._ep(sid, ep, create=False)[1] or {}
     _conversion_stale = (_e_now.get("pictures_conversion_version") != getattr(authoring, "LOSSLESS_PICTURES_VERSION", None))

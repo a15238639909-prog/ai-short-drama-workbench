@@ -38,13 +38,28 @@ def _current_slices(sid, ep):
     return None
 
 
+def _episode_source(sid, ep):
+    if ep is None:
+        return ''
+    from . import saga_core
+    episode = saga_core.episode(saga_core.get_saga(sid), int(ep or 1)) or {}
+    return str(episode.get('prose') or episode.get('pictures') or episode.get('body') or '')
+
+
 def required_characters(sid, ep=None):
-    from . import authoring, story_core
+    from . import authoring, story_core, asset_core, group_entities
     cards = [c for c in authoring.cast_cards(sid) if not c.get("auto_incidental")]
+    source = _episode_source(sid, ep)
+    if source:
+        cards = group_entities.scoped_cards(cards, source)
     slices = _current_slices(sid, ep) if ep is not None else None
     if slices and all(isinstance(s.get("director"), dict) for s in slices):
         names = {n for s in slices for n in s["director"].get("cast", [])}
         cards = [c for c in cards if c.get("name") in names]
+    all_cards = asset_core.list_assets(sid, "characters") or []
+    if source:
+        all_cards = group_entities.scoped_cards(all_cards, source)
+    cards = group_entities.reference_cards(cards, all_cards)
     _, camera = authoring.h3_char_order(cards, (story_core.get_story(sid) or {}).get("settings") or {})
     return [c for c in cards if c.get("name") != camera]
 
@@ -136,7 +151,7 @@ def ensure_characters(sid, ep, on_step=None):
 
 
 def assert_references(sid, segments, ep=None):
-    from . import asset_core, authoring, story_core
+    from . import asset_core, authoring, story_core, group_entities
     all_cards = asset_core.list_assets(sid, "characters") or []
     char_paths = adopted_paths(sid, "character")
     scene_paths = adopted_paths(sid, "scene")
@@ -144,10 +159,13 @@ def assert_references(sid, segments, ep=None):
     settings = (story_core.get_story(sid) or {}).get("settings") or {}
     missing = []
     for g in segments:
+        source = str(g.get('source_text') or _episode_source(sid, ep))
+        scoped = group_entities.scoped_cards(all_cards, source) if source else all_cards
         names = list(g.get("chars") or [])
-        cards = [c for c in all_cards if c.get("name") in names]
+        cards = [c for c in scoped if c.get("name") in names]
         if not names and not g.get("no_chars") and not g.get("shot"):
             cards = required_characters(sid)
+        cards = group_entities.reference_cards(cards, scoped)
         order, camera = authoring.h3_char_order(cards, settings)
         missing.extend("人物「%s」" % c.get("name") for c in order
                        if c.get("name") != camera and str(c.get("character_id") or "") not in char_paths)
