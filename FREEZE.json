@@ -1,10 +1,10 @@
 {
-  "version": "1.06",
+  "version": "1.06.1",
   "edition": "完整版",
   "date": "2026-10-14",
-  "tag": "v1.06-complete-20261014",
-  "branch": "complete/v1.06-20261014",
-  "previous_commit": "cb881bc082147c36b3e7798ebe016deade40917e",
+  "tag": "v1.06.1-complete-20261014",
+  "branch": "complete/v1.06.1-20261014",
+  "previous_commit": "8094e125a26196a64dd4b022167953a12a868b59",
   "private_config_included": false,
   "private_data_included": false,
   "media_included": false,
@@ -17,5 +17,9 @@
   },
   "public_defaults_retained": [
     "presets/content_scale.json"
-  ]
+  ],
+  "repository": "https://github.com/bilibili-laona/ai-short-drama-workbench",
+  "account": "bilibili-laona",
+  "display_name": "bilibili-老衲",
+  "packaging_change_only": true
 }

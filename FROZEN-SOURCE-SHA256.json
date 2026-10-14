@@ -6,33 +6,33 @@
   },
   {
     "path": "CHANGELOG.md",
-    "bytes": 16730,
-    "sha256": "94efdaae412ec869e790f61af7782d14992bd792188ba14bfafb2f8ba6a8062f"
+    "bytes": 16942,
+    "sha256": "f2e7d888c0943fa0017ac52ba97c0855a2c5cda25c24b35cef43cd351433abfb"
   },
   {
     "path": "FREEZE.json",
-    "bytes": 631,
-    "sha256": "05145f89e7b791c26e1229db2150a750a05d96a518fc704ed8a652c32f73828d"
+    "bytes": 820,
+    "sha256": "624b3bb3acdc315489f565e1913865f34e851252c78cf68e2e940b16b174409c"
   },
   {
     "path": "LICENSE",
-    "bytes": 1095,
-    "sha256": "4f5d36e42fb4260449c78e037ccedc1644f283c7a05dd979fd5cd243812bc6aa"
+    "bytes": 1092,
+    "sha256": "cee89467a5d34aecc23237f289da24e1085be07e6635354e16e0ec6bc9e6ece9"
   },
   {
     "path": "README.md",
-    "bytes": 23656,
-    "sha256": "120493166e0a730c4df577dc19f75b5f43b085b6d4824f07db6135ef57518735"
+    "bytes": 23977,
+    "sha256": "e32b9693c1bc4912f7ed9e9c5cf977b7526c4df37b0650449c9ed9f1bfe888d4"
   },
   {
     "path": "RECOVERY.txt",
-    "bytes": 641,
-    "sha256": "31a853ec64158e13fec7a4dbd9f1aa37252e33bb10c31d6400713c64a3655a98"
+    "bytes": 865,
+    "sha256": "6ad98f84f56d0a57cebf91a1f3ef6327506ae0aaee029d17755cd3de2f993a62"
   },
   {
     "path": "VERSION.txt",
-    "bytes": 6,
-    "sha256": "72d4b92ffda12187caadd68d422546ac10840ce6552811a6f656465b7b28c850"
+    "bytes": 8,
+    "sha256": "b21e35e9dbfc3e4faa199d66f96be7fddc41f40e395e7d3f6d2fd50e74fb6bb6"
   },
   {
     "path": "_legacy_8848/album_v3_core.py",
@@ -743,6 +743,11 @@
     "path": "docs/RELEASE_v1.05_CHECKS.json",
     "bytes": 854,
     "sha256": "d3ad759923dd0bac9875ae5f82c5ee758bff0c525bd99d0d88da61ef419351cb"
+  },
+  {
+    "path": "docs/RELEASE_v1.06.1.md",
+    "bytes": 639,
+    "sha256": "9a20e65802bb6f6ce3a4f7ff03d1cb3a025e92dfabec64843dee04b279a6f5a0"
   },
   {
     "path": "docs/RELEASE_v1.06.md",
