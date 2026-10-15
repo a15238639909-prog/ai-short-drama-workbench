@@ -14,7 +14,7 @@ FPS = 24
 # Accepted full-video trials: 124 frames lie on H3's native 17n+5 grid.
 SEGMENT_FRAMES = 124
 MIN_TAIL_FRAMES = FPS
-PIPELINE_VERSION = 'shot-aware-local-qwen-dual-person-v3'
+PIPELINE_VERSION = 'shot-aware-local-qwen-dual-person-v4-native-grid'
 
 
 def frame_count(path):
@@ -227,7 +227,9 @@ def run(handle, task):
     source_probe = probe(original)
     source_video = next(s for s in source_probe['streams'] if s['codec_type'] == 'video')
     ratio = '9:16' if source_video['height'] > source_video['width'] else '16:9'
-    width, height = h3_client._sized(ratio, data['size_tier'])
+    from .video_geometry import dimensions, native_size
+    geometry = dimensions(source_video['width'], source_video['height'], int(float(data['size_tier'])*1000000))
+    width, height = geometry['width'], geometry['height']
     assert source_probe['streams'][0]['r_frame_rate'] == '24/1'
     if frame_count(original) != expected:
         raise RuntimeError('原片时间轴未覆盖完整范围，已停止')
@@ -263,7 +265,7 @@ def run(handle, task):
             handle.step('H3动作迁移生成中', index - 1, len(parts) + 1,
                         f"第{index}/{len(parts)}段 · {part['frames'] / FPS:g}秒")
             try:
-                with gpu_manager.GPU_LOCK:
+                with gpu_manager.GPU_LOCK, native_size(h3_client, geometry):
                     raw = h3_client.generate('ref2va', prompt, images=images,
                         reference_videos=[str(source)], seconds=part['model_frames'] / FPS,
                         exact_frames=part['model_frames'], ratio=ratio,
@@ -271,7 +273,8 @@ def run(handle, task):
                     generation_file.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding='utf-8')
                     release_idle_cache(h3_client)
             finally:
-                gpu_manager.release('h3')
+                from models.story_video_client import preserve_release
+                preserve_release('h3')
         handle.check_pause()
         if frame_count(raw['output_path']) < part['model_frames']:
             raise RuntimeError('模型输出缺帧，已保留分段结果，请重试')

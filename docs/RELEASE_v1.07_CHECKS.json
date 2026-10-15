@@ -1,0 +1,70 @@
+{
+  "version": "1.07",
+  "tests": 390,
+  "groups": [
+    {
+      "label": "characters_continuation_recovery",
+      "tests": 249,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "bundled_motion_media",
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "initially_skipped": 8,
+      "isolated_http_rechecked": 8
+    },
+    {
+      "label": "local_story_video",
+      "tests": 111,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    }
+  ],
+  "node_checks": [
+    {
+      "file": "tests/test_image_drop.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_progress_dismiss.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_taskbar_controls.js",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "syntax": {
+    "python_files": 198,
+    "json_files": 26,
+    "javascript_files": 26,
+    "reference_only_exceptions": [
+      "presets/8848_底层定义原文.js"
+    ]
+  },
+  "public_files_scanned": 370,
+  "credential_candidates": 0,
+  "public_file_range_passed": true,
+  "model_inference_run": false,
+  "real_ai_media_generated": false,
+  "test_files_retained": true,
+  "scope_note": "Selected release regressions, not a full audit; original reference-only JS is unchanged.",
+  "isolated_http_recheck": {
+    "tests": 8,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": true,
+    "model_inference_run": false
+  }
+}

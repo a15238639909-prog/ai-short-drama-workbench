@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """qwen_client.py — V4.1 clean-room Qwen3.6 文本客户端（llama-server :8080）。"""
 import json, os, subprocess, threading, time, urllib.request, urllib.error
+from .gpu_manager import QWEN_PORT
 
-QWEN_URL = os.environ.get("V41_QWEN_URL", "http://127.0.0.1:8080")
+QWEN_URL = os.environ.get("V41_QWEN_URL", "http://127.0.0.1:%d" % QWEN_PORT)
 QWEN_MODEL = "qwen3.6-35b-a3b"
 # 【本机路径统一走 cores/paths.py】换机器时改 config.json 或设环境变量就行，
 # 不用翻代码（2026-09-05 独立抽取时定）。
@@ -93,7 +94,7 @@ def start():
         # P272 总闸（跨进程占用 / 清僵尸 llama / 内存够不够）——这三条不许吞异常，
         # 吞了就等于没闸：事故那次就是别的进程照样拉起了第二个 llama-server
         from . import gpu_manager
-        gpu_manager.guard("qwen", note="llama-server:8080")
+        gpu_manager.guard("qwen", note="llama-server:%d" % QWEN_PORT)
         try:
             gpu_manager.claim("qwen")
             time.sleep(2)
@@ -108,7 +109,7 @@ def start():
         ctx = str(os.environ.get("V41_QWEN_CTX") or "16384").strip() or "16384"
         args = [SERVER_EXE, "-m", MODEL_GGUF, "--mmproj", MMPROJ_GGUF,
                 "-ngl", ngl, "-c", ctx, "-n", ctx, "-np", "1",
-                "-fa", "on", "--host", "127.0.0.1", "--port", "8080", "--jinja"]
+                "-fa", "on", "--host", "127.0.0.1", "--port", str(QWEN_PORT), "--jinja"]
         # P271：上一次没起来的进程还在就先杀掉——不然每次重试多一个 llama-server 一起加载 20 GB 模型，
         # 内存打满谁也起不来（实测攒到 8 个）
         if _PROC is not None and _PROC.poll() is None:

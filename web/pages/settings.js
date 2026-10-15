@@ -34,6 +34,14 @@ window.Pages.settings = (function () {
     var chosen = (val && val !== "自动" && val !== "自动判断") ? val : (opts[0] || "");
     return sel(id, opts, chosen);
   }
+  function sheetOverrideSel(id, list, val) {
+    var opts = concreteCharacterOptions(list), chosen = val || '';
+    if (chosen && opts.indexOf(chosen) < 0) opts.push(chosen);
+    return '<select id="' + id + '"' + (D && D.sheet_body_overrides_supported ? '' : ' disabled') + ' style="width:100%;height:36px"><option value=""' +
+      (!chosen ? ' selected' : '') + '>保持原设定</option>' + opts.map(function(x){
+        return '<option value="' + esc(x) + '"' + (x === chosen ? ' selected' : '') + '>' + esc(x) + '</option>';
+      }).join('') + '</select>';
+  }
   function dataList(id, list) {
     return '<datalist id="' + id + '">' + (list || []).map(function (x) {
       return '<option value="' + esc(x) + '"></option>';
@@ -1211,11 +1219,13 @@ window.Pages.settings = (function () {
           /* P316：卡上的类型是身份词（魔法师/猫娘奴隶）时不在物种选项里，原来一保存就被顶成「人类」——不在选项里的值补成一项 */
           /* P352（用户 9-14 定）：人物类型改成「身份」自由文字，故事自动填（勇者/修女/武术家…），种族按文字自动判 */
           '<span>身份<br><input id="cType' + i + '" value="' + esc(c.char_type || "") + '" placeholder="例：勇者 / 修女 / 女战士（故事自动填）" style="width:100%;height:36px;padding:0 12px"></span></div>' +
-          '<div class="note-gray" style="margin:8px 0 4px">头身比例和身材默认按故事人物生成；手动选择后以你的选择为准。两项只控制人物设定图。</div>' +
+          '<div class="note-gray" style="margin:8px 0 4px">' +
+          (D.sheet_body_overrides_supported ? '身体比例和身材默认保持原设定；只有手动选择才覆盖人设图。原始人物资料与故事不改，选回“保持原设定”即可取消覆盖。' : '请先关闭并重新启动工作台，再按Ctrl+F5。当前服务尚未加载人设图覆盖功能，这两项暂不可编辑。') + '</div>' +
           '<div class="character-options character-visuals">' +
+          '<span>人设图身高<br><input id="cHeight' + i + '" value="' + esc(c.height || "") + '" placeholder="保持故事设定；可填175cm" style="width:100%;height:36px;padding:0 12px"></span>' +
           '<span>' + optLabel("人设图身体比例", "sheet_ratio", "cSheetRatio" + i, "charOptionDetail" + i) +
-          charSel("cSheetRatio" + i, fieldsFor(c.sex)["身体比例"], c.sheet_body_ratio) + "</span>" +
-          '<span>' + optLabel("身材", "body", "cBuild" + i, "charOptionDetail" + i, "cSex" + i) + charSel("cBuild" + i, fieldsFor(c.sex)["身材"], c.build) + "</span>" +
+          sheetOverrideSel("cSheetRatio" + i, fieldsFor(c.sex)["身体比例"], c.sheet_ratio_override) + "</span>" +
+          '<span>' + optLabel("人设图身材", "body", "cBuild" + i, "charOptionDetail" + i, "cSex" + i) + sheetOverrideSel("cBuild" + i, fieldsFor(c.sex)["身材"], c.sheet_body_override) + "</span>" +
           '<span>' + optLabel("五官骨相", "face", "cLook" + i, "charOptionDetail" + i, "cSex" + i) + charSel("cLook" + i, fieldsFor(c.sex)["长相"], c.face_type) + "</span>" +
           '<span>' + optLabel("发型预设", "hair", "cHairPreset" + i, "charOptionDetail" + i, "cSex" + i) + charSel("cHairPreset" + i, fieldsFor(c.sex)["发型"], c.hair_preset) + "</span>" +
           '<span><span class="option-label"><span>最终发型和发色</span></span><input id="cHair' + i + '" value="' + esc(c.hair || "") + '" placeholder="选择预设会自动填；也可以直接手改" style="width:100%;height:36px;padding:0 12px"></span>' +
@@ -1604,10 +1614,11 @@ window.Pages.settings = (function () {
       var detail = splitCharacterDetails(v("cDetails"), c);
       return {
         name: v("cName") || c.name, age: v("cAge"), sex: v("cSex"),
-        sheet_body_ratio: v("cSheetRatio"),                                                           /* 只用于人物设定图 */
+        height: v("cHeight"),
+        sheet_ratio_override: v("cSheetRatio"),
+        sheet_body_override: v("cBuild"),
         char_type: v("cType"),
         face_type: v("cLook"),
-        build: v("cBuild"),
         behavior_anchor: v("cChar"),
         hair_preset: v("cHairPreset"),
         hair: v("cHair") || detail.hair,
@@ -2337,6 +2348,11 @@ window.Pages.settings = (function () {
           if (!e) return;
           var keep = e.value;
           var concrete = concreteCharacterOptions(pair[1]);
+          if (pair[0] === "cBuild" + i) {
+            e.innerHTML = '<option value=""' + (!keep || concrete.indexOf(keep) < 0 ? ' selected' : '') + '>保持原设定</option>' +
+              concrete.map(function(o){return '<option value="' + esc(o) + '"' + (o === keep ? ' selected' : '') + '>' + esc(o) + '</option>';}).join('');
+            return;
+          }
           e.innerHTML = concrete.map(function (o) {
             return '<option' + (o === keep ? " selected" : "") + ">" + o + "</option>";
           }).join("");

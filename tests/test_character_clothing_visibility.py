@@ -22,14 +22,15 @@ class ClothingVisibilityTests(unittest.TestCase):
             with self.subTest(name=name):
                 card = dict(name=name, character_id='MOCK', sex=sex, age=age, char_type='人类',
                             clothing=outfit, clothing_from_brief=True, clothing_requirement='自定义',
-                            build='偏瘦有线条', sheet_body_ratio='标准成人', hair='黑色短发')
+                            build='偏瘦有线条', sheet_body_ratio='标准成人',
+                            sheet_body_override='偏瘦有线条', hair='黑色短发')
                 original = copy.deepcopy(card)
                 facts = {'appearance': {'脸': '琥珀色眼睛', '身体': body}, 'expression': '平静',
                          'clothing': [{'类别': '上装', '名称': '黑色高领上衣'},
                                       {'类别': '下装', '名称': '灰色裤子'}]}
                 facts_original = copy.deepcopy(facts)
                 sheet = '16:9横向四格人物设定板。' + body + '琥珀色眼睛。穿着' + outfit + '。真实摄影成像。'
-                with patch.object(authoring, 'body_text', return_value=body), \
+                with patch.object(sp, 'sheet_body_text', return_value=body), \
                      patch.object(pw, 'prepare_character_facts', return_value=facts) as prepare, \
                      patch.object(pw, 'write_character', return_value=(sheet, '')) as write, \
                      patch.object(asset_core, 'get_asset', return_value=None), \
@@ -71,9 +72,9 @@ class ClothingVisibilityTests(unittest.TestCase):
         self.assertNotIn('上衣', cc.clothing_fact(guard))
 
     def test_custom_scale_clothing_is_not_rewritten(self):
-        with patch.object(sp, 'character_figure_variant', return_value={'pose': '指定姿势', 'clothing': '指定尺度服装'}), \
-             patch.object(authoring, 'body_text', return_value='腹肌分块可见'):
-            text = authoring._char_one_line({'name': '测试', 'sex': '女', 'age': 28, 'clothing': '蓝色外套'}, {})
+        with patch.object(sp, 'character_figure_variant', return_value={'pose': '指定姿势', 'clothing': '指定尺度服装'}):
+            text = authoring._char_one_line({'name': '测试', 'sex': '女', 'age': 28, 'clothing': '蓝色外套',
+                                             'sheet_body_override': '腹肌分块可见'}, {})
         self.assertIn('腹肌分块可见', text)
         self.assertIn('指定尺度服装', text)
         self.assertNotIn('固定穿搭与遮挡事实', text)

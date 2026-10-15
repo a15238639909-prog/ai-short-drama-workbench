@@ -50,9 +50,18 @@ window.UIActions = (function () {
        stuck(文字)     卡住         —— 变红停住
        done()          收起
      耗时操作统一调它，用户就不用盯着一个没反应的按钮猜。 */
+  var dismissedProgress = [];
+  try { var storedProgress = JSON.parse(localStorage.getItem('dismissedProgress') || '[]'); if (Array.isArray(storedProgress)) dismissedProgress = storedProgress; } catch (_) {}
   var P = {
-    _set: function (cls, frac, note) {
+    _noticeKey: '',
+    _set: function (cls, frac, note, noticeKey) {
+      P._noticeKey = cls === 'stuck' ? (noticeKey || 'message:' + note) : '';
+      if (P._noticeKey && dismissedProgress.indexOf(P._noticeKey) >= 0) {
+        cls = ''; frac = 0; note = '空闲'; P._noticeKey = '';
+      }
       var b = document.getElementById("gBar"), n = document.getElementById("gNote");
+      var dismiss = document.getElementById('gDismiss');
+      if (dismiss) { dismiss.hidden = cls !== 'stuck'; dismiss.onclick = P.dismiss; }
       if (b) {
         b.className = "pbar" + (cls ? " " + cls : "");
         var i = b.querySelector("i");
@@ -62,7 +71,14 @@ window.UIActions = (function () {
     },
     busy: function (note) { P._set("busy", null, note); P._open(); },
     run: function (frac, note) { P._set("run", frac, note); P._open(); },
-    stuck: function (note) { P._set("stuck", null, note); P._open(); },
+    stuck: function (note, noticeKey) { P._set("stuck", null, note, noticeKey); P._open(); },
+    dismiss: function () {
+      if (!P._noticeKey) return;
+      dismissedProgress.push(P._noticeKey);
+      dismissedProgress = dismissedProgress.slice(-100);
+      try { localStorage.setItem('dismissedProgress', JSON.stringify(dismissedProgress)); } catch (_) {}
+      P._set('', 0, '空闲');
+    },
     done: function (note) {
       P._set("", 0, note || "空闲");
       if (note) setTimeout(function () { P._set("", 0, "空闲"); }, 4000);

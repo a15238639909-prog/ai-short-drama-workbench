@@ -61,5 +61,4 @@ def receive(handler):
         raise ValueError('上传失败：' + str(exc)[:200]) from exc
     finally:
         handler.connection.settimeout(previous_timeout)
-        if partial.exists():
-            partial.unlink()
+        # Interrupted/invalid uploads are retained for review and recycling.

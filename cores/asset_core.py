@@ -129,6 +129,8 @@ def create_character(story_id, fields):
         "height": fields.get("height") or "",                                 # P323①：身高（可改；进人设图硬事实）
         # 只给人物设定图用，不写入 identity_anchor，也不进入故事/视频提示词。
         "sheet_body_ratio": fields.get("sheet_body_ratio") or "自动",
+        "sheet_ratio_override": fields.get("sheet_ratio_override") or "",
+        "sheet_body_override": fields.get("sheet_body_override") or "",
         "char_type": fields.get("char_type") or "",
         "face_type": fields.get("face_type") or "",
         "build": fields.get("build") or "", "hair": fields.get("hair") or "",
@@ -973,7 +975,7 @@ def re_upper(s):
 #   · 保存路由的场景清单少了 space/ground/walls/door/window/furniture/light 七个，
 #     而那七个正是编译器真正要读的 —— 用户在界面上改完一保存就没了
 #   · 人物清单少了 face_type，长相选了等于没选
-CHARACTER_FIELDS = ("name", "age", "sex", "sheet_body_ratio", "char_type", "face_type", "build",
+CHARACTER_FIELDS = ("name", "age", "sex", "height", "sheet_body_ratio", "sheet_ratio_override", "sheet_body_override", "char_type", "face_type", "build",
                     "entity_type", "aliases", "group_count", "group_members", "group_appearance", "source_evidence",
                     "hair", "hair_preset", "voice", "personality",
                     "behavior_anchor", "appearance_details",
@@ -999,9 +1001,13 @@ SCENE_FIELDS = ("name", "space", "scale", "depth", "materials", "ground", "walls
 
 def apply_fields(old, new, allowed):
     """把 new 里出现过的字段写进 old。没出现的保持原样，不会被空值冲掉。"""
+    sheet_changed = any(k in allowed and k in (new or {}) and old.get(k) != new[k]
+                        for k in ('height', 'sheet_ratio_override', 'sheet_body_override'))
     for k in allowed:
         if k in (new or {}):
             old[k] = new[k]
+    if sheet_changed:
+        old['image_prompt'] = ''
     return old
 
 

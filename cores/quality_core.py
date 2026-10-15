@@ -125,9 +125,9 @@ def compile_character_prompt(character, wardrobe=None, scene=None, state=None,
     if not hair_fixed and hair_name and _sp:
         hair_fixed = d("hair_def", sex, hair_name)
     face_name = g("face_type") or auto.get("face_type")
-    body_name = g("build") or auto.get("build")
+    body_name = _sp.sheet_override(c, 'sheet_body_override') if _sp and not appearance_only else ''
     face = d("face_def", sex, face_name)
-    body = d("body_def", sex, body_name)
+    body = _sp.sheet_body_text(c) if _sp and not appearance_only else g('build')
     pose = d("pose_def", auto.get("pose") or g("behavior_anchor") or g("personality") or g("pose"))
     sil = d("cloth_def", auto.get("clothing_requirement") or g("clothing_requirement"))
     species_name = auto.get("char_type") or g("char_type")
@@ -151,42 +151,9 @@ def compile_character_prompt(character, wardrobe=None, scene=None, state=None,
     sd = d("style_description", str(proj.get("style") or "").strip()) or style_profile(style)
 
     # 1. 画面内容
-    # 人物设定图不再使用绝对身高。单人四视图会自动缩放人物，身高数字没有
-    # 可见参照；体态只由头身比例和身材控制。
-    ratio = ""
-    ratio_name = g("sheet_body_ratio") or auto.get("sheet_body_ratio")
-    if not ratio_name or ratio_name == "自动":
-        # 自动档先读故事生成的人物卡；只有故事没有明确体态时才按画风兜底。
-        # 用户在界面手动选择任何具体档位后，不再进入本分支，手动值始终优先。
-        _story_shape = " ".join(str(x or "") for x in (
-            age, g("char_type"), g("appearance_details"), g("identity_anchor"),
-            g("look_full"), g("build"), g("name")))
-        _ratio_style = str(proj.get("style") or style or "")
-        if any(x in _story_shape for x in (
-                "迷你", "三头身", "3头身", "不到一米", "幼儿体态", "娃娃体态")):
-            ratio_name = "迷你幼态"
-        elif any(x in _story_shape for x in (
-                "幼态矮小", "幼年精灵", "小精灵少年", "孩童体态", "儿童体态",
-                "小男孩", "小女孩", "男童", "女童", "四头身", "4头身")):
-            ratio_name = "幼态少年"
-        elif any(x in _story_shape for x in ("矮小", "短手短腿", "小个子", "敦实短小")):
-            ratio_name = "小少年比例"
-        elif any(x in _story_shape for x in ("十一头身", "十二头身", "幻想夸张比例")):
-            ratio_name = "夸张幻想"
-        elif any(x in _story_shape for x in ("十头身", "大长腿")):
-            ratio_name = "大长腿"
-        elif any(x in _story_shape for x in ("极度高挑", "九头身")):
-            ratio_name = "高挑模特"
-        elif any(x in _story_shape for x in ("高挑", "修长", "长腿")):
-            ratio_name = "模特比例"
-        elif "电影" in _ratio_style:
-            ratio_name = "标准成人"
-        elif any(x in _ratio_style for x in ("网红", "动漫", "日漫", "平面", "3D", "游戏", "卡通")):
-            ratio_name = "高挑模特"
-        else:
-            ratio_name = "标准成人"
-    if ratio_name and _sp:
-        ratio = (_sp.body_ratio_def(ratio_name) or "").split("；", 1)[0].strip()
+    # Only the separate sheet override changes the original written proportions.
+    ratio_name = _sp.sheet_override(c, 'sheet_ratio_override') if _sp and not appearance_only else ''
+    ratio = _sp.sheet_ratio_text(c) if _sp and not appearance_only else ''
     # 精灵通用词里的“修长人形骨骼”会覆盖幼态短肢比例。幼态三档只保留物种
     # 的尖耳和面部识别特征；标准及高挑档仍使用完整物种描述。
     if ratio_name in {"迷你幼态", "幼态少年", "小少年比例"} and species_name == "精灵":

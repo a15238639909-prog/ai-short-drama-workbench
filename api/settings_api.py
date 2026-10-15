@@ -50,13 +50,13 @@ def r_026(h, path, d):
         ps = dict(ps, story_plan={"idea": _wp.get("idea") or "", "status": _wp.get("status"), "version": _wp.get("version"),
                                   "prefs": dict(_wp.get("prefs") or {}),
                                   "episodes": [{"no": e.get("no"), "uid": e.get("uid")} for e in _wp["episodes"]]})
-    # 人物卡界面不再显示“自动”。盘上仍可保留自动值，但返回页面前把这次实际会使用的
-    # 具体预设算出来；用户只改一项并保存后，这些已显示值会一起冻结，不会重新随机选择。
+    # Other legacy automatic fields still resolve for display. Body/ratio facts
+    # remain untouched; sheet-only overrides are separate, explicit choices.
     _characters = []
     for _raw in asset_core.list_assets(sid, "characters"):
         _c = dict(_raw)
         _resolved = style_presets.resolve_auto_character(_c, ps)
-        for _field in ("sex", "face_type", "build", "sheet_body_ratio", "hair_preset",
+        for _field in ("sex", "face_type", "hair_preset",
                        "behavior_anchor", "clothing_requirement", "char_type", "outfit_preset"):
             _value = str(_c.get(_field) or "").strip()
             if _value in ("", "自动", "None", "自动判断"):
@@ -134,6 +134,7 @@ def r_026(h, path, d):
         "lock_impact": project_settings.affected_episodes(
             story, __import__("cores.saga_core", fromlist=["x"]).get_saga(sid)),
         "characters": _characters,
+        "sheet_body_overrides_supported": True,
         "scenes": repaired_scenes,
         "visuals": asset_core.list_assets(sid, "visuals"),
     }})

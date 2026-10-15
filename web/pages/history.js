@@ -10,6 +10,7 @@ window.Pages.history = (function () {
       (includeRaw ? "&include_raw=1" : "") +
       (filter === "image" || filter === "video" ? "&kind=" + filter : "") +
       (filter === "saved" ? "&saved=1" : "") +
+      (filter === "finished" ? "&finished=1" : "") +
       (srcFilter ? "&source=" + encodeURIComponent(srcFilter) : "") +
       (st.storyId ? "&story_id=" + encodeURIComponent(st.storyId) : "");
     main.innerHTML = '<div class="card">读取中…</div>';
@@ -49,6 +50,7 @@ window.Pages.history = (function () {
         '<div style="white-space:pre-wrap;font-size:12px;line-height:1.6;color:#5a5348;margin-top:4px;max-height:160px;overflow:auto">' + esc(it.prompt) + '</div></details>'
       : '<div style="font-size:12px;color:#b3ab9c;margin-top:6px">（无提示词记录）</div>';
     return '<div class="card" id="hist' + i + '" style="padding:10px">' + media(it) +
+      (ex.finished ? '<div style="font-weight:600;margin-top:8px">' + esc(ex.title || '合成成品') + '</div>' : '') +
       '<div style="margin-top:6px">' + srcTag + '</div>' + promptBox +
       '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">' +
       '<button class="btn small" data-open-folder="' + i + '"' + (it.path ? '' : ' disabled') + ' title="打开这张图片或视频所在的文件夹">📂 打开文件夹</button>' +
@@ -82,20 +84,20 @@ window.Pages.history = (function () {
     main.innerHTML = '<div style="max-width:1200px;margin:0 auto">' +
       '<div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
       '<h3 style="font-size:16px;margin:0">🕘 生成历史</h3><span style="flex:1"></span>' +
-      chip("all", "全部") + chip("image", "图片") + chip("video", "视频") + chip("saved", "已保存") +
+      chip("all", "全部") + chip("finished", "成品") + chip("image", "图片") + chip("video", "视频") + chip("saved", "已保存") +
       '<label style="font-size:13px;color:#5a5348;margin-left:8px"><input type="checkbox" id="hraw"' + (includeRaw ? " checked" : "") + '> 包含所有原始出图</label>' +
       '<button class="btn small" id="hrefresh">🔄 刷新</button>' +
-      '<span style="font-size:12px;color:#8b8375;width:100%">共 ' + total + ' 项，每页 ' + PAGE + ' 项（人设·场景·分镜·出图词·虚拟人物·视频导演台 出的图和视频，带提示词原文；视频点播放才加载）</span>' +
+      '<span style="font-size:12px;color:#8b8375;width:100%">共 ' + total + ' 项，每页 ' + PAGE + ' 项（成品汇总主流程合成、视频拼接、故事视频和动作迁移；视频点播放才加载）</span>' +
       srcChips() + '</div>' +
       (items.length
         ? '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px">' + items.map(card).join("") + '</div>' + pager()
-        : UI.empty("这一页没有内容。去出图/出视频，或勾选「包含所有原始出图」")) +
+        : UI.empty(filter === 'finished' ? '还没有合成成品，合成完成后会自动出现在这里。' : "这一页没有内容。去出图/出视频，或勾选「包含所有原始出图」")) +
       '</div>';
     wire();
   }
 
   function wire() {
-    [].forEach.call(main.querySelectorAll("[data-filter]"), function (b) { b.onclick = function () { filter = b.getAttribute("data-filter"); page = 0; load(); }; });
+    [].forEach.call(main.querySelectorAll("[data-filter]"), function (b) { b.onclick = function () { filter = b.getAttribute("data-filter"); srcFilter = ''; page = 0; load(); }; });
     [].forEach.call(main.querySelectorAll("[data-src]"), function (b) { b.onclick = function () { srcFilter = b.getAttribute("data-src"); page = 0; load(); }; });
     var raw = document.getElementById("hraw"); if (raw) raw.onchange = function () { includeRaw = raw.checked; page = 0; load(); };
     var rf = document.getElementById("hrefresh"); if (rf) rf.onclick = function () { load(); };

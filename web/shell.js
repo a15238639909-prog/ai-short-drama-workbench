@@ -24,6 +24,7 @@
       { h: "#vchar", t: "🎭 虚拟人物", d: "长期虚拟人物聊天 + 人设图 / 头像生成" },
       { h: "#prompt", t: "🎨 出图词", d: "提示词生成 / 优化 / 反推，直接出图" },
       { h: "#motion", t: "🕺 动作迁移", d: "参考视频保留动作与运镜，替换人物及可选场景，查看左右对比" },
+      { h: "#story-video", t: "🎞️ 故事视频", d: "给一张图或故事方向，本地AI逐段创作、观察并接成完整视频" },
       { h: "#downloads", t: "📥 视频下载", d: "粘贴抖音分享链接，下载到默认目录，一键打开文件夹" },
       { h: "#director", t: "🎥 视频导演台", d: "MiniMax H3 单视频：文/图/首尾帧/全能参考" }
     ]
@@ -33,6 +34,7 @@
   var sagaLogs = [];
   var sagaStepKey = "";
   var runtimeTaskCount = 0;
+  var taskActionPending = '';
 
   function route() {
     var h = location.hash || "#settings";
@@ -265,10 +267,13 @@
         }
       } else if (window.__sagaBusy || sagaProgress.title) {
         window.__sagaBusy = false;
-        if (sagaProgress.cancel || sagaProgress.status === "cancelled") window.UIActions.progress.stuck("已取消 · 已完成的内容已保留");
-        else if (sagaProgress.status === "waiting_resource" || sagaProgress.status === "waiting_task" || sagaProgress.status === "paused") window.UIActions.progress.stuck("进度已保留 · " + (sagaProgress.err || sagaProgress.step));
-        else if (sagaProgress.partial || sagaProgress.blocked) window.UIActions.progress.stuck(sagaProgress.partial || sagaProgress.step || "等待处理 · 已完成的内容已保留");
-        else if (sagaProgress.err) window.UIActions.progress.stuck("失败 · " + sagaProgress.err);
+        // Stable across polling/restarts, distinct for each project's next run.
+        var noticeKey = JSON.stringify([sagaProgress._storyId, sagaProgress.started_at || sagaProgress.updated_at || 0,
+          sagaProgress.title, sagaProgress.status, sagaProgress.step, sagaProgress.err, sagaProgress.partial, sagaProgress.blocked]);
+        if (sagaProgress.cancel || sagaProgress.status === "cancelled") window.UIActions.progress.stuck("已取消 · 已完成的内容已保留", noticeKey);
+        else if (sagaProgress.status === "waiting_resource" || sagaProgress.status === "waiting_task" || sagaProgress.status === "paused") window.UIActions.progress.stuck("进度已保留 · " + (sagaProgress.err || sagaProgress.step), noticeKey);
+        else if (sagaProgress.partial || sagaProgress.blocked) window.UIActions.progress.stuck(sagaProgress.partial || sagaProgress.step || "等待处理 · 已完成的内容已保留", noticeKey);
+        else if (sagaProgress.err) window.UIActions.progress.stuck("失败 · " + sagaProgress.err, noticeKey);
         else if (sagaProgress.status === "completed" || sagaProgress.step === "完成") window.UIActions.progress.done("100%　已完成");
         else window.UIActions.progress.stuck(sagaProgress.step || "进度已保留");
       }
@@ -276,7 +281,7 @@
   }
 
   function loadTasks() {
-    window.api.get("/api/tasks/active").then(function (d) {
+    return window.api.get("/api/tasks/active").then(function (d) {
       var act = d.active || [];
       runtimeTaskCount = act.length;
       updateTaskCount();
@@ -292,23 +297,46 @@
         '<span>' + UI.esc(t.step_label || t.detail || "") + "</span>" +
         '<div class="bar"><div class="fill" style="width:' + pct + '%"></div></div>' +
         "<span>" + pct + "%</span>" +
-        (t.status === "paused"
+        (t.kind === 'story_video' && t.status === 'waiting_user'
+          ? '<button class="btn small" id="tbViewStory">查看故事</button>'
+          : t.status === "paused"
           ? '<button class="btn small" id="tbResume">继续</button>'
           : '<button class="btn small" id="tbPause">暂停</button>') +
         '<button class="btn small" id="tbCancel">取消</button>';
-      document.getElementById("tbPause").onclick = function () { actTask("pause"); };
+      var ps = document.getElementById("tbPause");
+      if (ps) ps.onclick = function () { return actTask(t, "pause", this); };
       var rs = document.getElementById("tbResume");
-      if (rs) rs.onclick = function () { actTask("resume"); };
-      document.getElementById("tbCancel").onclick = function () { actTask("cancel"); };
+      if (rs) rs.onclick = function () { return actTask(t, "resume", this); };
+      var view = document.getElementById('tbViewStory');
+      if (view) view.onclick = function () {
+        localStorage.setItem('storyVideoTask', t.id);
+        var draft = {};
+        try { draft = JSON.parse(localStorage.getItem('storyVideoDraft') || '{}') || {}; } catch (_) {}
+        draft.new_task = false;
+        localStorage.setItem('storyVideoDraft', JSON.stringify(draft));
+        if (location.hash === '#story-video') route(); else location.hash = '#story-video';
+      };
+      document.getElementById("tbCancel").onclick = function () { return actTask(t, "cancel", this); };
+      if (taskActionPending === t.id) bar.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
     }).catch(function () {});
   }
 
-  function actTask(act) {
-    window.api.get("/api/tasks/active").then(function (d) {
-      var t = (d.active || [])[0];
-      if (!t) return;
-      return window.api.post("/api/tasks/" + t.id + "/" + act);
-    }).then(function () { loadTasks(); loadLogs(); });
+  function actTask(t, act, button) {
+    if (!t || taskActionPending) return;
+    taskActionPending = t.id;
+    if (button) { button.disabled = true; button.textContent = act === 'cancel' ? '取消中…' : '处理中…'; }
+    var request = t.kind === 'story_video'
+      ? window.api.post('/api/story-video/action', {id: t.id, action: act})
+      : window.api.post('/api/tasks/' + t.id + '/' + act);
+    return request.then(function () {
+      window.dispatchEvent(new CustomEvent('workbench-task-updated', {detail: {id: t.id}}));
+      if (act === 'cancel') UI.toast('已提交取消，已生成的内容保留');
+    }).catch(function (error) {
+      UI.toast('任务操作失败：' + error.message, 'err');
+    }).finally(function () {
+      taskActionPending = '';
+      return loadTasks().then(function () { loadLogs(); });
+    });
   }
 
   function loadLogs() {

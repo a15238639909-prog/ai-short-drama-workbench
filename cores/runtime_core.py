@@ -123,10 +123,15 @@ def _run(tid):
             raise RuntimeError("未知任务类型：" + str(t.get("kind")))
         out = runner(h, t)
         t = load(tid) or t
+        if t.get("status") in ("paused", "cancelled", "interrupted", "waiting_user"):
+            return
         t["status"] = "completed"; t["output"] = out; t["ended"] = time.time(); t["detail"] = "完成"
         save(t)
     except TaskPaused:
         t = load(tid) or t
+        if t.get("status") == "cancelled":
+            t["ended"] = time.time(); save(t)
+            return
         t["status"] = "paused"; t["detail"] = "已暂停"; t["ended"] = time.time(); save(t)
     except Exception as e:
         t = load(tid) or t

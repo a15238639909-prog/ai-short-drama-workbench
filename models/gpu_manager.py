@@ -3,6 +3,10 @@
 import json, os, re, subprocess, time
 from pathlib import Path as _Path
 
+QWEN_PORT = int(os.environ.get("V41_QWEN_PORT") or "8080")
+if not 1 <= QWEN_PORT <= 65535:
+    raise ValueError("V41_QWEN_PORT须为1至65535之间的端口")
+
 def pid_on_port(port):
     try:
         out = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], text=True, errors="replace")
@@ -40,7 +44,7 @@ def stop_qwen():
     （2026-09-04 实测：出图 10054/10061 全失败）。单卡规则是同时只准一个重模型，
     所以不在 8080 上的 llama-server 一律是漏网的，直接清。
     """
-    pid = stop_process_on_port(8080, "Qwen llama-server")
+    pid = stop_process_on_port(QWEN_PORT, "Qwen llama-server")
     try:
         subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True, timeout=20)
         time.sleep(2)
@@ -60,7 +64,7 @@ import threading as _th
 
 GPU_LOCK = _th.RLock()
 
-_PORTS = {"qwen": 8080, "krea": 8188, "h3": 8190}
+_PORTS = {"qwen": QWEN_PORT, "krea": 8188, "h3": 8190}
 _STOP = {"qwen": stop_qwen, "krea": stop_comfy, "h3": stop_h3}
 
 
@@ -163,7 +167,7 @@ def stray_llama_pids():
 def kill_stray_llama(keep_pid=None):
     """llama-server 只准活一个：在 8080 上的那个（或指定保留的），别的全杀。
     返回杀掉的进程号列表。P272：僵尸进程一个不留——这是把机器搞死的直接原因。"""
-    keep = keep_pid or pid_on_port(8080)
+    keep = keep_pid or pid_on_port(QWEN_PORT)
     killed = []
     for pid in stray_llama_pids():
         if keep and pid == int(keep):

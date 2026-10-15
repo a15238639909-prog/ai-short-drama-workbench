@@ -142,6 +142,7 @@ def history_list(h, path, q):
     offset = int((qs.get("offset", ["0"])[0]) or 0)                     # P402：翻页
     f_kind = (qs.get("kind", [""])[0] or "").strip()                     # image / video
     f_saved = (qs.get("saved", ["0"])[0] == "1")
+    f_finished = (qs.get("finished", ["0"])[0] == "1")
     f_source = (qs.get("source", [""])[0] or "").strip()
 
     # 1) gen_history 记录（带提示词，最准），按相对路径建索引
@@ -150,7 +151,8 @@ def history_list(h, path, q):
         rec_by_path[str(r.get("path") or "").replace("\\", "/")] = r
 
     # 2) 扫目录
-    scanned = []
+    from cores.finished_products import collect
+    scanned = collect(ROOT)
     for d in _V41_DIRS:
         scanned += _scan_dir(d, "v41", recurse=False)
     scanned += _scan_dir(_LEGACY_ARCHIVE, "存档", recurse=True)
@@ -174,23 +176,25 @@ def history_list(h, path, q):
         except Exception:
             rel = ap.replace("\\", "/")
         rec = rec_by_path.get(rel)
-        prompt = (rec or {}).get("prompt") or ""
+        prompt = (rec or {}).get("prompt") or s.get("prompt") or ""
         if not prompt:
             # 没进 gen_history 的（四个工具的产物）：先找同目录 prompt.txt/task.json，
             # 再退回文件名里那截。
             prompt = _sidecar_prompt(ap) or _name_prompt(ap)
-        extra = (rec or {}).get("extra") or {}
+        extra = dict((rec or {}).get("extra") or {}, **(s.get("extra") or {}))
         if s["source"] == "视频导演台":
             extra = dict(extra, **_video_meta(ap))
         items.append({
             "path": rel, "url": _url_for(ap), "kind": s["kind"],
             "prompt": prompt, "source": (rec or {}).get("source") or s["source"],
             "ts": s["ts"], "saved": bool((rec or {}).get("saved")),
-            "story_id": (rec or {}).get("story_id") or "",
+            "story_id": (rec or {}).get("story_id") or s.get("story_id") or "",
             "extra": extra,
         })
 
     items.sort(key=lambda x: x["ts"], reverse=True)
+    if f_finished:
+        items = [x for x in items if x.get("extra", {}).get("finished")]
     sources = []
     for it in items:
         if it.get("source") and it["source"] not in sources:

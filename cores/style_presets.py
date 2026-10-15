@@ -482,6 +482,26 @@ def body_ratio_def(name):
     return BODY_RATIO_DEFS.get(normalize_ratio_option(name), "")
 
 
+def sheet_override(character, field):
+    """Only an explicit sheet override may replace the original character facts."""
+    value = str((character or {}).get(field) or '').strip()
+    return '' if value in ('自动', '自动判断', 'None', '保持原设定') else value
+
+
+def sheet_body_text(character):
+    override = sheet_override(character, 'sheet_body_override')
+    if override:
+        return body_def((character or {}).get('sex') or '女', override) or override
+    # The story's original label remains a fact, without expanding a generic
+    # preset into hundreds of new anatomical details.
+    return sheet_override(character, 'build')
+
+
+def sheet_ratio_text(character):
+    override = sheet_override(character, 'sheet_ratio_override')
+    return (body_ratio_def(override) or override) if override else ''
+
+
 def normalize_ratio_option(name):
     name = str(name or '').strip()
     if name in BODY_RATIO_DEFS:

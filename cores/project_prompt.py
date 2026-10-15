@@ -898,13 +898,15 @@ def load_outfit_library():
 
 def outfit_preset_options(settings_or_world):
     """当前世界可选服装方向。服装轮廓仍由原下拉独立控制。"""
-    world = resolved_world(settings_or_world) if isinstance(settings_or_world, dict) else str(settings_or_world or "")
+    world = (resolved_world(settings_or_world) if isinstance(settings_or_world, dict)
+             else style_presets.world_legacy_key(str(settings_or_world or "").strip()))
     return ["自动"] + [str(x.get("name") or "") for x in load_outfit_library().get(world, [])
                        if str(x.get("name") or "").strip()] + ["自定义"]
 
 
 def outfit_preset_defs(settings_or_world):
-    world = resolved_world(settings_or_world) if isinstance(settings_or_world, dict) else str(settings_or_world or "")
+    world = (resolved_world(settings_or_world) if isinstance(settings_or_world, dict)
+             else style_presets.world_legacy_key(str(settings_or_world or "").strip()))
     return {str(x.get("name") or ""): str(x.get("prompt") or "")
             for x in load_outfit_library().get(world, []) if x.get("name")}
 

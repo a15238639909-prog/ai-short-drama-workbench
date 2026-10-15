@@ -715,6 +715,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self._dec_path()
+        if path == "/api/story-video/upload":
+            # Stream image bytes before the ordinary JSON-body reader runs.
+            from cores.story_video_upload import receive
+            try:
+                return _json_resp(self, receive(self))
+            except Exception as e:
+                self.close_connection = True
+                return _json_resp(self, {"ok": False, "error": str(e)[:300]}, 400)
         if path == "/api/motion/upload":
             # Videos are streamed as raw file bytes; ordinary APIs retain their JSON contract.
             from cores.motion_upload import receive

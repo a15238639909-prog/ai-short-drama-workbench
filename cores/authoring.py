@@ -11217,13 +11217,12 @@ def _char_one_line(c, settings=None, visual_facts=None):
             d = ""
         return "%s（%s）" % (label, d) if d else label
 
-    ratio_name = _opt(c.get("sheet_body_ratio"))
-    if not ratio_name:
-        try:
-            ratio_name = str((sp.resolve_auto_character(c, settings or {}) or {}).get("sheet_body_ratio") or "").strip()
-        except Exception:
-            ratio_name = ""
-    ratio_text = str(sp.body_ratio_def(ratio_name) or ratio_name).strip() if ratio_name else ""
+    # Do not turn automatic/legacy ratio labels into new body constraints.
+    # The original written design remains authoritative unless explicitly overridden.
+    ratio_text = sp.sheet_ratio_text(c)
+    sheet_body = sp.sheet_body_text(c)
+    body_override = sp.sheet_override(c, 'sheet_body_override')
+    explicit_height = height_text(c)
 
     # 展示模板包含姿势和版式：普通男女读取可编辑预设；尺度模板按性别整份覆盖。
     # 主指令只引用所选模板，五官、比例、身材、发型继续来自同一张人物卡。
@@ -11249,11 +11248,15 @@ def _char_one_line(c, settings=None, visual_facts=None):
         "%s（%s%s%s）" % (c.get("name"), (sex + "，") if sex else "",
                          ((str(c.get("age")).strip() + ("岁" if str(c.get("age")).strip().isdigit() else "")) + "，") if str(c.get("age") or "").strip() else "", c.get("char_type") or ""),
         ("固定穿搭与遮挡事实（优先保留）：" + cc.clothing_fact(clothing_guard)) if clothing_guard else "",
+        "人设图体型规则：首图以故事人物原始文字为准；原始身材记录只保留原意，不展开预设，不自行补充未给出的身高、头身数、骨架宽厚、脂肪或肌肉参数。用户填写明确身高或手动覆盖后，才加入对应要求；画风只改变表现形式和质感，不改变这些人物事实。",
         ("已合并外貌事实：" + json.dumps(visual_facts["appearance"], ensure_ascii=False)) if visual_facts is not None else
         (("脸部结构参考（补充）：" + face_reference) if not is_nonhuman(c) else ""),
         ("具体外貌事实（以此确定对应部位）：" + cc.visible_text(c.get("appearance_details"), clothing_guard)) if visual_facts is None else "",
-        ("头身比例：" + ratio_text) if ratio_text and not is_nonhuman(c) else "",
-        ("身材：" + cc.visible_text(body_text(c, include_label=False), clothing_guard)) if not is_nonhuman(c) else body_scale_line(c),
+        ("明确身高（按人物卡原值）：" + explicit_height) if explicit_height and not is_nonhuman(c) else "",
+        ("手动覆盖身体比例（仅用于人设图，以本项为准）：" + ratio_text) if ratio_text and not is_nonhuman(c) else "",
+        (("手动覆盖身材（仅用于人设图，以本项为准）：" if body_override else "原始身材记录（只保留原意，不扩写预设）：")
+         + cc.visible_text(sheet_body, clothing_guard)) if sheet_body and not is_nonhuman(c) else
+        (body_scale_line(c) if is_nonhuman(c) else ""),
         ("面部表情：" + visual_facts["expression"]) if visual_facts is not None else
         ("神态取意素材（只转成面部表情）：" + _with_def(pose, sp.pose_def, pose)),
         "发型：" + str(c.get("hair") or ""),
@@ -11809,7 +11812,9 @@ def _gen_char_images(sid, cards, settings, on_step=None):
                     version += 1
                     dst = base + "__v%d.png" % version
             shutil.copy2(res["output_path"], dst)
-            v = asset_core.add_approved_visual(sid, "character_master", c["character_id"], version, dst, prompt=sheet)
+            v = asset_core.add_approved_visual(
+                sid, "character_master", c["character_id"], version, dst,
+                style_profile=str((settings or {}).get("style") or "电影级写实"), prompt=sheet)
             asset_core.adopt(sid, v["visual_id"])
         except Exception as ex:
             failed.append("%s(出图:%s)" % (name, str(ex)[:40]))
@@ -11827,13 +11832,13 @@ def _gen_char_images(sid, cards, settings, on_step=None):
 def gen_char_images(sid, only_missing=True, on_step=None, ep=None):
     """给这个项目的人物出人设图。only_missing=True 时只补还没有图的那些。
     （偶发失败后用它补图，不用把整个故事重跑一遍。）"""
-    from . import story_core, asset_core
+    from . import story_core, asset_core, project_settings
     st = story_core.get_story(sid) or {}
     if (st.get("settings") or {}).get("no_images"):
         if on_step:
             on_step("项目设置 no_images：跳过人设图")
         return {"ok": 0, "failed": [], "skipped": "no_images"}                  # P429：只做文字
-    settings = st.get("settings") or {}
+    settings = project_settings.get(st)
     from . import reference_ready
     have = reference_ready.adopted_paths(sid, "character")
     source = (reference_ready.required_characters(sid, ep) if ep is not None

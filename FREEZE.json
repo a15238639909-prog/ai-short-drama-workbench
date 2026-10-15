@@ -1,25 +1,26 @@
 {
-  "version": "1.06.1",
+  "version": "1.07",
   "edition": "完整版",
-  "date": "2026-10-14",
-  "tag": "v1.06.1-complete-20261014",
-  "branch": "complete/v1.06.1-20261014",
-  "previous_commit": "8094e125a26196a64dd4b022167953a12a868b59",
+  "date": "2026-10-15",
+  "tag": "v1.07-complete-20261015",
+  "branch": "complete/v1.07-20261015",
+  "previous_commit": "ca80e590db70d696f2aed6a45f3289640b409435",
+  "repository": "https://github.com/bilibili-laona/ai-short-drama-workbench",
   "private_config_included": false,
   "private_data_included": false,
   "media_included": false,
   "model_weights_included": false,
   "source_archive_python_runtime_included": false,
-  "validation": {
-    "formal_related_tests_passed": 239,
-    "new_generated_video_tested": false,
-    "models_run_during_packaging": false
-  },
   "public_defaults_retained": [
-    "presets/content_scale.json"
+    "presets/content_scale.json",
+    "data/global_defaults.json"
   ],
-  "repository": "https://github.com/bilibili-laona/ai-short-drama-workbench",
-  "account": "bilibili-laona",
-  "display_name": "bilibili-老衲",
-  "packaging_change_only": true
+  "validation": {
+    "distinct_regression_tests_passed": 390,
+    "tests_skipped": 0,
+    "javascript_interaction_checks_passed": 3,
+    "model_inference_run": false,
+    "real_ai_media_generated": false
+  },
+  "packaging_change_only": false
 }

@@ -1,8 +1,10 @@
 (function () {
   window.Pages = window.Pages || {};
+  var restoreDraft = null;
   window.Pages.motion = { render: function (el) {
-    var draft = {};
-    try { draft = JSON.parse(localStorage.getItem('motionDraft') || '{}'); } catch (_) {}
+    var savedDraft = {}, draft = restoreDraft || {};
+    restoreDraft = null;
+    try { savedDraft = JSON.parse(localStorage.getItem('motionDraft') || '{}') || {}; } catch (_) {}
     var esc = UI.esc, media = draft.media || {}, requests = {}, task = null, timer = null, lastOutput = '';
     var busy = false, displayedTask = '';
     var featureQueue = [], featureRunning = false, featureVersions = {character:0,character2:0,scene:0}, featureSources = draft.featureSources || {};
@@ -29,7 +31,8 @@
       '.mt-page input[type=file]{width:100%;font-size:0}.mt-page input[type=file]::file-selector-button{font-size:13px;border:1px solid #d6dccf;background:#eef2e7;color:#435739;padding:8px 15px;border-radius:7px;cursor:pointer}.mt-page label{display:block;font-size:13px;margin-top:12px}.mt-page textarea,.mt-page select,.mt-path{display:block;width:100%;box-sizing:border-box;margin-top:6px}.mt-file{font-size:12px;overflow-wrap:anywhere;margin-top:9px;color:#5a6651}.mt-upload-status{font-size:12px;color:#b2673a;min-height:18px;margin:5px 0}' +
       '.mt-upload-status:empty{display:none}.mt-advanced{margin:18px 0 0;color:#616957}.mt-advanced summary{cursor:pointer;font-size:13px}.mt-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.mt-actions .btn{padding:11px 22px}.mt-result video{width:100%;border-radius:12px;max-height:620px;background:#111}.mt-result a{display:inline-block;margin:12px 18px 0 0}.mt-status{min-height:24px;line-height:1.6}' +
       '@media(max-width:800px){.mt-grid{grid-template-columns:1fr}.mt-preview{height:220px}.mt-page{padding:16px 8px}}</style>' +
-      '<div class="mt-page"><h2>动作迁移</h2><p class="mt-note">上传视频，选择替换人物和场景，自动生成完整成品。</p>' +
+      '<div class="mt-page"><h2>动作迁移</h2><p class="mt-note">上传视频，选择替换人物和场景，自动生成完整成品。新任务从空素材开始，历史成品请到“历史 → 成品”查看。</p>' +
+      '<div class="mt-actions"><button class="btn small" id="mt-new">新建任务</button><button class="btn small" id="mt-restore">恢复上次素材</button></div>' +
       '<div class="mt-grid">' + card('video', '1', '原视频', '提供动作和运镜 · 最多250MB', videoOptions) +
       '<section class="mt-card mt-people"><div class="mt-card-title"><span class="mt-number">2</span><h3>替换人物</h3></div><label>替换几个人<select id="mt-person-count"><option value="1">1个人</option><option value="2">2个人</option></select></label><label class="mt-auto"><input type="checkbox" id="mt-auto-describe"' + (draft.auto_describe === false ? '' : ' checked') + '> 本地AI自动识别人物和场景</label>' +
       card('character', '', '人物1', '上传新人物照片 · 最多20MB') + '<div id="mt-second-person" class="mt-second">' + card('character2', '', '人物2', '上传第二个人物照片 · 最多20MB') + '</div></section>' +
@@ -49,11 +52,14 @@
       data.auto_describe = get('auto-describe').checked; data.featureSources = featureSources;
       data.person_count = get('person-count').value;
       try { localStorage.setItem('motionDraft', JSON.stringify(data)); } catch (_) {}
+      savedDraft = data;
       return data;
     }
     function sync() {
       var uploading = Object.keys(requests).length > 0;
       get('go').disabled = busy || uploading || featureRunning || featureQueue.length > 0;
+      get('new').disabled = busy || uploading || featureRunning;
+      get('restore').disabled = busy || uploading || featureRunning || !(savedDraft.video || savedDraft.character);
       get('feature-progress').textContent = featureRunning || featureQueue.length ? '本地AI正在识别图片，完成后即可生成…' : '';
       get('stop').hidden = !busy;
       fields.forEach(function(k){ get(k).disabled = busy; });
@@ -65,14 +71,23 @@
       get('second-person').hidden = get('person-count').value !== '2';
       el.querySelectorAll('[data-describe]').forEach(function(b){var k=b.dataset.describe;b.disabled=busy||featureRunning||!!requests[k]||!get(k).value;});
     }
-    function invalidateFeature(key) {
+    function invalidateFeature(key, changedImage) {
       if (key === 'video') return;
       featureVersions[key]++;
       featureQueue = featureQueue.filter(function(j){return j.key !== key;});
-      if (featureSources[key] && get(key+'_details').value === featureSources[key].text) get(key+'_details').value='';
+      if (changedImage || (featureSources[key] && get(key+'_details').value === featureSources[key].text)) get(key+'_details').value='';
       delete featureSources[key];
       get('feature-status-'+key).textContent='';
     }
+    function changedMaterial(key) {
+      invalidateFeature(key, true);
+      if(get('prompt').value.trim()) {
+        get('prompt').value = '';
+        get('status').textContent = '素材已更换，旧提示词已清空；可重新填写或交给本地AI编写。';
+      }
+    }
+    get('new').onclick = function(){if(!busy && !featureRunning && !Object.keys(requests).length)window.Pages.motion.render(el);};
+    get('restore').onclick = function(){restoreDraft=savedDraft;window.Pages.motion.render(el);};
     function queueFeature(key, automatic) {
       if (busy || !get(key).value || (automatic && !get('auto-describe').checked)) return;
       var field=get(key+'_details'), status=get('feature-status-'+key);
@@ -140,7 +155,7 @@
         if (!active()) return;
         try {
           var j = JSON.parse(xhr.responseText); if (xhr.status !== 200 || !j.ok) throw new Error(j.error || '上传失败');
-          invalidateFeature(key); media[key] = j.data; get(key).value = j.data.path;
+          changedMaterial(key); media[key] = j.data; get(key).value = j.data.path;
           if (key === 'video') { get('start').value = 0; get('seconds').value = Math.min(8, Math.floor(j.data.duration * 10) / 10); }
           get('upload-status-' + key).textContent = '已就绪'; preview(key); saveDraft();
           if(key!=='video')queueFeature(key,true);
@@ -157,14 +172,16 @@
       var drop = el.querySelector('[data-drop="' + key + '"]');
       drop.ondragover = function(e){e.preventDefault();if(!busy)drop.classList.add('drag');};
       drop.ondragleave = function(){drop.classList.remove('drag');};
-      drop.ondrop = function(e){e.preventDefault();drop.classList.remove('drag');upload(key,e.dataTransfer.files[0]);};
-      el.querySelector('[data-clear="' + key + '"]').onclick = function(){if(requests[key])requests[key].abort();invalidateFeature(key);get(key).value='';delete media[key];get('upload-status-' + key).textContent='';preview(key);saveDraft();sync();};
-      if(key!=='video')get(key).addEventListener('change',function(){invalidateFeature(key);saveDraft();queueFeature(key,true);});
+      if(key==='video')drop.ondrop = function(e){e.preventDefault();e.stopPropagation();drop.classList.remove('drag');upload(key,e.dataTransfer.files[0]);};
+      else ImageDrop.bind(drop,function(file){upload(key,file);},{disabled:function(){return busy||!!requests[key];},error:function(message){get('upload-status-'+key).textContent=message;}});
+      el.querySelector('[data-clear="' + key + '"]').onclick = function(){if(requests[key])requests[key].abort();changedMaterial(key);get(key).value='';delete media[key];get('upload-status-' + key).textContent='';preview(key);saveDraft();sync();};
+      get(key).addEventListener('change',function(){changedMaterial(key);saveDraft();if(key!=='video')queueFeature(key,true);});
     });
     ['character','character2'].forEach(function(key){get(key+'_layout').addEventListener('change',function(){invalidateFeature(key);saveDraft();queueFeature(key,true);});});
     fields.forEach(function(k){get(k).addEventListener('input',function(){if(['video','character','character2','scene'].includes(k))preview(k);saveDraft();sync();});});
     function update(t) {
       if (!active()) return;
+      if(t && !['running','queued'].includes(t.status) && (!task || t.id !== task.id))return;
       task = t; busy = !!(t && ['running','queued'].includes(t.status)); sync();
       if(busy && t.inputs && displayedTask !== t.id){
         displayedTask=t.id;fields.forEach(function(k){if(t.inputs[k]!==undefined)get(k).value=t.inputs[k];});
@@ -191,7 +208,7 @@
       if(!data.video || !data.character){get('status').textContent='请先上传原视频和替换人物照片。';return;}
       if(get('person-count').value==='2' && !data.character2){get('status').textContent='已选择替换2个人，请上传人物2的照片。';return;}
       if(!data.prompt.trim() && data.character2 && (!data.source_person.trim() || !data.source_person2.trim())){get('status').textContent='替换两个人时，请分别填写原片中的哪个人。';return;}
-      busy=true;sync();get('status').textContent='检查素材与游戏状态…';
+      busy=true;task=null;lastOutput='';get('result').innerHTML='<p class="mt-note">正在生成本次成品…</p>';sync();get('status').textContent='检查素材与游戏状态…';
       try {var d=await window.api.post('/api/motion/start',data);update(d.task);}
       catch(e){if(active()){busy=false;sync();get('status').textContent=e.message;}}
     };

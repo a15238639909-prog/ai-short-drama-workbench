@@ -203,8 +203,11 @@ window.Pages.assets = (function () {
         '<label><input type="radio" name="upKind" value="scene"> 🏛 场景图</label></p>' +
         '<p style="margin:0 0 8px">挂在谁名下：<select id="upOwnerC">' + opts(chars, "character_id") + "</select>" +
         '<select id="upOwnerS" style="display:none">' + opts(scenes, "scene_id") + "</select></p>" +
-        '<p style="margin:0 0 12px"><input type="file" id="upFile" accept=".png,.jpg,.jpeg,.webp"></p>' +
+        '<p id="upDrop" style="margin:0 0 12px;padding:16px;border:1px dashed #999">选择图片，或将文件 / 网页图片拖到这里<input type="file" id="upFile" accept=".png,.jpg,.jpeg,.webp"></p>' +
         '<button class="btn primary" id="upGo">上传</button>');
+      var droppedFile=null;
+      ImageDrop.bind(document.getElementById('upDrop'),function(file){droppedFile=file;document.getElementById('upDrop').firstChild.textContent='已选择：'+file.name+' ';});
+      document.getElementById('upFile').onchange=function(){droppedFile=null;};
       document.querySelectorAll('input[name="upKind"]').forEach(function (r) {
         r.onchange = function () {
           var isChar = document.querySelector('input[name="upKind"]:checked').value === "character";
@@ -215,7 +218,7 @@ window.Pages.assets = (function () {
       document.getElementById("upGo").onclick = function () {
         var kind = document.querySelector('input[name="upKind"]:checked').value;
         var owner = document.getElementById(kind === "character" ? "upOwnerC" : "upOwnerS").value;
-        var f = document.getElementById("upFile").files[0];
+        var f = droppedFile || document.getElementById("upFile").files[0];
         if (!f) { UI.toast("先选一张图", "err"); return; }
         var rd = new FileReader();
         rd.onload = function () {
@@ -238,8 +241,7 @@ window.Pages.assets = (function () {
       document.body.appendChild(upOne);
     }
     var upTarget = null;
-    upOne.onchange = function () {
-      var f = upOne.files[0]; upOne.value = "";
+    function uploadAssetFile(f) {
       if (!f || !upTarget) return;
       var t = upTarget; upTarget = null;
       var rd = new FileReader();
@@ -250,8 +252,12 @@ window.Pages.assets = (function () {
           .catch(function (e) { UI.toast("上传失败：" + e.message, "err"); });
       };
       rd.readAsDataURL(f);
-    };
+    }
+    upOne.onchange = function () { var f=upOne.files[0];upOne.value='';uploadAssetFile(f); };
     main.querySelectorAll("[data-upload-owner]").forEach(function (b) {
+      var target = b.closest('.card') || b.parentElement;
+      target.title = '可将图片文件或网页图片拖入此卡片替换';
+      ImageDrop.bind(target,function(file){upTarget={kind:b.getAttribute('data-upload-kind'),owner:b.getAttribute('data-upload-owner')};uploadAssetFile(file);});
       b.onclick = function () {
         upTarget = { kind: b.getAttribute("data-upload-kind"), owner: b.getAttribute("data-upload-owner") };
         upOne.click();
