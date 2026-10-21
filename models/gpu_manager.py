@@ -20,6 +20,8 @@ def pid_on_port(port):
     return None
 
 def stop_process_on_port(port, name=""):
+    from cores import runtime_reset
+    runtime_reset.assert_stop_allowed()
     pid = pid_on_port(port)
     if pid:
         try:
@@ -45,6 +47,8 @@ def stop_qwen():
     所以不在 8080 上的 llama-server 一律是漏网的，直接清。
     """
     pid = stop_process_on_port(QWEN_PORT, "Qwen llama-server")
+    from cores import runtime_reset
+    runtime_reset.assert_stop_allowed()
     try:
         subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True, timeout=20)
         time.sleep(2)
@@ -63,6 +67,32 @@ def stop_qwen():
 import threading as _th
 
 GPU_LOCK = _th.RLock()
+_MODEL_CHILDREN = {}
+
+
+def spawn(who, *args, **kwargs):
+    """Register a model process before a reset can start stopping models."""
+    from cores import runtime_reset
+    with runtime_reset.LOCK:
+        assert_local_run_allowed()
+        process = subprocess.Popen(*args, **kwargs)
+        _MODEL_CHILDREN[process.pid] = (who, process)
+        return process
+
+
+def stop_registered_models():
+    stopped = []
+    for pid, (who, process) in list(_MODEL_CHILDREN.items()):
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            stopped.append(who)
+        _MODEL_CHILDREN.pop(pid, None)
+    return stopped
 
 _PORTS = {"qwen": QWEN_PORT, "krea": 8188, "h3": 8190}
 _STOP = {"qwen": stop_qwen, "krea": stop_comfy, "h3": stop_h3}
@@ -73,6 +103,8 @@ def claim(who):
 
     who ∈ {"qwen", "krea", "h3"}。已经不在跑的不动，省掉一次 taskkill 的两秒。
     """
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     if who not in _PORTS:
         raise ValueError("不认识的 GPU 使用者：%s" % who)
     freed = []
@@ -170,6 +202,8 @@ def kill_stray_llama(keep_pid=None):
     keep = keep_pid or pid_on_port(QWEN_PORT)
     killed = []
     for pid in stray_llama_pids():
+        from cores import runtime_reset
+        runtime_reset.assert_stop_allowed()
         if keep and pid == int(keep):
             continue
         try:
@@ -184,8 +218,10 @@ def kill_stray_llama(keep_pid=None):
 
 def assert_local_run_allowed():
     """Check the user's game processes before every local model acquisition."""
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     if (_OWNER_FILE.parent / "game_mode.flag").exists():
-        raise RuntimeError("游戏模式暂停中——点右上角「恢复任务」再继续")
+        raise RuntimeError("旧的暂停状态尚未清除，请点右上角「清理缓存」再开始新任务")
     if os.name != "nt":
         return True
     command = ("$pubg = Get-Process -Name 'TslGame','TslGame_BE','PUBG' -ErrorAction SilentlyContinue; "
@@ -222,8 +258,10 @@ def acquire(who, note=""):
                time.strftime("%H:%M:%S", time.localtime(float(cur.get("at") or 0)))))
     try:
         _OWNER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from cores import runtime_reset
         _OWNER_FILE.write_text(json.dumps(
-            {"who": who, "pid": me, "at": time.time(), "note": str(note or "")[:200]},
+            {"who": who, "pid": me, "at": time.time(), "note": str(note or "")[:200],
+             "runtime_generation": runtime_reset.capture(), "thread_id": _th.get_ident()},
             ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -231,13 +269,39 @@ def acquire(who, note=""):
 
 
 def release(who=None):
-    """放开卡（只有自己占着时才删）。模型进程留着没关系，别的进程要用会先 claim 清场。"""
-    cur = owner()
-    if cur and int(cur["pid"]) == os.getpid():
+    """Release our claim while retaining a diagnostic record on disk."""
+    with GPU_LOCK:
         try:
-            _OWNER_FILE.unlink()
-        except Exception:
-            pass
+            cur = json.loads(_OWNER_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(cur, dict) or cur.get("pid") != os.getpid():
+            return False
+        if who and cur.get("who") != who:
+            return False
+        from cores import runtime_reset
+        if cur.get('runtime_generation') and cur['runtime_generation'] != runtime_reset.capture():
+            return False
+        if cur.get('thread_id') and cur['thread_id'] != _th.get_ident():
+            return False
+        cur.update(pid=None, released_at=time.time(), released_by_pid=os.getpid())
+        _OWNER_FILE.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+        return True
+
+
+def reset_owner():
+    """Clear a stale claim only after all registered model ports are stopped."""
+    with GPU_LOCK:
+        active = {who: pid_on_port(port) for who, port in _PORTS.items()}
+        active = {who: pid for who, pid in active.items() if pid}
+        stray = stray_llama_pids()
+        if active or stray:
+            raise RuntimeError("模型仍在退出，显卡占用记录已保留，请稍后重试清理：%s" % (active or stray))
+        _OWNER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _OWNER_FILE.write_text(json.dumps({"who": None, "pid": None,
+            "released_at": time.time(), "released_by_pid": os.getpid(),
+            "note": "清理缓存"}, ensure_ascii=False), encoding="utf-8")
+        return True
 
 
 def guard(who, need_gb=None, note=""):
@@ -248,6 +312,8 @@ def guard(who, need_gb=None, note=""):
     闸把自己拦死了，整个出片任务停在那儿。
     """
     acquire(who, note)
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     killed = kill_stray_llama()
     freed = []
     try:
@@ -259,6 +325,7 @@ def guard(who, need_gb=None, note=""):
     need = MIN_FREE_GB if need_gb is None else float(need_gb)
     fg = free_gb()
     for _ in range(3):
+        runtime_reset.assert_current()
         if fg is None or fg >= need:
             break
         time.sleep(3)

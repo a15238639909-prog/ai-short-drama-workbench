@@ -74,9 +74,11 @@ def up():
 
 def _game_mode_guard():
     """游戏模式暂停旗立着时拒绝上卡——用户在打游戏，显卡不能碰。"""
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     from pathlib import Path as _P
     if (_P(__file__).resolve().parent.parent / "cache" / "game_mode.flag").exists():
-        raise RuntimeError("游戏模式暂停中——点右上角「恢复任务」再继续")
+        raise RuntimeError("旧的暂停状态尚未清除，请点右上角「清理缓存」再开始新任务")
 
 def start():
     if os.environ.get("V41_NO_MODEL"):
@@ -87,6 +89,7 @@ def start():
         if up():
             return True
         for _ in range(8):
+            _game_mode_guard()
             if up():
                 return True
             time.sleep(1.5)
@@ -121,13 +124,14 @@ def start():
             _PROC = None
         out = open(LOG, "a", encoding="utf-8", errors="ignore")
         err = open(ERR_LOG, "a", encoding="utf-8", errors="ignore")
-        _PROC = subprocess.Popen(args, creationflags=0x08000000, stdout=out, stderr=err)
+        _PROC = gpu_manager.spawn("qwen", args, creationflags=0x08000000, stdout=out, stderr=err)
         try:
             _wait = max(60, int(os.environ.get("V41_QWEN_START_WAIT") or 180))
         except Exception:
             _wait = 180
         for _ in range(_wait // 2):
             time.sleep(2)
+            _game_mode_guard()
             if up():
                 return True
             if _PROC.poll() is not None:
@@ -304,8 +308,12 @@ def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
     t0 = time.time()
     req = urllib.request.Request(QWEN_URL + "/v1/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     with urllib.request.urlopen(req, timeout=timeout) as response:
         obj = json.loads(response.read().decode("utf-8", "replace"))
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     choice = obj["choices"][0]
     msg = choice.get("message") or {}
     content = str(msg.get("content") or "")

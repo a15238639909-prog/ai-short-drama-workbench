@@ -1,0 +1,95 @@
+{
+  "version": "1.08",
+  "passed": true,
+  "unique_tests": 762,
+  "unique_passed": 762,
+  "unique_failures": 0,
+  "unique_errors": 0,
+  "unique_skipped": 0,
+  "initial_execution_count": 780,
+  "total_execution_count": 790,
+  "groups": [
+    {
+      "label": "characters_continuation_recovery",
+      "tests": 249,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "pov_workbench_recovery",
+      "tests": 99,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "bundled_motion_media",
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "initially_skipped": 8,
+      "isolated_http_rechecked": 8
+    },
+    {
+      "label": "local_story_video",
+      "tests": 402,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "initial_failures": 2,
+      "targeted_rechecked": 2
+    }
+  ],
+  "node_checks": [
+    {
+      "file": "tests/test_image_drop.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_progress_dismiss.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_taskbar_controls.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_frontend_generation_status.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_runtime_cache_reset.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_settings_pov_owner_ui.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_story_video_reference_ui.js",
+      "passed": true
+    }
+  ],
+  "syntax": {
+    "python_files": 251,
+    "json_files": 27,
+    "javascript_files": 30,
+    "reference_only_exceptions": [
+      "presets/8848_底层定义原文.js"
+    ]
+  },
+  "public_files_scanned": 431,
+  "credential_candidates": 0,
+  "public_file_range_passed": true,
+  "model_inference_run": false,
+  "real_ai_media_generated": false,
+  "test_files_retained": true,
+  "scope_note": "Bounded release regressions; mocks validate flow, artificial media validate files, not AI image quality.",
+  "validation_note": "Eight isolated HTTP cases were rerun with their release-only guard enabled. Two port cases were rerun after adapting an outdated test mock to the new protected spawn boundary. The original failure and skip evidence is retained locally. Unique test IDs are deduplicated; execution totals include reruns and imported duplicate cases."
+}

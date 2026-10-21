@@ -312,6 +312,10 @@ class Handler(BaseHTTPRequestHandler):
                     ext = target.suffix.lower()
                     ctype = "image/png" if ext == ".png" else ("image/jpeg" if ext in (".jpg", ".jpeg") else
                             ("video/mp4" if ext == ".mp4" else ("application/pdf" if ext == ".pdf" else "application/octet-stream")))
+                    if ext == ".html":
+                        ctype = "text/html; charset=utf-8"
+                    elif ext == ".json":
+                        ctype = "application/json; charset=utf-8"
                     size = target.stat().st_size
                     # 【必须支持 Range】不支持的话浏览器认为这个源不可 seek，
                     # 视频进度条拖不动（实测 video.seekable 是 [0,0]）——P240。
@@ -714,6 +718,8 @@ class Handler(BaseHTTPRequestHandler):
             return _json_resp(self, {"ok": False, "error": str(e)[:500]}, 500)
 
     def do_POST(self):
+        from cores import runtime_reset
+        runtime_reset.bind_thread(runtime_reset.generation())
         path = self._dec_path()
         if path == "/api/story-video/upload":
             # Stream image bytes before the ordinary JSON-body reader runs.

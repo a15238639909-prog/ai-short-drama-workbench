@@ -3,7 +3,7 @@ window.Pages = window.Pages || {};
 window.Pages.settings = (function () {
   /* 五维可选值（/api/kits/options）。取不到就退回空表，界面只显示「自动」。 */
   var KD = {};
-  var D = null, draft = null;
+  var D = null, draft = null, loadVersion = 0;
   function esc(s) { return UI.esc(s); }
   function ph(label, id, val, ph, note) {
     return '<p style="margin:0 0 8px"><label style="display:block;font-size:14px;color:#5a5348;margin-bottom:4px">' + label + "</label>" +
@@ -124,12 +124,30 @@ window.Pages.settings = (function () {
       .catch(function () { return KD; });
   }
   function load(main, st) {
+    var version = ++loadVersion;
     return loadKitDims().then(function () {
+      if (version !== loadVersion) return null;
       return window.api.post("/api/project/settings", { story_id: st.storyId });
     }).then(function (d) {
+      if (version !== loadVersion || !d) return;
       D = d;
       render(main, st);
     });
+  }
+  function cameraOwnerSelect(settings) {
+    var chosen = String((settings || {}).camera_owner || "我").trim() || "我";
+    var names = ["我"];
+    (D.characters || []).forEach(function (c) {
+      var name = String(c.name || "").trim();
+      if (name && names.indexOf(name) < 0) names.push(name);
+    });
+    if (names.indexOf(chosen) < 0) names.push(chosen);
+    return '<span id="psCameraOwnerControl"' + (settings.pov === "第一视角POV" ? '' : ' hidden') +
+      '><label class="option-label" for="psCameraOwner">谁的视角</label>' +
+      '<select id="psCameraOwner" style="width:100%;height:36px">' + names.map(function (name) {
+        return '<option value="' + esc(name) + '"' + (name === chosen ? ' selected' : '') + '>' +
+          esc(name === "我" ? "我的视角（画面里的人物需要露脸）" : "角色的视角：" + name) + '</option>';
+      }).join('') + '</select></span>';
   }
   /* 页面内提示条：比 alert 好在不挡操作、能一直看着 */
   function banner(main, text, warn) {
@@ -1133,6 +1151,7 @@ window.Pages.settings = (function () {
       /* 默认节奏（影片类型）下拉已删（用户 2026-09-06 定）：节奏由结构表每话自带 */
       '<span><span class="option-label"><span>视点（摄影机）</span></span>' +
       sel("psPov", ["自动"].concat(KD.pov || []), s.pov || "电影第三人称") + "</span>" +
+      cameraOwnerSelect(s) +
       /* 出视频参数：分辨率档越大越慢，步数越多越细（P242）。
          这三个下拉没有「自动」项，所以提交时不能用 pick()——它会把「自动」转成空串。 */
       '<span class="settings-extra"><span class="option-label" title="视频分辨率档（兆像素，越大越慢）"><span>分辨率档</span></span>' +
@@ -1384,6 +1403,13 @@ window.Pages.settings = (function () {
 
   function wire(main, st, s) {
     renderPlan(main, st);              /* 整部规划卡（P287）：想法 → 整部方案 → 改/确认 → 逐话生成 */
+    function syncCameraOwner() {
+      var control = document.getElementById("psCameraOwnerControl");
+      if (control) control.hidden = (document.getElementById("psPov") || {}).value !== "第一视角POV";
+    }
+    var povSelect = document.getElementById("psPov");
+    if (povSelect) povSelect.onchange = syncCameraOwner;
+    syncCameraOwner();
     /* P353：门不再问，设定页不画问题清单 */
     /* 一句话失焦自动保存。实测踩过：用户写完直接切项目，回来框是空的——
        这一栏是整个项目的根，不能靠人记得点保存按钮。 */
@@ -1573,6 +1599,10 @@ window.Pages.settings = (function () {
          现在这两个字段只保留旧值，不再由界面写。 */
       settings.custom_guidance = "";
       settings.look_panel = { look: "", hero_style: "" };
+      /* 第一视角默认是用户在看出镜人物；其余视点不覆盖已有的自拍拍摄者。 */
+      if (settings.pov === "第一视角POV") {
+        settings.camera_owner = String((document.getElementById("psCameraOwner") || {}).value || "我").trim() || "我";
+      }
       if (plan) settings.plan = plan.value || s.plan || "";
       return { story_id: st.storyId, title: title, settings: settings };
     }
@@ -1903,6 +1933,7 @@ window.Pages.settings = (function () {
           setv("psStyle", r.art);
           setv("psGenre", r.genre);
           setv("psPov", r.pov);
+          syncCameraOwner();
           /* 内容尺度：类型自带的自动勾上（恐怖带黑暗血腥），用户仍可改 */
           var want = r.scale || [];
           [].forEach.call(document.querySelectorAll(".ct"), function (c) {
@@ -2085,23 +2116,41 @@ window.Pages.settings = (function () {
     }
     function pollGenDone(busy, doneMsg) {
       /* 进度百分比交给 shell.js 的全局轮询显示，这里管按钮倒计时校准和收尾 */
-      var t = setInterval(function () {
+      var stopped = false;
+      function tick() {
         window.api.post("/api/saga/" + st.storyId + "/progress", {}).then(function (j2) {
-          if (j2.running) { busy.setEta(j2.eta_seconds); return; }
-          clearInterval(t);
+          j2 = j2 || {};
+          var status = j2.status || '';
+          if (j2.running || ['queued','retrying','waiting_resource','waiting_task'].indexOf(status) >= 0) {
+            if (j2.running) busy.setEta(j2.eta_seconds);
+            return;
+          }
+          stopped = true;
           busy.stop();
-          if (j2.err) { UI.toast("失败：" + j2.err, "err"); return; }
+          if (j2.cancel || status === 'cancelled') { UI.toast("已取消，已生成的内容保留"); load(main, st); return; }
+          if (j2.err || status === 'failed') { UI.toast("失败：" + (j2.err || j2.failure_reason || j2.step || '任务未完成'), "err"); return; }
           /* 出片前检查判不了的地方：任务停在「需要你确认」，不是完成也不是失败（P248）。
              把问题和候选原样显示；用户去分镜页改好再点「生视频」接着出。 */
-          if (j2.blocked && j2.blocked.length) {
+          var blocked = Array.isArray(j2.blocked) ? j2.blocked.length > 0 : !!j2.blocked;
+          if (j2.partial || status === 'partial' || blocked || status === 'blocked') {
             UI.toast("出片停了：" + (j2.step || "看任务日志"), "err");     /* P354：门不再问；这里只可能是自修没跑完 */
+            load(main, st);
+            return;
+          }
+          var legacyComplete = !status && (j2.step === '完成' || j2.merged ||
+            (+j2.total > 0 && +j2.done >= +j2.total));
+          if (status !== 'completed' && !legacyComplete) {
+            UI.toast("进度已保留：" + (j2.step || '尚未确认任务完成'), "err");
             load(main, st);
             return;
           }
           UI.toast(typeof doneMsg === "function" ? doneMsg(j2) : (doneMsg || "简介、原文、人设图都生成好了，往下看、改，满意就「按原文生成剧本」"));
           load(main, st);
-        }).catch(function () {});
-      }, 2500);
+        }).catch(function () {}).then(function () {
+          if (!stopped) setTimeout(tick, 2500);
+        });
+      }
+      setTimeout(tick, 2500);
     }
     function makeDoneMsg(title, j2) {
       if (title === "生成文字") return "文字部分好了：去 📖 剧本 页看剧本和分段，改了会自动保存；满意就回来点 ②/③";
@@ -2211,6 +2260,7 @@ window.Pages.settings = (function () {
       if (b) b.disabled = true;
       UI.toast("开始补出缺的人设图，每张约 2-4 分钟…");
       saveAllCharacters()
+        .then(saveCurrentProject)
         .then(function () {
           return window.api.post("/api/saga/" + st.storyId + "/gen-char-images", {});
         })

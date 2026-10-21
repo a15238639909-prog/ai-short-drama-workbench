@@ -29,6 +29,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 from cores import paths as _package_paths
+from cores import runtime_reset as _runtime_reset
+from models import gpu_manager as _reset_gpu
 from models.anima_client import local_guard as _local_model_guard
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -135,6 +137,7 @@ def service_free():
 
 def service_stop(kill=True):
     """中断 H3 当前任务并释放；kill=True 时结束 8190 服务进程。"""
+    _runtime_reset.assert_stop_allowed()
     if service_up():
         for endpoint, payload in (("/interrupt", {}), ("/queue", {"clear": True})):
             try:
@@ -172,7 +175,7 @@ def service_start(timeout=180):
     ]
     flags = 0x08000000 if os.name == "nt" else 0
     with open(H3_LOG, "ab") as lf:
-        subprocess.Popen(
+        _reset_gpu.spawn("h3",
             args, cwd=str(H3_ROOT), env=env,
             stdout=lf, stderr=subprocess.STDOUT,
             creationflags=flags,
@@ -664,6 +667,7 @@ class VideoTaskManager:
             except Exception:
                 pass
 
+    @_runtime_reset.admission
     def submit(self, payload):
         payload = dict(payload or {})
         # 【沿用历史任务的参考图】历史成品里改了提示词再出一版：
@@ -681,7 +685,7 @@ class VideoTaskManager:
         task_id = uuid.uuid4().hex
         folder = _new_task_dir(task_id)
         task = {
-            "id": task_id,
+            "id": task_id, "runtime_generation": _runtime_reset.generation(),
             "status": "queued", "stage": "queued", "detail": "等待生成",
             "createdAt": time.time(), "startedAt": 0, "endedAt": 0,
             "promptId": "", "error": "", "outputs": [], "primary": "",
@@ -751,6 +755,8 @@ class VideoTaskManager:
 
     def _update(self, task, **kwargs):
         with STATE_LOCK:
+            if task.get("cleared_at"):
+                return
             task.update(kwargs)
             _save_task(task)
 
@@ -763,6 +769,8 @@ class VideoTaskManager:
                     if not task or task.get("status") == "cancelled" or task.get("cancelRequested"):
                         continue
                     self.current_id = tid
+                _runtime_reset.bind_thread(task.get("runtime_generation", "initial"))
+                _runtime_reset.assert_current()
                 self._run_task(task)
             except Exception as e:
                 if task:
@@ -772,8 +780,10 @@ class VideoTaskManager:
                     if self.current_id == tid:
                         self.current_id = None
                 self.q.task_done()
+                _runtime_reset.bind_thread(None)
 
     def _run_task(self, task):
+        _runtime_reset.assert_current()
         req = task.get("request") or {}
         from cores.age_policy import assert_model_request
         assert_model_request(req.get("prompt"), media="video")

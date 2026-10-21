@@ -77,20 +77,40 @@ class StoryVideoRequestTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 check_instance(example, schema)
 
-    def test_eight_seconds_has_short_optional_speech(self):
+    def test_eight_seconds_optional_dialogue_uses_natural_clip_capacity(self):
+        from cores import story_video_core as core
+
         _, payload, schema = prompts.plan_request('无旁白的短片', '', 2, 8)
         budget = payload['timing_budget']
-        self.assertEqual(budget['max_dialogue_lines'], 1)
-        maximum = budget['max_dialogue_characters_total']
-        speech = len(re.findall(r'[一-龥A-Za-z0-9]', '字' * maximum)) / 4.5 + .5
-        self.assertLessEqual(speech, budget['max_dialogue_seconds'])
-        self.assertLess(speech, 8 * .5)
+        self.assertEqual(budget['max_dialogue_seconds'], 8)
         example = self.plan_fixture()
-        example['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '字' * maximum}]
+        example['characters'] = [{'id': 'C1', 'name': '同行者',
+                                  'appearance': '成年旅人', 'role': '主角'}]
+        for beat in example['beats']:
+            beat['cast'] = ['C1']
+        # Silence stays valid, while a natural exchange need not stop at one line.
         check_instance(example, schema)
-        example['beats'][0]['dialogue'][0]['text'] += '字'
-        with self.assertRaisesRegex(ValueError, 'string length'):
-            check_instance(example, schema)
+        core.validate_plan(example, payload)
+        example['beats'][0]['dialogue'] = [
+            {'speaker': 'C1', 'text': '水声就在前面。'},
+            {'speaker': 'C1', 'text': '好，我们过去看看。'},
+        ]
+        check_instance(example, schema)
+        core.validate_plan(example, payload)
+        # Two individually valid lines still cannot exceed the shared clip budget.
+        example['beats'][0]['dialogue'] = [
+            {'speaker': 'C1', 'text': '字' * 17},
+            {'speaker': 'C1', 'text': '字' * 17},
+        ]
+        check_instance(example, schema)
+        with self.assertRaisesRegex(ValueError, '对白超过自然表演预算'):
+            core.validate_plan(example, payload)
+        # Even 32 characters fit only if their two pauses fit within eight seconds.
+        for line in example['beats'][0]['dialogue']:
+            line['text'] = '字' * 16
+        check_instance(example, schema)
+        with self.assertRaisesRegex(ValueError, '对白无足够停顿时间'):
+            core.validate_plan(example, payload)
 
     def test_requests_are_independent_and_do_not_mutate_sources(self):
         actual = {'unknowns': ['道具的持有人不清楚']}
@@ -195,6 +215,44 @@ class StoryVideoRequestTests(unittest.TestCase):
             check_instance([{'speaker': 'C1', 'text': '新增台词', 'start': 1, 'end': 2}],
                            schema['properties']['dialogue'])
 
+    def test_compile_normalizes_only_the_matching_delivery_speaker_annotation(self):
+        plan = self.plan_fixture()
+        plan['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '先等等。'},
+                                      {'speaker': 'C2', 'text': '好。'},
+                                      {'speaker': 'C3', 'text': '跟我来。'}]
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 15)
+        raw = self.written_fixture([
+            {'speaker': line['speaker'], 'text': line['text'], 'start': index * 3,
+             'end': index * 3 + 2, 'delivery': 'The adult (S%d), speaking excitedly' % (index + 1)}
+            for index, line in enumerate(plan['beats'][0]['dialogue'])])
+        original = copy.deepcopy((raw, payload))
+        compiled = prompts.compile_written(raw, payload)
+        for number, line in enumerate(compiled['dialogue'], 1):
+            self.assertEqual(line['delivery'], 'The adult, speaking excitedly')
+            self.assertEqual(compiled['prompt'].count('(S%d)' % number), 1)
+            self.assertEqual(compiled['prompt'].count('<d>[Chinese] %s</d>' % line['text']), 1)
+        self.assertEqual((raw, payload), original)
+
+    def test_compile_delivery_normalization_keeps_wrong_ids_slots_and_tags_rejected(self):
+        plan = self.plan_fixture()
+        plan['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '先等等。'}]
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 8)
+        for delivery in ('The adult (S2), speaking excitedly',
+                         'The adult (S99), speaking excitedly',
+                         'The adult (S1) (S2), speaking excitedly',
+                         'The adult (S1), {{D1}}',
+                         'The adult (S1), <d>[Chinese] forged words</d>', '(S1)'):
+            raw = self.written_fixture([{'speaker': 'C1', 'text': '先等等。', 'start': 1, 'end': 3,
+                                        'delivery': delivery}])
+            original = copy.deepcopy(raw)
+            with self.subTest(delivery=delivery), self.assertRaises(ValueError):
+                prompts.compile_written(raw, payload)
+            self.assertEqual(raw, original)
+        raw = self.written_fixture([{'speaker': 'C2', 'text': '先等等。', 'start': 1, 'end': 3,
+                                    'delivery': 'The adult (S1), speaking excitedly'}])
+        with self.assertRaises(ValueError):
+            prompts.compile_written(raw, payload)
+
     def test_fixed_dialogue_schema_rejects_translation_and_tags(self):
         plan = self.plan_fixture()
         plan['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '先等等！'}]
@@ -280,6 +338,38 @@ class StoryVideoRequestTests(unittest.TestCase):
         self.assertEqual(first[0]['speaker_id'], 'S1')
         self.assertEqual(second[0]['speaker_id'], 'S2')
 
+    def test_body_end_anchors_allow_cut_boundary_and_clip_end_without_moving_dialogue(self):
+        plan = self.plan_fixture()
+        plan['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '跟我来。'}]
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 15)
+        raw = self.written_fixture([{'speaker': 'C1', 'text': '跟我来。', 'start': 5, 'end': 6,
+                                    'delivery': 'The adult woman says urgently'}])
+        raw['integrated_multimodal_description'] = (
+            '[Shot 1] A wide shot follows the adults through the rising water. '
+            'At 00:05.000, the water reaches their knees. '
+            '[Shot 2] At 00:05.000, the camera cuts to a medium shot of their escape. '
+            'At 00:15.000, both adults reach the raised stone platform.')
+        original = copy.deepcopy(raw)
+        prompt = prompts.compile_written(raw, payload)['prompt']
+        first, second = prompt.split('[Shot 2]', 1)
+        self.assertIn('At 00:05.000, the water reaches their knees.', first)
+        self.assertNotIn('<d>[Chinese] 跟我来。</d>', first)
+        self.assertEqual(second.count('<d>[Chinese] 跟我来。</d>'), 1)
+        self.assertIn('At 00:15.000, both adults reach the raised stone platform.', second)
+        self.assertEqual(raw, original)
+
+    def test_body_anchor_past_the_shot_end_is_still_rejected(self):
+        plan = self.plan_fixture()
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 15)
+        raw = self.written_fixture()
+        raw['integrated_multimodal_description'] = (
+            '[Shot 1] A wide shot follows the adults through the rising water. '
+            'At 00:05.001, the water reaches their knees. '
+            '[Shot 2] At 00:05.000, the camera cuts to a medium shot of their escape. '
+            'At 00:15.000, both adults reach the raised stone platform.')
+        with self.assertRaisesRegex(ValueError, '已有At时间标记不在对应Shot范围内'):
+            prompts.compile_written(raw, payload)
+
     def test_compile_normalizes_shot_spaces_and_cut_precision_without_changing_raw(self):
         plan = self.plan_fixture()
         _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 8)
@@ -314,6 +404,38 @@ class StoryVideoRequestTests(unittest.TestCase):
         line['delivery'] = ''
         with self.assertRaises(ValueError):
             check_instance([line], schema['properties']['dialogue'])
+
+    def test_compile_moves_a_leading_style_declaration_inside_shot_one_without_loss(self):
+        plan = self.plan_fixture()
+        plan['beats'][0]['dialogue'] = [{'speaker': 'C1', 'text': '等等。'}]
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 8)
+        prefix = 'Live-action, photorealistic, real adult actors; cinematic 35mm photography in sunlight.'
+        raw = self.written_fixture([{'speaker': 'C1', 'text': '等等。', 'start': 1, 'end': 2,
+                                    'delivery': 'The adult woman says urgently'}])
+        raw['integrated_multimodal_description'] = (
+            prefix + ' [Shot 1] At 00:00.000, the woman reaches the doorway. '
+            '[Shot 2] At 00:04.000, the camera cuts to the man waiting outside.')
+        original = copy.deepcopy((raw, payload))
+        prompt = prompts.compile_written(raw, payload)['prompt']
+        description = prompt.split('integrated_multimodal_description: ', 1)[1]
+        self.assertTrue(description.startswith('[Shot 1] ' + prefix))
+        self.assertEqual(description.count(prefix), 1)
+        self.assertIn('the woman reaches the doorway.', description)
+        self.assertIn('[Shot 2] At 00:04.000, the camera cuts to the man waiting outside.', description)
+        self.assertEqual(description.count('<d>[Chinese] 等等。</d>'), 1)
+        self.assertLess(description.index('<d>[Chinese] 等等。</d>'), description.index('[Shot 2]'))
+        self.assertEqual((raw, payload), original)
+
+    def test_compile_keeps_unknown_or_timed_preambles_rejected(self):
+        plan = self.plan_fixture()
+        _, payload, _ = prompts.write_request(plan, plan['beats'][0], {}, 8)
+        for prefix in ('Background events happen before the scene.',
+                       'Live-action, photorealistic. At 00:01.000, the man crosses the room.',
+                       'Live-action, photorealistic. At 0:1, the man crosses the room.'):
+            raw = self.written_fixture()
+            raw['integrated_multimodal_description'] = prefix + ' ' + raw['integrated_multimodal_description']
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(ValueError, '镜头正文须从'):
+                prompts.compile_written(raw, payload)
 
     def test_compile_rejects_raw_source_repetition_and_overlapping_dialogue(self):
         plan = self.plan_fixture()
@@ -386,12 +508,100 @@ class StoryVideoRequestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_instance({'passed': 'true', 'issues': [], 'strengths': []}, schema)
 
+    def test_blocking_review_is_opt_in_and_preserves_default_contract(self):
+        plan = self.plan_fixture()
+        default = prompts.review_request(plan, '完整原故事', '', 2, 8)
+        explicit_legacy = prompts.review_request(plan, '完整原故事', '', 2, 8, blocking_only=False)
+        self.assertEqual(default, explicit_legacy)
+        self.assertNotIn('review_policy', default[1])
+        self.assertEqual(set(default[2]['properties']['issues']['items']['properties']),
+                         {'beat', 'category', 'reason', 'repair_direction'})
+        self.assertIn('passed仅在issues为空时为true', default[0])
+
+    def test_blocking_review_schema_requires_severity_and_verifiable_source_field(self):
+        plan = self.plan_fixture()
+        system, payload, schema = prompts.review_request(
+            plan, '执行当前动作后离开', '', 2, 8, blocking_only=True)
+        self.assertEqual(payload['review_policy'], 'core_errors_only_v1')
+        issue = dict(beat=1, category='capacity', severity='advisory', source_quote='执行当前动作',
+                     reason='该动作的细节可以在后续分镜展开。', repair_direction='补充可见的动作过程。')
+        check_instance(dict(passed=True, issues=[issue], strengths=[]), schema)
+        check_instance(dict(passed=False, issues=[dict(issue, severity='blocking')], strengths=[]), schema)
+        for change in ({'severity': 'warning'}, {'source_quote': ''}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                check_instance(dict(passed=True, issues=[dict(issue, **change)], strengths=[]), schema)
+        missing = dict(issue)
+        missing.pop('source_quote')
+        with self.assertRaises(ValueError):
+            check_instance(dict(passed=True, issues=[missing], strengths=[]), schema)
+        self.assertIn('连续原文片段，逐字引用', system)
+        self.assertIn('空泛推测不得blocking', system)
+        self.assertIn('仅有advisory时passed必须为true，issues可以非空', system)
+        self.assertNotIn('passed仅在issues为空时为true', system)
+        self.assertNotIn('有任何需修复问题必须为false', system)
+
+    def test_blocking_review_advice_is_local_and_does_not_mutate_sources(self):
+        plan = self.plan_fixture()
+        observation = {'actual_visible': '成年人物站在台旁', 'unknowns': ['出口未知']}
+        original = copy.deepcopy((plan, observation))
+        system, payload, schema = prompts.review_request(
+            plan, '按原故事完成', '自然表演', 2, 8, observation, blocking_only=True)
+        self.assertIn('可以在后续分镜补充的空间镜头', system)
+        self.assertIn('行动者、受事、核心动作、承托关系和触发顺序不能被创作者互换或替代', system)
+        self.assertIn('没有详写距离、镜头参照或仅感觉', system)
+        self.assertIn('根据明确时间标记或自然发声预算可确定的时长越界', system)
+        self.assertIn('不重写用户故事', system)
+        payload['plan']['beats'].clear()
+        payload['opening_observation']['unknowns'].clear()
+        schema['properties']['issues']['items']['properties']['severity']['enum'].clear()
+        self.assertEqual((plan, observation), original)
+        fresh = prompts.review_request(plan, '按原故事完成', '', 2, 8, blocking_only=True)
+        self.assertEqual(fresh[2]['properties']['issues']['items']['properties']['severity']['enum'],
+                         ['blocking', 'advisory'])
+
     def test_planning_keeps_mutable_state_out_of_fixed_identity_and_has_sustained_progress(self):
         system, _, _ = prompts.plan_request('故事', '', 10, 8)
         self.assertIn('characters.appearance只写身份与稳定外貌', system)
         self.assertIn('invariants不能一面永久锁死它的位置', system)
         self.assertIn('不要在中段彻底解决核心问题', system)
         self.assertIn('静谧或关系片', system)
+
+    def test_full_source_story_preflight_preserves_events_words_and_causal_order(self):
+        source = '三人看清石碑后撤离。先展示宝石睁眼，再说完原话，最后骤黑。'
+        plan_system, payload, _ = prompts.plan_request(source, '真人写实', 10, 15)
+        review_system, review_payload, review_schema = prompts.review_request(
+            self.plan_fixture(), source, '真人写实', 10, 15)
+        self.assertEqual(payload['brief'], source)
+        self.assertEqual(review_payload['brief'], source)
+        for system in (plan_system, review_system):
+            self.assertIn('brief已给完整原故事时', system)
+            self.assertIn('关键事件、行动者、触发关系', system)
+            self.assertIn('判断', system)
+            self.assertIn('确认', system)
+        self.assertIn('石碑、标识', plan_system)
+        self.assertIn('发现与阅读动作', plan_system)
+        self.assertIn('画内文字不自动转成角色台词', plan_system)
+        self.assertIn('真正遗漏、改动核心事实或指定结尾才列阻塞问题', review_system)
+        self.assertIn('不得要求作者把指定反转改成另一个结局', review_system)
+        self.assertEqual(set(review_schema['properties']), {'passed', 'issues', 'strengths'})
+        self.assertEqual(review_schema['properties']['issues']['items']['properties']['category']['enum'],
+                         ['pacing', 'causality', 'continuity', 'ending', 'capacity'])
+
+    def test_final_writer_orders_reveal_speech_and_visible_black_within_clip(self):
+        plan = self.plan_fixture()
+        plan['beats'][-1]['dialogue'] = [{'speaker': 'C1', 'text': '那不是宝藏。'}]
+        system, payload, schema = prompts.write_request(plan, plan['beats'][-1], {}, 15)
+        self.assertTrue(payload['is_final'])
+        self.assertEqual(payload['seconds'], 15)
+        self.assertIn('dialogue的start/end须与timeline及Shot正文的语义时序相符', system)
+        self.assertIn('所有对白end不晚于黑场开始', system)
+        self.assertIn('在seconds以内预留数帧黑场', system)
+        self.assertIn('黑场开始时间必须小于seconds', system)
+        self.assertIn('不互相依赖的自然动作与短对白并行', system)
+        self.assertEqual(payload['dialogue_slots'][0]['text'], '那不是宝藏。')
+        self.assertEqual(set(schema['properties']), {
+            'integrated_multimodal_description', 'overall_soundscape', 'non_diegetic_music',
+            'expected_end_state', 'brief', 'timeline', 'dialogue', 'continuity_notes'})
 
     def test_pacing_budget_is_computed_consistently_for_plan_and_review(self):
         for count, resolution, epilogue in ((2, None, None), (5, None, None),

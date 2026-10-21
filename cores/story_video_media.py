@@ -248,6 +248,28 @@ def sample_frames(video, outdir, seconds=8):
     return result
 
 
+def sample_at_times(video, outdir, targets):
+    """One bounded evidence supplement, using real frame timestamps."""
+    targets = list(targets)
+    if not 1 <= len(targets) <= 3 or any(isinstance(t, bool) or not isinstance(t, (int, float))
+            or not math.isfinite(t) or t < 0 for t in targets):
+        raise ValueError('定点补查须为1至3个非负有限时间')
+    source = _source(video)
+    _, _, times = _timeline(source['path'])
+    if any(t > times[-1] + .001 for t in targets):
+        raise ValueError('补查时间不能越过实际采用片末帧')
+    folder = Path(outdir).resolve()
+    _claim(folder, 'evidence_inputs.json', {'version': 1, 'source': source, 'targets': targets},
+           list(folder.glob('sample_*.png')))
+    indices = sorted({min(range(len(times)), key=lambda index: abs(times[index] - target)) for target in targets})
+    result = []
+    for index in indices:
+        path = folder / ('sample_%06d.png' % index)
+        _extract(source['path'], index, path)
+        result.append({'path': str(path), 'time_seconds': times[index], 'frame_index': index})
+    return result
+
+
 def adopt(video, outdir, end_seconds=None):
     source = _source(video)
     info, stream, times = _timeline(source['path'])

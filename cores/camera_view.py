@@ -5,10 +5,13 @@ MODES = ("第一视角POV", "自拍手持")
 
 
 def owner(characters, settings):
+    """Explicit operator wins; unnamed eye-level POV belongs to the off-screen viewer."""
     names = [c["name"] for c in characters or [] if c.get("name")]
     explicit = str((settings or {}).get("camera_owner") or "").strip()
     if explicit:
         return explicit                                                     # P461：指定了就是他，不管这段名单里有没有
+    if str((settings or {}).get("pov") or "").strip() == "第一视角POV":
+        return "我"
     return names[0] if names else ""
 
 

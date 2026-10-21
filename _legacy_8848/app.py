@@ -5,7 +5,8 @@
 自动管理【世界设定 + 大纲 + 前情摘要】，让长篇连续写作不会“断”。
 """
 import json, os, re, sys, time, shutil, webbrowser, threading, urllib.request, urllib.error, hashlib, traceback, base64
-from cores import paths as _package_paths
+from cores import paths as _package_paths, runtime_reset as _runtime_reset
+from models import gpu_manager as _reset_gpu
 from models.anima_client import local_guard as _local_model_guard
 
 _PACKAGE_LOGS = os.path.join(str(_package_paths.ROOT), "cache", "legacy_logs")
@@ -44,6 +45,10 @@ def log(msg):
 ACTIVITY = {"active": False, "op": "", "detail": "", "start": 0, "last": 0, "eta": ""}
 def set_activity(op, detail="", eta=""):
     """开始（或切换）一个耗时的后台步骤。"""
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     now = time.time()
     ACTIVITY.update({
         "active": True, "op": op, "detail": detail,
@@ -52,6 +57,10 @@ def set_activity(op, detail="", eta=""):
 
 def touch_activity(detail=None, eta=""):
     """长步骤进行中定期更新“最后活跃时间”，前端据此判断没有卡死。"""
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     now = time.time()
     if detail is not None:
         ACTIVITY["detail"] = detail
@@ -68,6 +77,10 @@ OPS = {}
 
 def op_ensure(op_id, label, total=0, detail="", kind=None):
     """登记一个后台任务；同一个任务已运行时不重复重置进度。"""
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     with OP_LOCK:
         op = OPS.get(op_id)
         if op and op.get("active"):
@@ -83,6 +96,10 @@ def op_ensure(op_id, label, total=0, detail="", kind=None):
         return dict(OPS[op_id])
 
 def op_update(op_id, done=None, total=None, detail=None, status=None, percent=None, kind=None, label=None):
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     with OP_LOCK:
         op = OPS.get(op_id)
         if not op:
@@ -110,6 +127,10 @@ def op_update(op_id, done=None, total=None, detail=None, status=None, percent=No
 
 def op_heartbeat(op_id, detail=None):
     """长步骤进行中定期心跳，前端据此判断是否卡住。"""
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     with OP_LOCK:
         op = OPS.get(op_id)
         if not op:
@@ -120,6 +141,10 @@ def op_heartbeat(op_id, detail=None):
         return dict(op)
 
 def op_end(op_id, status="complete", detail=""):
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     with OP_LOCK:
         op = OPS.get(op_id)
         if not op:
@@ -330,7 +355,7 @@ def ollama_ensure():
     if OLLAMA_MODELS_DIR:
         env["OLLAMA_MODELS"] = OLLAMA_MODELS_DIR
     try:
-        subprocess.Popen([OLLAMA_EXE, "serve"], env=env, creationflags=0x08000000)
+        _reset_gpu.spawn("ollama", [OLLAMA_EXE, "serve"], env=env, creationflags=0x08000000)
     except Exception as e:
         raise RuntimeError("Ollama 启动失败：" + str(e))
     for _ in range(20):
@@ -452,7 +477,7 @@ def _qwen36_start_locked():
         out_log = open(Q36_LOG, "a", encoding="utf-8", errors="ignore")
         err_log = open(Q36_ERR_LOG, "a", encoding="utf-8", errors="ignore")
         # ⚠⚠ 遵守项目约定：creationflags 必须是 0x08000000（CREATE_NO_WINDOW）
-        Q36_PROC = subprocess.Popen(args, creationflags=0x08000000,
+        Q36_PROC = _reset_gpu.spawn("qwen", args, creationflags=0x08000000,
                                     stdout=out_log, stderr=err_log)
     except Exception as e:
         raise RuntimeError("Qwen3.6 视觉服务启动失败：" + str(e))
@@ -469,6 +494,7 @@ def _qwen36_start_locked():
 
 def qwen36_free():
     """停止本地视觉服务，释放显存给写作/出图。"""
+    _runtime_reset.assert_stop_allowed()
     global Q36_PROC
     if Q36_PROC is not None:
         try:
@@ -707,7 +733,7 @@ def qwen25_start():
     try:
         out_log = open(Q25_LOG, "a", encoding="utf-8", errors="ignore")
         err_log = open(Q25_ERR_LOG, "a", encoding="utf-8", errors="ignore")
-        Q25_PROC = subprocess.Popen(args, creationflags=0x08000000,
+        Q25_PROC = _reset_gpu.spawn("qwen", args, creationflags=0x08000000,
                                     stdout=out_log, stderr=err_log)
     except Exception as e:
         raise RuntimeError("Qwen2.5-VL 视觉服务启动失败：" + str(e))
@@ -4592,6 +4618,7 @@ def comfy_up():
 
 def comfy_free():
     """让 ComfyUI 卸载显存里的模型（Krea2），给写作模型腾出显存。写作与出图不能共存于24G显存。"""
+    _runtime_reset.assert_stop_allowed()
     try:
         body = json.dumps({"unload_models": True, "free_memory": True}).encode("utf-8")
         urllib.request.urlopen(urllib.request.Request(
@@ -4628,6 +4655,7 @@ def comfy_kill():
 
 def comfy_stop_all():
     """中断当前 ComfyUI 任务、清空等待队列，再释放模型显存。"""
+    _runtime_reset.assert_stop_allowed()
     if not comfy_up():
         return False
     headers = {"Content-Type": "application/json"}
@@ -4675,7 +4703,7 @@ def comfy_start():
             "ComfyUI-ConditioningKrea2Rebalance", "ComfyUI-Lora-Manager", "rgthree-comfy",
         ]
         with open(COMFY_START_LOG, "ab") as lf:
-            subprocess.Popen(
+            _reset_gpu.spawn("krea",
                 args, cwd=COMFY_DIR, env=env, stdout=lf, stderr=subprocess.STDOUT,
                 creationflags=0x08000000)  # CREATE_NO_WINDOW
         return True
@@ -4744,6 +4772,7 @@ _OLLAMA_UNLOAD_TS = [0.0]
 def ollama_unload():
     """释放旧版 Ollama 写作模型显存。现在写作/识图已统一为本地 Qwen3.6，
     这里只是切换任务前腾显存；5 秒内重复调用直接跳过，避免日志刷屏。"""
+    _runtime_reset.assert_stop_allowed()
     now = time.time()
     if now - _OLLAMA_UNLOAD_TS[0] < 5:
         return
@@ -5414,6 +5443,10 @@ def _save_auto_job_state(snapshot):
         log("⚠ 后台任务状态保存失败：%s" % e)
 
 def set_auto_job(**updates):
+    try:
+        _runtime_reset.assert_current()
+    except _runtime_reset.Cancelled:
+        return None
     with AUTO_JOB_LOCK:
         AUTO_JOB.update(updates)
         AUTO_JOB["updatedAt"] = time.time()
@@ -18259,6 +18292,7 @@ def run_auto_job_multi(project_name, config):
                                    ("整页直出" if m == "onepage" else "逐格拼版"))
                                   for m in modes))
 
+@_runtime_reset.admission
 def start_auto_job(project_name, config):
     with AUTO_JOB_LOCK:
         if AUTO_JOB.get("status") in ("running", "stopping"):
@@ -18276,7 +18310,7 @@ def start_auto_job(project_name, config):
         config["mode"] = mode
         target = (run_auto_job_stills if mode == "stills" else
                   (run_auto_job_onepage if mode in ("cinematic", "onepage") else run_auto_job))
-    t = threading.Thread(target=target, args=(project_name, config), daemon=True,
+    t = threading.Thread(target=_runtime_reset.worker(target), args=(project_name, config), daemon=True,
                          name="auto-comic-job")
     t.start()
     return True, state
@@ -18322,7 +18356,7 @@ def start_novel_job(project_name, config):
     state = set_auto_job(status="running", project=project_name, stage="starting",
                          message="任务已启动…", progress=0, error="", pdfUrl="",
                          jobKind="novel")
-    threading.Thread(target=run_auto_job_novel, args=(project_name, config),
+    threading.Thread(target=_runtime_reset.worker(run_auto_job_novel), args=(project_name, config),
                      daemon=True, name="novel-job").start()
     return True, state
 
@@ -18931,7 +18965,7 @@ def start_script_job(kind, config):
     target = run_script_build_job if kind == "build" else run_script_render_job
     state = set_auto_job(status="running", stage="starting", message="任务已启动…",
                          progress=0, error="", pdfUrl="", jobKind=kind)
-    threading.Thread(target=target, args=(config,), daemon=True,
+    threading.Thread(target=_runtime_reset.worker(target), args=(config,), daemon=True,
                      name="script-job").start()
     return True, state
 
@@ -30598,11 +30632,13 @@ def vchar_update_memory(mem, update):
     mem["recentFacts"] = facts
     return mem
 
+@_runtime_reset.admission
 def vchar_start_image_job(char, msg_id, prompt, append=True, replace_idx=None, seed=None):
     _vc_paths()
     VC_JOB_SEQ[0] += 1
     job_id = "vj_%d_%d" % (int(time.time() * 1000), VC_JOB_SEQ[0])
     VC_JOBS[job_id] = {"id": job_id, "charId": char.get("id"), "msgId": msg_id,
+                       "runtime_generation": _runtime_reset.generation(),
                        "status": "pending", "prompt": prompt, "image": "",
                        "error": "", "start": time.time(),
                        "append": append, "replace_idx": replace_idx, "seed": seed}
@@ -30637,6 +30673,10 @@ def _vchar_worker_loop():
             job = VC_JOBS.get(job_id)
             if not job:
                 continue
+            _runtime_reset.bind_thread(job.get("runtime_generation", "initial"))
+            if job.get("cleared_at"):
+                continue
+            _runtime_reset.assert_current()
             if not VC_PROGRESS["active"]:
                 VC_PROGRESS.update({"active": True, "total": 0, "done": 0,
                                     "current": "正在生成配图", "start": time.time(),
@@ -30664,6 +30704,7 @@ def _vchar_worker_loop():
                                               VC_PROGRESS["total"]))
                 comfy_generate(job.get("prompt"), seed=job.get("seed"),
                                archive=archive, wh=(896, 1600))
+                _runtime_reset.assert_current()
                 rel = os.path.relpath(archive, COMIC_DIR).replace("\\", "/")
                 job["image"] = rel
                 job["status"] = "completed"
@@ -30689,6 +30730,8 @@ def _vchar_worker_loop():
                             m["jobId"] = job_id
                 vchar_save_history(job.get("charId"), h)
             except Exception as e:
+                if job.get("cleared_at"):
+                    continue
                 job["status"] = "failed"
                 job["error"] = str(e)[:300]
                 log("❌ 虚拟人物出图失败：" + str(e)[:200])
@@ -30698,6 +30741,9 @@ def _vchar_worker_loop():
                         m["jobId"] = "failed"
                 vchar_save_history(job.get("charId"), h)
             finally:
+                if job.get("cleared_at"):
+                    _runtime_reset.bind_thread(None)
+                    continue
                 try:
                     comfy_free()
                 except Exception:

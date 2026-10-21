@@ -17,6 +17,7 @@ import os
 import time
 import copy
 
+from cores import runtime_reset
 from api import post
 from api._shared import _RESP, ctx
 
@@ -415,7 +416,9 @@ import threading
 _JOBS = {}          # story_id -> {"step":…, "done":n, "total":n, "note":…, "err":…}
 
 
-def _job(sid):
+def _job(sid, start=False):
+    if start and _JOBS.get(sid, {}).get("cleared_at"):
+        _JOBS.pop(sid)
     return _JOBS.setdefault(sid, {"running": False, "step": "", "done": 0,
                                   "total": 0, "note": "", "err": ""})
 
@@ -443,7 +446,7 @@ def _build_all(sid, max_chars):
     每切一镜人脸重抽一次。现在整场交给 director_layer 做视觉压缩：
     一镜 6~12 秒连续表演，起止状态镜镜相接，连续性和提示词卫生机械校验。"""
     from cores import scene_layer, video_layer as vl, director_layer as dl
-    j = _job(sid)
+    j = _job(sid, start=True)
     try:
         j.update(running=True, err="", step="准备", done=0, total=0, note="", cancel=False)
         # 【没剧本就别静默空跑】新流水线里分镜读的是剧本(body)。剧本还没生成时，
@@ -727,10 +730,11 @@ def _build_all(sid, max_chars):
 
 
 @post(("/api/timeline/", "/build-all"))
+@runtime_reset.admission
 def tl_build_all(h, path, d):
     sid = path.split("/")[3]
     _ep_of(sid, d)
-    j = _job(sid)
+    j = _job(sid, start=True)
     if j.get("running"):
         return _RESP({"ok": True, "data": {"job": j, "note": "已经在跑了"}})
     try:
@@ -739,10 +743,10 @@ def tl_build_all(h, path, d):
             return _RESP({"ok": False, "error": "设定页的任务还在跑，等它结束再点"}, 400)          # P353
     except Exception:
         pass
-    t = threading.Thread(target=_build_all, args=(sid, int(d.get("max_chars") or 400)),
+    t = threading.Thread(target=runtime_reset.worker(_build_all), args=(sid, int(d.get("max_chars") or 400)),
                          daemon=True)
     t.start()
-    return _RESP({"ok": True, "data": {"job": _job(sid)}})
+    return _RESP({"ok": True, "data": {"job": runtime_reset.job_view(_job(sid))}})
 
 
 @post(("/api/timeline/", "/direct-next"))
@@ -833,7 +837,7 @@ def tl_progress(h, path, d):
     _ep_of(sid, d)
     st, tl = _load(sid)
     _rec = _recover(sid, tl, _ep_of(sid))     # P237 找回要按话号找
-    return _RESP({"ok": True, "data": {"job": _job(sid), "timeline": tl,
+    return _RESP({"ok": True, "data": {"job": runtime_reset.job_view(_job(sid)), "timeline": tl,
                                        "recover_notes": _rec}})
 
 
@@ -1059,7 +1063,7 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
 def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
     from cores import authoring as _au, saga_core as _sc
     from api import segment_api as _seg
-    j = _job(sid)
+    j = _job(sid, start=True)
     try:
         j.pop("blocked", None)          # 上一次停在"需要你确认"，这次重跑要把它清掉，页面才不会一直画旧问题
         j.pop("partial", None)
@@ -1312,7 +1316,7 @@ class _Cancelled(Exception):
 def cancel_project(sid):
     """取消这个项目所有正在跑的生成：分镜页任务 + 设定页任务 + 正在生的 H3。"""
     out = {"timeline": False, "saga": False}
-    j = _job(sid)
+    j = _job(sid, start=True)
     active_generation = bool(j.get("running"))
     if j.get("running"):
         j["cancel"] = True
@@ -1354,13 +1358,14 @@ def timeline_voice_check(h, path, d):
 
 
 @post(("/api/timeline/", "/merge"))
+@runtime_reset.admission
 def timeline_merge(h, path, d):
     """P399：合成成片（后台）。不传 segs＝整话；传 segs=[3,4,5] 只合这几段。"""
     sid = path.split("/")[3]
     _ep_of(sid, d)
     ep = _CUR_EP.get(sid, 1)
     segs = [int(x) for x in ((d or {}).get("segs") or []) if str(x).strip()]
-    j = _job(sid)
+    j = _job(sid, start=True)
     if j.get("running"):
         return _RESP({"ok": False, "error": "分镜任务还在跑，等它结束再合成"}, 400)
     j.update(running=True, err="", step="合成成片", done=0, total=1, note="", cancel=False)
@@ -1377,7 +1382,7 @@ def timeline_merge(h, path, d):
         except Exception as e:
             j.update(running=False, err=str(e)[:200], step="合成失败")
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "segs": segs}})
 
 
@@ -1393,6 +1398,7 @@ def timeline_films(h, path, d):
 
 
 @post(("/api/timeline/", "/rerender"))
+@runtime_reset.admission
 def timeline_rerender(h, path, d):
     """重渲指定几段（后台），用现有提示词。body: {"segs": [4, 8]}"""
     from api import segment_api as _seg
@@ -1401,7 +1407,7 @@ def timeline_rerender(h, path, d):
     segs = [int(x) for x in ((d or {}).get("segs") or [])]
     if not segs:
         return _RESP({"ok": False, "error": "没指定段"}, 400)
-    j = _job(sid)
+    j = _job(sid, start=True)
     if j.get("running"):
         return _RESP({"ok": False, "error": "已经在跑了"}, 400)
     ep = _CUR_EP.get(sid, 1)
@@ -1423,7 +1429,7 @@ def timeline_rerender(h, path, d):
         except Exception as e:
             j.update(running=False, err="重渲失败：" + str(e)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -1775,12 +1781,13 @@ def tl_shotlist_speaker(h, path, d):
 
 
 @post(("/api/timeline/", "/opening-render"))
+@runtime_reset.admission
 def tl_opening_render(h, path, d):
     """P316：单独重出某个开场段 {ep, k}；k 不传 = 没出的全出。后台跑。"""
     sid = path.split("/")[3]
     ep = _ep_of(sid, d)
     k = int(d.get("k") or 0)
-    j = _job(sid)
+    j = _job(sid, start=True)
     if j.get("running"):
         return _RESP({"ok": False, "error": "已经在跑了"}, 400)
     j.update(running=True, err="", step="开场段", done=0, total=1, note="", cancel=False)
@@ -1797,7 +1804,7 @@ def tl_opening_render(h, path, d):
         except Exception as ex:
             j.update(running=False, step="开场段出片失败", err=str(ex)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -1828,11 +1835,12 @@ def tl_gate_chat(h, path, d):
 
 
 @post(("/api/timeline/", "/gen-next"))
+@runtime_reset.admission
 def tl_gen_next(h, path, d):
     """生成下面 N 段（提示词 + 视频）。n 取 1~10；size_tier 传 "1.0" 出成片档。"""
     sid = path.split("/")[3]
     ep = _ep_of(sid, d)
-    j = _job(sid)
+    j = _job(sid, start=True)
     if j.get("running"):
         return _RESP({"ok": True, "data": {"job": j, "note": "已经在跑了"}})
     try:
@@ -1857,6 +1865,10 @@ def tl_gen_next(h, path, d):
         pass
     _po = bool((d or {}).get("prompts_only"))
     j.update(running=True, step="正在启动…", err="")             # 线程还没跑起来前就占住，连点两次不会起两个任务
-    t = threading.Thread(target=_gen_next, args=(sid, ep, n, tier, force, _po), daemon=True)
+    t = threading.Thread(target=runtime_reset.worker(_gen_next), args=(sid, ep, n, tier, force, _po), daemon=True)
     t.start()
-    return _RESP({"ok": True, "data": {"job": _job(sid), "n": n, "ep": ep}})
+    return _RESP({"ok": True, "data": {"job": runtime_reset.job_view(_job(sid)), "n": n, "ep": ep}})
+
+
+def clear_runtime_jobs():
+    return runtime_reset.clear_jobs(_JOBS)

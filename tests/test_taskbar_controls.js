@@ -13,7 +13,7 @@ function harness(status, reject = false) {
     buttons.clear();
     for (const match of html.matchAll(/id="(tb\w+)"/g)) buttons.set(match[1], {disabled:false});
   }});
-  const context = vm.createContext({runtimeTaskCount:0,taskActionPending:'',
+  const context = vm.createContext({runtimeTaskCount:0,taskActionPending:'',clearingRuntime:false,runtimeEpoch:0,runtimeCurrent:()=>true,
     UI:{esc:x=>x,badge:x=>x,toast:(...args)=>toasts.push(args)},
     window:{dispatchEvent:event=>events.push(event),api:{
       get:async()=>({active:task.status==='cancelled'?[]:[task]}),

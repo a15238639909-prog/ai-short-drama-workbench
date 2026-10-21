@@ -41,9 +41,11 @@ def up(timeout=5):
 
 def _game_mode_guard():
     """游戏模式暂停旗立着时拒绝上卡——用户在打游戏，显卡不能碰。"""
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     from pathlib import Path as _P
     if (_P(__file__).resolve().parent.parent / "cache" / "game_mode.flag").exists():
-        raise RuntimeError("游戏模式暂停中——点右上角「恢复任务」再继续")
+        raise RuntimeError("旧的暂停状态尚未清除，请点右上角「清理缓存」再开始新任务")
 
 def start_comfy(timeout=180):
     if os.environ.get("V41_NO_MODEL"):
@@ -71,10 +73,11 @@ def start_comfy(timeout=180):
                 # 图像编辑（换装/换状态）：Krea2EditGroundedEncode + Krea2EditModelPatch
                 "comfyui-krea2edit"]
         log = open(os.path.join(COMFY_DIR, "v41_comfy.log"), "ab")
-        subprocess.Popen(args, cwd=COMFY_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
+        gpu_manager.spawn("krea", args, cwd=COMFY_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
                          creationflags=0x08000000)
         for _ in range(int(timeout / 3)):
             time.sleep(3)
+            _game_mode_guard()
             if up():
                 return True
         raise RuntimeError("ComfyUI 180 秒内未就绪")
@@ -100,6 +103,15 @@ def generate(prompt, negative=NEGATIVE, width=None, height=None, seed=None, step
         raise RuntimeError("V41_NO_MODEL=1：零模型测试不许调模型（krea_client.generate）")
     from . import gpu_manager as _gm
     _gm.acquire("krea", note="generate")               # P273 用模型也要过占卡闸
+    try:
+        return _generate(prompt, negative, width, height, seed, steps, cfg, base_w, base_h)
+    finally:
+        _gm.release("krea")
+
+
+def _generate(prompt, negative, width, height, seed, steps, cfg, base_w, base_h):
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     """提交一次 Krea 生成。返回 {output_file, output_path}。请求中绝无图片输入。
 
     width/height/steps/cfg/negative 全部保留为兼容参数，**一律忽略**：
@@ -132,6 +144,7 @@ def generate(prompt, negative=NEGATIVE, width=None, height=None, seed=None, step
         # P450：出图词的比例 / 清晰度——只换出底宽高（16 的倍数），×1.5 放大、步数、cfg 不动
         wf[N_LATENT]["inputs"]["width"] = _round16(base_w)
         wf[N_LATENT]["inputs"]["height"] = _round16(base_h)
+    runtime_reset.assert_current()
     result = _http("POST", "/prompt", {"prompt": wf}, timeout=60)
     prompt_id = result.get("prompt_id")
     if not prompt_id:
@@ -139,6 +152,7 @@ def generate(prompt, negative=NEGATIVE, width=None, height=None, seed=None, step
     # 轮询（冷启动/显存争用下执行可能较长）
     deadline = time.time() + 1800
     while time.time() < deadline:
+        runtime_reset.assert_current()
         hist = _http("GET", "/history/" + prompt_id, timeout=30)
         item = hist.get(prompt_id)
         if item:
@@ -151,6 +165,7 @@ def generate(prompt, negative=NEGATIVE, width=None, height=None, seed=None, step
                     sub = img.get("subfolder") or ""
                     src = Path(COMFY_DIR) / "ComfyUI" / "output" / sub / fn
                     if src.exists():
+                        runtime_reset.assert_current()
                         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
                         dst = OUTPUT_ROOT / fn
                         shutil.copy2(str(src), str(dst))

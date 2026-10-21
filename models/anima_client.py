@@ -16,6 +16,8 @@ OUTPUT_ROOT = ROOT / 'outputs' / 'anima'
 
 
 def local_guard():
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     if os.environ.get('V41_NO_MODEL'):
         raise RuntimeError('V41_NO_MODEL=1：本次检查不允许启动模型')
     check = subprocess.run(['powershell', '-NoProfile', '-Command',
@@ -161,6 +163,8 @@ def generate(prompt, base_w=1024, base_h=1024, seed=None):
                         if not src.is_relative_to((comfy_root / 'output').resolve()):
                             raise RuntimeError('图片路径超出ComfyUI输出目录')
                         if src.is_file():
+                            from cores import runtime_reset
+                            runtime_reset.assert_current()
                             OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
                             dst = OUTPUT_ROOT / src.name
                             shutil.copy2(src, dst)

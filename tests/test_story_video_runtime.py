@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from cores import runtime_core as runtime
+from cores import runtime_core as runtime, runtime_reset
 
 
 class StoryVideoRuntimeTest(unittest.TestCase):
@@ -25,13 +25,21 @@ class StoryVideoRuntimeTest(unittest.TestCase):
         folder = self.folder / self._testMethodName / suffix
         folder.mkdir(parents=True)
         original_tasks, original_runners = runtime.TASKS_DIR, runtime.RUNNERS
+        previous_epoch = getattr(runtime_reset._local, 'generation', None)
         with patch.object(runtime, 'TASKS_DIR', folder), patch.object(
-                runtime, 'RUNNERS', {'story_video_isolated': runner}):
+                runtime, 'RUNNERS', {'story_video_isolated': runner}), patch.object(
+                runtime_reset, 'STATE', folder / 'runtime_reset.json'):
+            epoch = 'isolated-runtime-test-epoch'
+            runtime_reset._write(dict(generation=epoch, clearing=False))
             task = {'id': 'task_00001', 'kind': 'story_video_isolated', 'status': 'queued',
                     'title': '隔离状态测试', 'inputs': {}, 'checkpoint': {}, 'output': None,
+                    'runtime_generation': epoch,
                     'created': time.time(), 'updated': time.time(), 'error': '', 'detail': '排队中'}
             runtime.save(task)
-            runtime._run(task['id'])
+            try:
+                runtime._run(task['id'])
+            finally:
+                runtime_reset.bind_thread(previous_epoch)
             actual = runtime.load(task['id'])
             self.assertTrue((folder / 'task_00001.json').is_file())
         self.assertIs(runtime.TASKS_DIR, original_tasks)

@@ -35,6 +35,53 @@
   var sagaStepKey = "";
   var runtimeTaskCount = 0;
   var taskActionPending = '';
+  var runtimeEpoch = 0, clearingRuntime = false, clearPending = null;
+
+  function runtimeCurrent(epoch) { return epoch === runtimeEpoch && !clearingRuntime; }
+  function clearButtons() {
+    ['btnGame', 'cfgFree'].forEach(function (id) {
+      var button = document.getElementById(id);
+      if (!button) return;
+      button.disabled = clearingRuntime;
+      button.textContent = clearingRuntime ? '清理中…' : '🧹 清理缓存';
+      button.classList.toggle('hot', clearingRuntime);
+      button.setAttribute('aria-disabled', String(clearingRuntime));
+    });
+  }
+  function resetRuntimeView() {
+    runtimeTaskCount = 0; sagaProgress = null; sagaRunningId = ''; sagaStepKey = '';
+    sagaLogs = []; sagaSweep = 0; taskActionPending = '';
+    window.__sagaBusy = false; window.__srvBusy = false;
+    updateTaskCount();
+    var bar = document.getElementById('taskbar');
+    if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+    var cancel = document.getElementById('gCancel');
+    if (cancel) { cancel.hidden = true; cancel.disabled = false; cancel.textContent = '⏹ 取消'; }
+    if (window.UIActions) window.UIActions.progress.reset();
+  }
+  function runtimeResetEvent(phase) {
+    window.dispatchEvent(new CustomEvent('workbench-runtime-reset', {detail: {phase: phase, epoch: runtimeEpoch}}));
+  }
+  function clearCache() {
+    if (clearPending) return clearPending;
+    runtimeEpoch++; clearingRuntime = true; clearButtons(); runtimeResetEvent('begin');
+    clearPending = Promise.resolve().then(function () {
+      return window.api.post('/api/gpu/clear', {});
+    }).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || '清理失败');
+      clearingRuntime = false; resetRuntimeView(); runtimeResetEvent('done');
+      UI.toast('已取消生成与排队，模型已释放；项目、素材和成品保留');
+      return result;
+    }).catch(function (error) {
+      clearingRuntime = false; runtimeResetEvent('failed');
+      if (/not found|404/i.test(error.message)) error.message = '请关闭并重新打开工作台，再按 Ctrl+F5 加载清理缓存功能';
+      UI.toast('清理未完成：' + error.message, 'err');
+      return {ok: false, error: error.message};
+    }).finally(function () {
+      clearPending = null; clearButtons(); loadGpu(); loadTasks(); loadSagaProgress();
+    });
+    return clearPending;
+  }
 
   function route() {
     var h = location.hash || "#settings";
@@ -127,7 +174,10 @@
   }
 
   function loadGpu() {
-    window.api.get("/api/gpu").then(function (d) {
+    if (clearingRuntime) return Promise.resolve();
+    var epoch = runtimeEpoch;
+    return window.api.get("/api/gpu").then(function (d) {
+      if (!runtimeCurrent(epoch)) return;
       var el = document.getElementById("statusCapsule");
       if (el) {
         var used = d.used_gb, total = d.total_gb;
@@ -140,14 +190,9 @@
           el.classList.add(r > 0.88 ? "hot" : r > 0.4 ? "busy" : "ok");
         }
       }
-      // 游戏模式按钮的状态跟着后端旗子走
-      var gb = document.getElementById("btnGame");
-      if (gb) {
-        gb.textContent = d.game_paused ? "▶ 恢复任务" : "🎮 游戏模式";
-        gb.classList.toggle("hot", !!d.game_paused);
-      }
+      clearButtons();
       // 进度条吃**服务器**状态：不管是谁的窗口点的生成，所有打开的页面都能看到
-      var t = d.current_task;
+      var t = d.current_task && !d.current_task.cleared_at ? d.current_task : null;
       /* 一个进度条只能有一个主人。saga 任务在跑的时候它已经在写
          「45%　3/8　剩余约 4 分」，这里再写「生成中：场1段2」就会和它交替覆盖，
          用户看到的是百分比和步骤名来回跳。saga 在跑就让位。 */
@@ -159,20 +204,6 @@
         window.__srvBusy = false;
       }
     }).catch(function () {});
-  }
-
-  /* 游戏模式：一键杀掉三个模型、清干净显存、暂停任务；再点一下恢复并续跑 */
-  function toggleGame() {
-    var gb = document.getElementById("btnGame");
-    var paused = gb && gb.textContent.indexOf("恢复") >= 0;
-    var url = paused ? "/api/gpu/resume" : "/api/gpu/pause";
-    gb.textContent = paused ? "恢复中…" : "释放显存中…";
-    window.api.post(url, {}).then(function (d) {
-      UI.toast(paused
-        ? (d.refired ? "已恢复，被打断的那段重新提交了" : "已恢复")
-        : "模型已全部停止，显存已释放。打完游戏点「恢复任务」");
-      loadGpu();
-    }).catch(function (e) { UI.toast("失败：" + e.message, "err"); loadGpu(); });
   }
 
   function fmtTime(ts) {
@@ -212,6 +243,8 @@
 
   var sagaSweep = 0, sagaRunningId = "";
   function loadSagaProgress() {
+    if (clearingRuntime) return Promise.resolve();
+    var epoch = runtimeEpoch;
     // 任务可能在另一个项目里启动，切到别的故事后顶部也必须继续显示。
     // P297：原来每 2.5 秒把**全部**项目都问一遍（180 个项目 ≈ 每秒 70 个请求，把服务压得页面自己的请求都排队）。
     // 改成：当前项目 + 上次看到在跑的项目每次都问；全部项目每 12 次（30 秒）扫一遍。
@@ -225,6 +258,8 @@
         j = j || {}; j._storyId = sid; return j;
       }).catch(function () { return {_storyId: sid}; });
     })).then(function (jobs) {
+      if (!runtimeCurrent(epoch)) return;
+      jobs = jobs.filter(function (job) { return !job.cleared_at; });
       sagaProgress = jobs.filter(function (j) { return j.running; })[0] ||
         jobs.filter(function (j) { return j._storyId === state.storyId; })[0] || {};
       sagaRunningId = sagaProgress.running ? (sagaProgress._storyId || "") : "";
@@ -281,8 +316,11 @@
   }
 
   function loadTasks() {
+    if (clearingRuntime) return Promise.resolve();
+    var epoch = runtimeEpoch;
     return window.api.get("/api/tasks/active").then(function (d) {
-      var act = d.active || [];
+      if (!runtimeCurrent(epoch)) return;
+      var act = (d.active || []).filter(function (task) { return !task.cleared_at; });
       runtimeTaskCount = act.length;
       updateTaskCount();
       var bar = document.getElementById("taskbar");
@@ -322,24 +360,30 @@
   }
 
   function actTask(t, act, button) {
-    if (!t || taskActionPending) return;
+    if (!t || taskActionPending || clearingRuntime || t.cleared_at) return;
+    var epoch = runtimeEpoch;
     taskActionPending = t.id;
     if (button) { button.disabled = true; button.textContent = act === 'cancel' ? '取消中…' : '处理中…'; }
     var request = t.kind === 'story_video'
       ? window.api.post('/api/story-video/action', {id: t.id, action: act})
       : window.api.post('/api/tasks/' + t.id + '/' + act);
     return request.then(function () {
+      if (!runtimeCurrent(epoch)) return;
       window.dispatchEvent(new CustomEvent('workbench-task-updated', {detail: {id: t.id}}));
       if (act === 'cancel') UI.toast('已提交取消，已生成的内容保留');
     }).catch(function (error) {
+      if (!runtimeCurrent(epoch)) return;
       UI.toast('任务操作失败：' + error.message, 'err');
     }).finally(function () {
+      if (!runtimeCurrent(epoch)) return;
       taskActionPending = '';
       return loadTasks().then(function () { loadLogs(); });
     });
   }
 
   function loadLogs() {
+    if (clearingRuntime) return;
+    var epoch = runtimeEpoch;
     if (document.getElementById("logpanel").style.display !== "block") return;
     var logStoryId = (sagaProgress || {})._storyId || state.storyId;
     var sagaReq = logStoryId
@@ -348,6 +392,7 @@
     Promise.all([
       window.api.get("/api/logs?filter=" + encodeURIComponent(logFilter)), sagaReq
     ]).then(function (rows) {
+      if (!runtimeCurrent(epoch)) return;
       var d = rows[0] || {}, sj = rows[1] || {};
       var merged = (d.logs || []).concat(sj.logs || [], sagaLogs);
       var seen = {};
@@ -420,7 +465,7 @@
     };
     document.getElementById("btnTasks").onclick = function () { toggleLog(); };
     document.getElementById("btnLogs").onclick = function () { toggleLog(); };
-    document.getElementById("btnGame").onclick = function () { toggleGame(); };
+    document.getElementById("btnGame").onclick = clearCache;
     document.getElementById("searchBox").addEventListener("keydown", function (e) {
       if (e.key === "Enter") doSearch(this.value);
     });
@@ -463,6 +508,8 @@
   /* 给别的页面用：改了项目名后刷新顶部下拉。 */
   window.Shell = window.Shell || {};
   window.Shell.reloadStories = loadStories;
+  window.Shell.clearCache = clearCache;
+  window.Shell.isClearing = function () { return clearingRuntime; };
 })();
 
 

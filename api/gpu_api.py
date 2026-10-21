@@ -1,79 +1,115 @@
 # -*- coding: utf-8 -*-
-"""gpu_api.py — 游戏模式：一键停掉所有本地模型、释放显存、暂停任务。
-
-用户要打游戏，显卡必须完全让出来。点「游戏模式」：
-    杀 Qwen / ComfyUI(Krea) / H3 → 记下正在跑的任务 → 立起暂停旗
-暂停旗立着时，三个模型的 start 都会拒绝启动（models/* 里各有检查）。
-点「恢复任务」：拔旗，把暂停时被打断的段重新提交生成。
-"""
-import json
+"""Cancel runtime work, release local models and return the workbench to idle."""
+import sys
 import threading
-import urllib.request
+import time
 from pathlib import Path
 
 from api import post
-from api._shared import _RESP, ctx
+from api._shared import _RESP
+from cores import runtime_reset, runtime_core, store
 
-globals().update(ctx())
-
-ROOT = Path(__file__).resolve().parent.parent
-FLAG = ROOT / "cache" / "game_mode.flag"
-TASK = ROOT / "cache" / "current_task.json"
+ROOT = Path(__file__).resolve().parents[1]
+FLAG = ROOT / 'cache' / 'game_mode.flag'
+TASK = ROOT / 'cache' / 'current_task.json'
+_CLEAR_LOCK = threading.Lock()
 
 
 def paused():
     return FLAG.exists()
 
 
-@post("/api/gpu/pause")
-def r_pause(h, path, d):
-    from models import gpu_manager
-    # 记住暂停时正在跑什么（gen_segment 开跑前会写 current_task.json）
-    pending = None
-    if TASK.exists():
-        try:
-            pending = json.loads(TASK.read_text(encoding="utf-8"))
-        except Exception:
-            pending = None
-    FLAG.parent.mkdir(parents=True, exist_ok=True)
-    FLAG.write_text(json.dumps({"paused_task": pending}, ensure_ascii=False),
-                    encoding="utf-8")
-    killed = []
-    for fn, name in ((gpu_manager.stop_qwen, "qwen"),
-                     (gpu_manager.stop_comfy, "krea"),
-                     (gpu_manager.stop_h3, "h3")):
-        try:
-            if fn():
+def _legacy_clear():
+    # Reuse loaded compatibility tools; do not import a second server instance.
+    app = next((getattr(module, '_APP', None)
+                for name in ('__main__', 'server')
+                for module in [sys.modules.get(name)]
+                if module and getattr(module, '_APP', None)), None)
+    if app is None:
+        return 0
+    for name in ('AUTO_JOB_STOP', 'GEN_STOP'):
+        event = getattr(app, name, None)
+        if event:
+            event.set()
+    jobs = getattr(app, 'VC_JOBS', {})
+    count = runtime_reset.clear_jobs(jobs)
+    for job in jobs.values():
+        job['status'] = 'cancelled'
+    with getattr(app, 'VC_QUEUE_LOCK', threading.RLock()):
+        getattr(app, 'VC_QUEUE', []).clear()
+        getattr(app, 'VC_PROGRESS', {}).update(active=False, total=0, done=0,
+            current='', start=0, itemStart=0)
+    with getattr(app, 'OP_LOCK', threading.RLock()):
+        getattr(app, 'OPS', {}).clear()
+    app.clear_activity()
+    with getattr(app, 'AUTO_JOB_LOCK', threading.RLock()):
+        job = getattr(app, 'AUTO_JOB', {})
+        job.update(status='idle', stage='', message='空闲', progress=0,
+                   current=0, total=0, error='', cleared_at=time.time())
+        if getattr(app, 'AUTO_JOB_STATE_FILE', None):
+            store.save_json(Path(app.AUTO_JOB_STATE_FILE), job)
+    director = getattr(app, 'video_gen_core', None)
+    if director:
+        director.stop_all()
+        manager = getattr(director, 'MANAGER', None)
+        if manager:
+            with director.STATE_LOCK:
+                for task in manager.tasks.values():
+                    if task.get('status') in ('queued', 'loading', 'running'):
+                        task['status'] = 'cancelled'
+                        count += 1
+                    task.update(cleared_at=time.time(), cancelRequested=True,
+                                done=0, total=0, progress=0, detail='空闲')
+                    director._save_task(task)
+                manager.current_id = None
+    return count
+
+
+@post('/api/gpu/clear')
+@post('/api/gpu/pause')
+@post('/api/gpu/resume')
+def r_clear(h, path, d):
+    """Old pause/resume clients cancel too; nothing is automatically refired."""
+    if not _CLEAR_LOCK.acquire(blocking=False):
+        return _RESP({'ok': False, 'error': '正在清理缓存，请稍候'}, 409)
+    epoch = None
+    try:
+        epoch = runtime_reset.begin()
+        runtime_reset.bind_thread(epoch)
+        from api import saga_api, timeline, video_api, story
+        from cores import story_video_core
+        from models import gpu_manager, h3_client
+        h3_client.request_cancel()
+        modules = (saga_api, timeline, video_api, story)
+        cancelled = sum(module.clear_runtime_jobs() for module in modules)
+        cancelled += _legacy_clear()
+        children = story_video_core.cancel_all_children()
+        if children.get('errors'):
+            raise RuntimeError('故事视频进程未完全退出：' + '; '.join(children['errors']))
+        cancelled += runtime_core.clear_all_tasks()['cancelled']
+        killed = gpu_manager.stop_registered_models()
+        for name, stop in (('qwen', gpu_manager.stop_qwen),
+                           ('krea', gpu_manager.stop_comfy), ('h3', gpu_manager.stop_h3)):
+            if stop():
                 killed.append(name)
-        except Exception:
-            pass
-    return _RESP({"ok": True, "data": {"paused": True, "killed": killed,
-                                       "paused_task": pending}})
-
-
-@post("/api/gpu/resume")
-def r_resume(h, path, d):
-    info = {}
-    if FLAG.exists():
-        try:
-            info = json.loads(FLAG.read_text(encoding="utf-8"))
-        except Exception:
-            info = {}
-        FLAG.unlink()
-    task = info.get("paused_task")
-    if task:
-        # 被打断的段重新提交。自己 POST 自己，走和页面按钮完全相同的路
-        def _refire():
-            try:
-                body = json.dumps({"scene_no": task.get("scene_no"),
-                                   "seg_no": task.get("seg_no"),
-                                   "hd": task.get("hd") or False}).encode("utf-8")
-                req = urllib.request.Request(
-                    "http://127.0.0.1:8853/api/timeline/%s/generate-segment" % task.get("sid"),
-                    data=body, headers={"Content-Type": "application/json"})
-                urllib.request.urlopen(req, timeout=3600).close()
-            except Exception:
-                pass
-        threading.Thread(target=_refire, daemon=True).start()
-    return _RESP({"ok": True, "data": {"paused": False, "refired": bool(task),
-                                       "task": task}})
+        gpu_manager.reset_owner()
+        recycled = []
+        with runtime_reset.LOCK:
+            for marker in (FLAG, TASK):
+                if runtime_reset.recycle_transient(marker):
+                    recycled.append(marker.name)
+        for module in modules:
+            module.clear_runtime_jobs()
+        runtime_core.clear_all_tasks()
+        store.save_json(store.DATA / 'gpu_state.json',
+                        {'mode': 'normal', 'paused_tasks': [], 'at': time.time()})
+        runtime_reset.finish(epoch)
+        return _RESP({'ok': True, 'data': {'paused': False, 'cancelled': cancelled,
+            'tasks': [], 'done': 0, 'total': 0, 'percent': 0,
+            'killed': sorted(set(killed)), 'recycled': recycled}})
+    except Exception as error:
+        if epoch:
+            runtime_reset.finish(epoch, str(error))
+        return _RESP({'ok': False, 'error': '清理未完成，已拦住旧任务：' + str(error)}, 500)
+    finally:
+        _CLEAR_LOCK.release()

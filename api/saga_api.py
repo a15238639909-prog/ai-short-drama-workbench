@@ -10,6 +10,7 @@ import re
 import threading
 import time
 
+from cores import runtime_reset
 from api import post
 from api._shared import _RESP, ctx
 
@@ -34,6 +35,8 @@ def _job(sid):
 
 
 def _persist_job(j):
+    if j.get('cleared_at'):
+        return
     record = j.get("_recovery")
     if record:
         from cores.generation_recovery import RecoveryStore
@@ -55,11 +58,15 @@ def _job_event(j, level, msg):
     _persist_job(j)
 
 
+@runtime_reset.admission
 def _start_job(sid, title, total):
+    if _JOBS.get(sid, {}).get('cleared_at'):
+        _JOBS[sid] = {}
     j = _job(sid)
     now = time.time()
     j.clear()
     j.update({
+        "runtime_generation": runtime_reset.generation(),
         "running": True, "status": "running", "step": "准备", "err": "", "title": title,
         "done": 0, "total": max(0, int(total)), "percent": 0,
         "eta_seconds": None, "started_at": now, "step_started_at": now,
@@ -73,6 +80,7 @@ class JobCancelled(Exception):
 
 
 def _set_step(j, label):
+    runtime_reset.assert_current()
     if j.get("cancel"):
         raise JobCancelled("已取消")
     j["step"] = str(label)
@@ -93,9 +101,18 @@ def _complete_step(j, detail=""):
 
 def _job_view(j):
     """返回随时间变化的真实进度；ETA 只用本次已完成步骤的实耗时估算。"""
+    if j.get("cleared_at"):
+        return runtime_reset.job_view(j)
     out = {key: value for key, value in j.items() if not key.startswith("_")}
     out["logs"] = list(j.get("logs") or [])
     out.pop("durations", None)
+    # Older partial jobs hid their real failure behind a generic completion
+    # sentence. Correct the read-only view without rewriting historical jobs.
+    if (not j.get('running') and j.get('status') in ('partial', 'blocked', 'failed')
+            and j.get('failure_reason')):
+        out['err'] = str(j['failure_reason'])[:300]
+        if str(out.get('step') or '').startswith('本轮已处理'):
+            out['step'] = '生成未完成：' + out['err']
     total, done = int(j.get("total") or 0), int(j.get("done") or 0)
     out["percent"] = round(done * 100.0 / total, 1) if total else 0
     if j.get("status") != "completed":
@@ -132,9 +149,11 @@ def _finish_job(j, error=""):
         j["status"] = "failed"
         _job_event(j, "error", "任务失败：%s" % j["err"])
     elif j.get("partial") or j.get("blocked"):
-        j["err"] = ""
+        j["err"] = str(j.get("failure_reason") or j.get("err") or j.get("partial") or "")[:300]
         j["eta_seconds"] = None
         j["status"] = "partial" if j.get("partial") else "blocked"
+        if j.get("failed_render_segments") and j.get("saved_video_count") == 0:
+            j["status"] = "failed"
         j["step"] = str(j.get("partial") or j.get("step") or "等待处理")
         _job_event(j, "warning", j["step"])
     else:
@@ -145,6 +164,8 @@ def _finish_job(j, error=""):
         j["status"] = "completed"
         _job_event(j, "info", "%s：全部完成" % (j.get("title") or "任务"))
     j["running"] = False
+    if j.get("status") != "completed":
+        j["percent"] = min(99, float(j.get("percent") or 0))
     j["updated_at"] = time.time()
     _persist_job(j)
 
@@ -172,6 +193,7 @@ def saga_episode_input(h, path, d):
 
 
 @post(("/api/saga/", "/shots-input"))
+@runtime_reset.admission
 def saga_shots_input(h, path, d):
     """P379 模式二：口述怎么拍 → 节拍表（后台任务，进度走 /progress）。"""
     from cores import authoring
@@ -199,7 +221,7 @@ def saga_shots_input(h, path, d):
             _job_event(j, "error", str(ex)[:200])
             _finish_job(j, str(ex)[:120])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -345,6 +367,7 @@ def _ensure_plan_confirmed(st, settings):
 
 
 @post(("/api/saga/", "/plan/", "/draft"))
+@runtime_reset.admission
 def saga_plan_draft(h, path, d):
     """一段故事想法（+ 选填 画风/总时长/节奏）→ 整部规划草稿。后台跑（完整梗概 + 分话，2 次调用）。"""
     sid = path.split("/")[3]
@@ -388,7 +411,7 @@ def saga_plan_draft(h, path, d):
             _job_event(j, "error", str(ex)[:300])
             _finish_job(j, str(ex)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -400,6 +423,7 @@ def saga_plan_get(h, path, d):
 
 
 @post(("/api/saga/", "/plan/", "/revise"))
+@runtime_reset.admission
 def saga_plan_revise(h, path, d):
     """聊天式修改整部规划：一句话 → 模型改（合并/拆分/调顺序/某一话慢下来/晚一话揭晓/改结尾）。后台跑（1 次）。
     草稿直接改；已确认过的进 pending，页面显示「改了哪些话、为什么影响后面」，用户确认一次才落盘。"""
@@ -440,7 +464,7 @@ def saga_plan_revise(h, path, d):
             _job_event(j, "error", str(ex)[:300])
             _finish_job(j, str(ex)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -697,6 +721,7 @@ def saga_arrange_length(h, path, d):
 
 
 @post(("/api/saga/", "/build"))
+@runtime_reset.admission
 def saga_build(h, path, d):
     """一句话（+ 用户已填的设定）→ 圣经 + 分季 + 第一季集纲。后台跑。"""
     from cores import saga_core as sc, asset_core
@@ -728,7 +753,7 @@ def saga_build(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -930,6 +955,7 @@ def saga_progress(h, path, d):
 
 
 @post(("/api/saga/", "/write-episode"))
+@runtime_reset.admission
 def saga_write_ep(h, path, d):
     """写某一集的详细正文。上下文分层喂（不给全量正文）。"""
     from cores import saga_core as sc, story_gen
@@ -1033,11 +1059,12 @@ def saga_write_ep(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
 @post(("/api/saga/", "/generate-episode-brief"))
+@runtime_reset.admission
 def saga_generate_episode_brief(h, path, d):
     """根据用户当前填写或原集纲，单独生成这一话的标题与故事简要。"""
     from cores import saga_core as sc
@@ -1088,7 +1115,7 @@ def saga_generate_episode_brief(h, path, d):
         except Exception as ex:
             _finish_job(j, ex)
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -1209,6 +1236,7 @@ def saga_impact(h, path, d):
 
 
 @post(("/api/saga/", "/replan"))
+@runtime_reset.admission
 def saga_replan(h, path, d):
     """重新规划后续：已发生的不动，近景重新详细规划，其余只更新集纲。"""
     from cores import saga_core as sc
@@ -1229,7 +1257,7 @@ def saga_replan(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -1320,6 +1348,7 @@ def saga_save_bible(h, path, d):
 
 
 @post(("/api/story/", "/design-scenes"))
+@runtime_reset.admission
 def design_scenes_route(h, path, d):
     """美术指导：重做第 no 话的场景设计稿（归并碎片场景、定主体/戏区/光/尺度）。后台跑。"""
     import threading
@@ -1343,11 +1372,12 @@ def design_scenes_route(h, path, d):
             except Exception:
                 pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "job": j.get("id") or j.get("job_id") or ""})
 
 
 @post(("/api/story/", "/episode-scenes"))
+@runtime_reset.admission
 def ep_scenes(h, path, d):
     """第二步 · 每场一张含人物的场景图。后台跑，带进度。
 
@@ -1379,7 +1409,7 @@ def ep_scenes(h, path, d):
             except Exception:
                 pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -2463,7 +2493,7 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     except Exception as _ox:
         _job_event(j, "error", "开场段：%s" % str(_ox)[:120])
 
-    outs, failed_renders = [], []
+    outs, failed_renders, saved_segments = [], [], set()
     for i in ready:
         g = _segs().get(i)
         if not g:
@@ -2474,6 +2504,7 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         _old = str(g.get("video") or "")
         if _old and seg_api.is_segment_current(sid, ep, 1, i, size_tier=size_tier):
             outs.append(_old)
+            saved_segments.add(i)
             _set_step(j, "第 %d 段已有视频，跳过" % i)
             _complete_step(j)
             continue
@@ -2496,20 +2527,59 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                      '任务查询暂时失败', '提交结果待核对', '任务状态暂时无法确认')):
                 raise
             failed_renders.append(i)
+            j["failure_reason"] = str(ex)[:1000]
+            # The durable segment request is written before H3 may accept work.
+            # Only a known segment with no request key proves a pre-submit
+            # failure. Existing/unknown requests retain their recovery marker.
+            try:
+                failed_segment = _segs().get(i)
+            except (ValueError, TypeError, OSError):
+                failed_segment = None
+            raw_request = (failed_segment or {}).get("render_request")
+            request = raw_request if isinstance(raw_request, dict) else {}
+            before_submit = (failed_segment is not None and
+                (raw_request is None or isinstance(raw_request, dict)) and not request.get("key"))
+            j["failure_stage"] = "video_preflight" if before_submit else "video_render"
+            j["render_submission_state"] = "not_submitted" if before_submit else (
+                "request_exists" if request.get("key") else "unknown")
+            if before_submit and j.get("_recovery"):
+                j["_recovery"]["external_inflight"] = ""
             _job_event(j, "warning", "第 %d 段出片未成，保留错误并停止依赖它的后续片段：%s" % (i, str(ex)[:180]))
-            seg_api._apply(sid, 1, i, {"render_error": str(ex)}, ep=ep)
+            seg_api._apply(sid, 1, i, {"render_error": str(ex),
+                "render_failure_stage": j["failure_stage"],
+                "render_submission_state": j["render_submission_state"]}, ep=ep)
             break
         out = patch["video"]
         if g.get("render_error"):
             seg_api._apply(sid, 1, i, {"render_error": ""}, ep=ep)
         outs.append(out)
+        saved_segments.add(i)
         _complete_step(j)
         _job_event(j, "info", "第 %d 段视频已生成（%s）：%s"
                    % (i, patch["size"], out))
     if failed_renders:
         j["failed_render_segments"] = failed_renders
-        pending = sorted(set(missing_prompts + failed_renders))
-        j["partial"] = "本轮已处理，第%s段待补，已完成视频保留" % "、".join(map(str, pending))
+        # Later valid clips may predate this run. Count them as saved without
+        # regenerating them or treating unexecuted dependent clips as failures.
+        for no, row in _segs().items():
+            if no in ready and no not in saved_segments and row.get("video") and seg_api.is_segment_current(
+                    sid, ep, 1, no, size_tier=size_tier):
+                saved_segments.add(no)
+        first_failed = failed_renders[0]
+        unexecuted = [no for no in ready if no > first_failed and no not in saved_segments]
+        pending = sorted(set(missing_prompts + failed_renders + unexecuted))
+        j["saved_video_segments"] = sorted(saved_segments)
+        j["saved_video_count"] = len(saved_segments)
+        j["unexecuted_render_segments"] = unexecuted
+        j["pending_render_segments"] = pending
+        head = "视频未完成，已保存%d/%d段" % (len(saved_segments), n) if saved_segments else "视频生成失败，当前0/%d段视频" % n
+        stage = "提交前检查失败" if j.get("failure_stage") == "video_preflight" else "出片失败"
+        summary = head + "；第%d段%s" % (first_failed, stage)
+        if unexecuted:
+            summary += "；第%s段尚未执行" % "、".join(map(str, unexecuted))
+        if saved_segments:
+            summary += "；已保存视频保留"
+        j["partial"] = summary + "。原因：" + str(j.get("failure_reason") or "原因未知")
         _job_event(j, "warning", j["partial"])
     if not outs and not failed_renders:
         raise RuntimeError("一段视频都没出来")
@@ -2528,6 +2598,7 @@ def _timeline_busy(sid):
 
 
 @post(("/api/saga/", "/gen-story"))
+@runtime_reset.admission
 def saga_gen_story(h, path, d):
     """「生成故事」＝第一话简介＋原文＋人设卡，**不出人设图**（2026-08-29 拆分）。"""
     sid = path.split("/")[3]
@@ -2674,7 +2745,7 @@ def saga_gen_story(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -2974,6 +3045,7 @@ def _run_universal_story(sid, one, settings, j, ep=1, d_prose_only=False):
 
 
 @post(("/api/saga/", "/gen-first-video"))
+@runtime_reset.admission
 def saga_gen_first_video(h, path, d):
     """「生视频」＝场景图＋分镜＋视频提示词＋视频，默认前 5 段（剧本必须已生成）。
     n 改段数；size_tier 传 "1.0" 出 1376×768 成片档（默认 0.4 测试档）。"""
@@ -2999,11 +3071,12 @@ def saga_gen_first_video(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
 @post(("/api/saga/", "/auto-all"))
+@runtime_reset.admission
 def saga_auto_all(h, path, d):
     """设定页那个「全部生成」——从一句话跑到**框架和设定就绪**为止。
 
@@ -3459,11 +3532,12 @@ def saga_auto_all(h, path, d):
             except Exception:
                 _finish_job(j, e)
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
 @post(("/api/saga/", "/extract-cards"))
+@runtime_reset.admission
 def saga_extract_cards(h, path, d):
     """【自定义作品】从第一话原文提取人物卡——不写正文、不出图。
     已有的同名卡原样保留，只补缺的（2026-08-29 用户定）。"""
@@ -3485,7 +3559,7 @@ def saga_extract_cards(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e)[:200])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3586,6 +3660,7 @@ def saga_make_screenplay(h, path, d):
 
 
 @post(("/api/saga/", "/redesign-character"))
+@runtime_reset.admission
 def saga_redesign_character(h, path, d):
     """P357：把一个人完全重新设计（名字/性别/年龄不变）并重出人设图。后台跑，进度走 /progress。"""
     from cores import authoring
@@ -3610,11 +3685,12 @@ def saga_redesign_character(h, path, d):
             _job_event(j, "error", str(ex)[:200])
             _finish_job(j, str(ex)[:120])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
 @post(("/api/saga/", "/gen-char-images"))
+@runtime_reset.admission
 def saga_gen_char_images(h, path, d):
     """补出人设图：只给还没有图的人物出（偶发失败后用，不用重跑整个故事）。
     all=1 时所有人物重出。后台跑。"""
@@ -3635,15 +3711,12 @@ def saga_gen_char_images(h, path, d):
                        (r.get("ok", 0), r.get("total", 0))))
             if fail:
                 _job_event(j, "error", "这几个还是没出来：" + "、".join(fail))
-            _finish_job(j)
+            _finish_job(j, "；".join(str(item) for item in fail))
         except Exception as e:
             _job_event(j, "error", str(e)[:200])
-            try:
-                _finish_job(j)
-            except Exception:
-                _finish_job(j, e)
+            _finish_job(j, str(e))
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3660,6 +3733,7 @@ def saga_add_episode(h, path, d):
 
 
 @post(("/api/saga/", "/gen-brief"))
+@runtime_reset.admission
 def saga_gen_brief(h, path, d):
     """按前情生成第 ep 话的简介。后台跑（要调 Qwen）。"""
     from cores import authoring
@@ -3682,11 +3756,12 @@ def saga_gen_brief(h, path, d):
             except Exception:
                 _finish_job(j, e)
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "ep": ep}})
 
 
 @post(("/api/saga/", "/gen-prose"))
+@runtime_reset.admission
 def saga_gen_prose(h, path, d):
     """按第 ep 话的简介生成这一话的原文。后台跑。"""
     from cores import authoring
@@ -3706,7 +3781,7 @@ def saga_gen_prose(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e))
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "ep": ep}})
 
 
@@ -3723,6 +3798,7 @@ def saga_health(h, path, d):
 
 
 @post(("/api/saga/", "/regenerate-story"))
+@runtime_reset.admission
 def saga_regen_story(h, path, d):
     """按设定重新生成故事（人设+简介 → 全新第一话原文）。后台跑。"""
     from cores import authoring
@@ -3744,7 +3820,7 @@ def saga_regen_story(h, path, d):
             except Exception:
                 _finish_job(j, e)
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3782,6 +3858,7 @@ def del_scene(h, path, d):
 
 
 @post(("/api/saga/", "/build-shotlist"))
+@runtime_reset.admission
 def saga_build_shotlist(h, path, d):
     """只生成某一话的【场次表】，不写正文。
 
@@ -3868,7 +3945,7 @@ def saga_build_shotlist(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -4031,6 +4108,7 @@ def _text_chain_to_shots(sid, j, ep, one):
 
 
 @post(("/api/saga/", "/plan-shots"))
+@runtime_reset.admission
 def saga_plan_shots(h, path, d):
     """按钮①：生成剧本和分段（不出图不出片）。"""
     sid = path.split("/")[3]
@@ -4064,7 +4142,7 @@ def saga_plan_shots(h, path, d):
         except Exception as ex:
             _finish_job(j, str(ex)[:300])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -4089,6 +4167,7 @@ def saga_slices_save(h, path, d):
 
 
 @post(("/api/saga/", "/reslice"))
+@runtime_reset.admission
 def saga_reslice(h, path, d):
     from cores import shot_edit
     sid = path.split("/")[3]
@@ -4110,7 +4189,7 @@ def saga_reslice(h, path, d):
         except Exception as ex:
             _finish_job(j, str(ex)[:300])
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -4286,8 +4365,11 @@ def restore_generation_jobs(start_monitor=True):
     """Called once after API registration. Historical projects are never scanned."""
     from cores.generation_recovery import RecoveryStore, automatic_resume_reason
     global _RESTORE_MONITOR_STARTED
+    runtime_reset.bind_thread(runtime_reset.generation())
     restored = []
     for record in RecoveryStore().candidates():
+        if record.get("cleared_at") or (record.get("runtime_generation") and record["runtime_generation"] != runtime_reset.generation()):
+            continue
         if record.get("cancel") or record.get("status") not in ("queued", "running", "retrying", "waiting_resource", "waiting_task"):
             continue
         sid = record["sid"]
@@ -4327,7 +4409,7 @@ def restore_generation_jobs(start_monitor=True):
             continue
         j.update(running=True, status="running", err="")
         _job_event(j, "info", "恢复中断的任务，保留已完成成果，从未完成阶段继续")
-        threading.Thread(target=_run_registered_make, args=(sid, j), daemon=True).start()
+        threading.Thread(target=runtime_reset.worker(_run_registered_make), args=(sid, j), daemon=True).start()
         restored.append(sid)
     if start_monitor and not _RESTORE_MONITOR_STARTED:
         _RESTORE_MONITOR_STARTED = True
@@ -4343,6 +4425,7 @@ def restore_generation_jobs(start_monitor=True):
 
 
 @post(("/api/saga/", "/make"))
+@runtime_reset.admission
 def saga_make(h, path, d):
     """P463 设定页三按钮：stage=text（剧本+分段）| images（+人设图+场景图）| video（+提示词+全部视频+成片）。后一阶段自动先补前面的。"""
     from cores import shot_edit, manual_story as _ms
@@ -4371,7 +4454,7 @@ def saga_make(h, path, d):
     j["_sid"] = sid
     j["_recovery"] = RecoveryStore().register(sid, request, _generation_input_signature(sid, ep))
     _persist_job(j)
-    threading.Thread(target=_run_registered_make, args=(sid, j), daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run_registered_make), args=(sid, j), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "stage": stage}})
 
 
@@ -4410,3 +4493,15 @@ def saga_script_save(h, path, d):
     sc.save_saga(sid, saga)
     from cores import shot_edit
     return _RESP({"ok": True, "data": {"changed": True, "slices_stale": bool(shot_edit.rows_of(sid, ep).get("stale"))}})
+
+
+def clear_runtime_jobs():
+    from cores.generation_recovery import RecoveryStore
+    count = runtime_reset.clear_jobs(_JOBS)
+    recovery = RecoveryStore()
+    for record in recovery.candidates():
+        record.update(cancel=True, status='cancelled', cleared_at=time.time())
+        if isinstance(record.get('job'), dict):
+            runtime_reset.clear_jobs({'job': record['job']})
+        recovery.save(record)
+    return count

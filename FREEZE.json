@@ -1,26 +1,36 @@
 {
-  "version": "1.07",
+  "version": "1.08",
   "edition": "完整版",
-  "date": "2026-10-15",
-  "tag": "v1.07-complete-20261015",
-  "branch": "complete/v1.07-20261015",
-  "previous_commit": "ca80e590db70d696f2aed6a45f3289640b409435",
-  "repository": "https://github.com/bilibili-laona/ai-short-drama-workbench",
+  "date": "2026-10-21",
+  "tag": "v1.08-complete-20261021",
+  "branch": "complete/v1.08-20261021",
+  "baseline_version": "1.07",
+  "model_weights_included": false,
   "private_config_included": false,
   "private_data_included": false,
-  "media_included": false,
-  "model_weights_included": false,
-  "source_archive_python_runtime_included": false,
+  "python_runtime_included": false,
+  "validation": {
+    "unique_python_tests_passed": 762,
+    "frontend_check_groups_passed": 7,
+    "model_inference_run": false,
+    "new_visual_identity_verified": false
+  },
   "public_defaults_retained": [
+    "LICENSE",
     "presets/content_scale.json",
     "data/global_defaults.json"
   ],
-  "validation": {
-    "distinct_regression_tests_passed": 390,
-    "tests_skipped": 0,
-    "javascript_interaction_checks_passed": 3,
-    "model_inference_run": false,
-    "real_ai_media_generated": false
-  },
-  "packaging_change_only": false
+  "known_limitations": [
+    "Reference generation does not guarantee frame-by-frame identity or exact lip synchronization",
+    "HD references can require more memory and time; visual improvement not newly benchmarked",
+    "Real filesystem, dependency and inference failures remain reportable; completed media are preserved",
+    "Model runtimes and weights must be installed separately"
+  ],
+  "local_backup": {
+    "number": "BK007",
+    "scope": "program_and_configuration_only",
+    "media_included": false,
+    "models_included": false,
+    "project_data_included": false
+  }
 }

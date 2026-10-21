@@ -33,7 +33,11 @@ def episode_videos(sid, ep, segs=None):
 
 def film_title(sid):
     from . import story_core
-    return str((story_core.get_story(sid) or {}).get("title") or sid).replace(" ", "")
+    title = str((story_core.get_story(sid) or {}).get("title") or sid).replace(" ", "")
+    # A title is one filename component, never a directory, wildcard or NTFS
+    # alternate stream. Keep the original title stored on the project intact.
+    title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title).rstrip('. ')
+    return title or str(sid)
 
 
 def list_films(sid):
@@ -41,7 +45,7 @@ def list_films(sid):
     import glob, time as _t
     title = film_title(sid)
     out = []
-    for p in glob.glob(os.path.join("outputs", "成片_%s_*.mp4" % title)):
+    for p in glob.glob(os.path.join("outputs", "成片_%s_*.mp4" % glob.escape(title))):
         try:
             stt = os.stat(p)
         except OSError:

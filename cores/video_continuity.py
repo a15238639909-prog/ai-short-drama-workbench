@@ -246,9 +246,21 @@ def handoff_prompt(prompt, frame_number, segment, previous, director=None, appea
         note += ('Keep the established room and props; a camera cut may change framing, '
                  'but must not reset completed actions. ')
     note += 'Declared shot context: ' + json.dumps(context, ensure_ascii=False) + '\n'
+    appearance_note = ''
+    if appearance_number is not None:
+        appearance_note = ('<Picture %d> is an earlier historical frame from the preceding video, used only as appearance evidence '
+                           'for already-confirmed continuing characters, objects and departure architecture. '
+                           'It is not a starting frame and does not establish current positions, poses, hand occupancy, '
+                           'ownership, object count, container open/closed state or unfinished actions. '
+                           'The immediately preceding final frame and current written actions control all those states. ' % appearance_number)
     fields = ('subject_definitions', 'summary', 'retention_analysis', 'detailed_description',
               'overall_soundscape', 'non_diegetic_music')
     headers = list(re.finditer(r'(?m)^(' + '|'.join(fields) + r'):[ \t]*', prompt))
+    if not headers:
+        # The approved legacy POV/time-block writer has no six-section wrapper.
+        # Add only reference transport; keep its original story, camera and voice
+        # instructions byte-for-byte rather than pretending it is malformed JSON.
+        return prompt + '\n\n' + note.strip() + ('\n' + appearance_note if appearance_note else '')
     if [match[1] for match in headers] != list(fields):
         raise ValueError('续接提示词六字段顺序无效，已保留分镜，需修复后生成')
     sections = {match[1]: prompt[match.end():headers[index+1].start() if index+1 < len(headers) else len(prompt)].strip('\n')
@@ -258,11 +270,6 @@ def handoff_prompt(prompt, frame_number, segment, previous, director=None, appea
     sections['retention_analysis'] += ('\n<Picture %d> ([Shot 1] continuity): weak_reference - '
         'carry over ongoing action and object ownership; apply declared entrances, departures and location changes.' % frame_number)
     if appearance_number is not None:
-        appearance_note = ('<Picture %d> is an earlier historical frame from the preceding video, used only as appearance evidence '
-                           'for already-confirmed continuing characters, objects and departure architecture. '
-                           'It is not a starting frame and does not establish current positions, poses, hand occupancy, '
-                           'ownership, object count, container open/closed state or unfinished actions. '
-                           'The immediately preceding final frame and current written actions control all those states. ' % appearance_number)
         sections['subject_definitions'] += '\n' + appearance_note
         sections['retention_analysis'] += ('\n<Picture %d> ([Shot 1] historical appearance): partially_preserved - '
             'physical shape, color, material and markings of continuing entities only; never restore earlier staging or replay actions.' % appearance_number)

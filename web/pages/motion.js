@@ -6,7 +6,7 @@
     restoreDraft = null;
     try { savedDraft = JSON.parse(localStorage.getItem('motionDraft') || '{}') || {}; } catch (_) {}
     var esc = UI.esc, media = draft.media || {}, requests = {}, task = null, timer = null, lastOutput = '';
-    var busy = false, displayedTask = '';
+    var busy = false, displayedTask = '', runtimeEpoch = 0, clearing = false;
     var featureQueue = [], featureRunning = false, featureVersions = {character:0,character2:0,scene:0}, featureSources = draft.featureSources || {};
     var card = function (key, number, title, note, extra) {
       var person = key.indexOf('character') === 0;
@@ -57,7 +57,7 @@
     }
     function sync() {
       var uploading = Object.keys(requests).length > 0;
-      get('go').disabled = busy || uploading || featureRunning || featureQueue.length > 0;
+      get('go').disabled = clearing || busy || uploading || featureRunning || featureQueue.length > 0;
       get('new').disabled = busy || uploading || featureRunning;
       get('restore').disabled = busy || uploading || featureRunning || !(savedDraft.video || savedDraft.character);
       get('feature-progress').textContent = featureRunning || featureQueue.length ? '本地AI正在识别图片，完成后即可生成…' : '';
@@ -89,7 +89,7 @@
     get('new').onclick = function(){if(!busy && !featureRunning && !Object.keys(requests).length)window.Pages.motion.render(el);};
     get('restore').onclick = function(){restoreDraft=savedDraft;window.Pages.motion.render(el);};
     function queueFeature(key, automatic) {
-      if (busy || !get(key).value || (automatic && !get('auto-describe').checked)) return;
+      if (clearing || busy || !get(key).value || (automatic && !get('auto-describe').checked)) return;
       var field=get(key+'_details'), status=get('feature-status-'+key);
       if (automatic && field.value.trim()) { status.textContent='已保留原来的特征；点“识别特征”可按新图重写。'; return; }
       featureVersions[key]++;
@@ -98,7 +98,7 @@
       status.textContent='等待本地识别…';sync();runFeatureQueue();
     }
     async function runFeatureQueue() {
-      if (featureRunning || !active()) return;
+      if (clearing || featureRunning || !active()) return;
       var job=featureQueue.shift(); if(!job){sync();return;}
       var key=job.key, field=get(key+'_details'), status=get('feature-status-'+key);
       if (job.version!==featureVersions[key] || get(key).value!==job.path || field.value!==job.text || (job.automatic&&!get('auto-describe').checked)) {
@@ -116,7 +116,7 @@
       } catch(e) {
         if(active()&&job.version===featureVersions[key]) status.textContent='识别未完成：'+e.message+'。可手写特征后继续。';
       } finally {
-        featureRunning=false;if(active()){sync();runFeatureQueue();}
+        if(job.version===featureVersions[key]){featureRunning=false;if(active()){sync();runFeatureQueue();}}
       }
     }
     get('auto-describe').onchange=function(){saveDraft();runFeatureQueue();};
@@ -145,6 +145,7 @@
       var limit = (key === 'video' ? 250 : 20) * 1024 * 1024;
       var valid = key === 'video' ? /\.(mp4|mov|mkv|webm)$/i : /\.(png|jpe?g|webp)$/i;
       if (!valid.test(file.name) || !file.size || file.size > limit) { get('upload-status-' + key).textContent = '格式不支持或文件太大，请按上方说明重新选择。'; return; }
+      var uploadEpoch = runtimeEpoch;
       var xhr = new XMLHttpRequest(); requests[key] = xhr; sync();
       el.querySelector('[data-clear="' + key + '"]').hidden = false;
       get('upload-status-' + key).textContent = '正在上传…';
@@ -158,7 +159,7 @@
           changedMaterial(key); media[key] = j.data; get(key).value = j.data.path;
           if (key === 'video') { get('start').value = 0; get('seconds').value = Math.min(8, Math.floor(j.data.duration * 10) / 10); }
           get('upload-status-' + key).textContent = '已就绪'; preview(key); saveDraft();
-          if(key!=='video')queueFeature(key,true);
+          if(key!=='video' && uploadEpoch===runtimeEpoch)queueFeature(key,true);
         } catch(e){get('upload-status-' + key).textContent = e.message;}
       };
       xhr.onerror = xhr.ontimeout = function(){if(active())get('upload-status-' + key).textContent = '上传失败，请重试；原来的选择仍保留。';};
@@ -180,7 +181,7 @@
     ['character','character2'].forEach(function(key){get(key+'_layout').addEventListener('change',function(){invalidateFeature(key);saveDraft();queueFeature(key,true);});});
     fields.forEach(function(k){get(k).addEventListener('input',function(){if(['video','character','character2','scene'].includes(k))preview(k);saveDraft();sync();});});
     function update(t) {
-      if (!active()) return;
+      if (!active() || clearing || (t && t.cleared_at)) return;
       if(t && !['running','queued'].includes(t.status) && (!task || t.id !== task.id))return;
       task = t; busy = !!(t && ['running','queued'].includes(t.status)); sync();
       if(busy && t.inputs && displayedTask !== t.id){
@@ -200,8 +201,9 @@
       }
       clearTimeout(timer);if(busy)timer=setTimeout(poll,2500);
     }
-    function poll(){if(active())window.api.get('/api/motion/status').then(function(d){update(d.task);}).catch(function(e){if(active()){get('status').textContent='读取进度失败：'+e.message;if(busy)timer=setTimeout(poll,5000);}});}
+    function poll(){var epoch=runtimeEpoch;if(active()&&!clearing)window.api.get('/api/motion/status').then(function(d){if(epoch===runtimeEpoch)update(d.task);}).catch(function(e){if(active()&&epoch===runtimeEpoch){get('status').textContent='读取进度失败：'+e.message;if(busy)timer=setTimeout(poll,5000);}});}
     get('go').onclick=async function(){
+      if(clearing)return;var epoch=runtimeEpoch;
       var data=saveDraft();delete data.media;delete data.featureSources;delete data.auto_describe;
       if(data.person_count==='1'){data.character2='';data.character2_details='';data.source_person2='';}
       delete data.person_count;
@@ -209,10 +211,25 @@
       if(get('person-count').value==='2' && !data.character2){get('status').textContent='已选择替换2个人，请上传人物2的照片。';return;}
       if(!data.prompt.trim() && data.character2 && (!data.source_person.trim() || !data.source_person2.trim())){get('status').textContent='替换两个人时，请分别填写原片中的哪个人。';return;}
       busy=true;task=null;lastOutput='';get('result').innerHTML='<p class="mt-note">正在生成本次成品…</p>';sync();get('status').textContent='检查素材与游戏状态…';
-      try {var d=await window.api.post('/api/motion/start',data);update(d.task);}
-      catch(e){if(active()){busy=false;sync();get('status').textContent=e.message;}}
+      try {var d=await window.api.post('/api/motion/start',data);if(epoch===runtimeEpoch)update(d.task);}
+      catch(e){if(active()&&epoch===runtimeEpoch){busy=false;sync();get('status').textContent=e.message;}}
     };
     get('stop').onclick=async function(){if(!task)return;try{await window.api.post('/api/motion/cancel',{id:task.id});poll();}catch(e){if(active())get('status').textContent=e.message;}};
+    if(el._motionResetListener)window.removeEventListener('workbench-runtime-reset',el._motionResetListener);
+    el._motionResetListener=function(event){
+      if(!active())return;
+      var phase=event.detail&&event.detail.phase;
+      if(phase==='begin'){
+        runtimeEpoch++;clearing=true;featureQueue=[];featureRunning=false;clearTimeout(timer);
+        Object.keys(featureVersions).forEach(function(key){featureVersions[key]++;get('feature-status-'+key).textContent='';});
+      }else{
+        clearing=false;
+        if(phase==='done'){busy=false;task=null;displayedTask='';get('status').textContent='空闲 · 任务已清理，素材和成品保留。';}
+      }
+      sync();
+      if(phase==='failed')poll();
+    };
+    window.addEventListener('workbench-runtime-reset',el._motionResetListener);
     sync();poll();
   }};
 })();

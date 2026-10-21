@@ -20,6 +20,7 @@ with patch.dict(os.environ, {'V41_NO_MODEL': ''}), \
      patch.object(qwen, '_game_mode_guard'), \
      patch.object(qwen, 'up', side_effect=[False]*9+[True]), \
      patch.object(gpu, 'guard'), patch.object(gpu, 'claim'), \
+     patch.object(gpu, 'assert_local_run_allowed'), \
      patch.object(qwen.os.path, 'exists', return_value=True), \
      patch('builtins.open', mock_open()), patch.object(qwen.time, 'sleep'), \
      patch.object(qwen.subprocess, 'Popen', return_value=process) as launch:

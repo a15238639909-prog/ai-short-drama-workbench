@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """video_api 域路由（由 server.py 的 do_POST 拆分而来）。"""
+from cores import runtime_reset
 from api import post
 from api._shared import _RESP, ctx
 import threading
@@ -18,6 +19,7 @@ def _pjob(key):
 
 
 @post("/api/produce")
+@runtime_reset.admission
 def r_035(h, path, d):
     """直接后台出图，带可查进度。"""
     import threading
@@ -33,6 +35,8 @@ def r_035(h, path, d):
     # （2026-08-27 用户实测）。这两个入口都是用户手点的「出图」按钮，
     # 点了就必须真出。旧图不会丢：新图是新版本，adopt 时旧的转成 superseded 候选。
     key = sid + ":" + oid
+    if _PRODUCE_JOBS.get(key, {}).get("cleared_at"):
+        _PRODUCE_JOBS.pop(key)
     j = _pjob(key)
     if j.get("running"):
         return _RESP({"ok": False, "error": "这一张已经在生成了"}, 400)
@@ -65,7 +69,7 @@ def r_035(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "key": key}})
 
 
@@ -135,7 +139,7 @@ def asset_prompt_save(h, path, d):
 @post("/api/produce/progress")
 def r_035b(h, path, d):
     key = str(d.get("story_id") or "") + ":" + str(d.get("owner_id") or "")
-    return _RESP({"ok": True, "data": _pjob(key)})
+    return _RESP({"ok": True, "data": runtime_reset.job_view(_pjob(key))})
 
 @post("/api/video/take/adopt")
 def r_039(h, path, d):
@@ -196,3 +200,7 @@ def r_040(h, path, d):
     except Exception as e:
         return _RESP({"ok": False, "error": str(e)[:500]}, 500)
 
+
+
+def clear_runtime_jobs():
+    return runtime_reset.clear_jobs(_PRODUCE_JOBS)

@@ -22,6 +22,7 @@ def defaults():
         "genre": "",
         "look": "",
         "pov": "电影第三人称",
+        "camera_owner": "",
         "kit": "",
         "extra_requirements": "",
         "content_tendencies": [],

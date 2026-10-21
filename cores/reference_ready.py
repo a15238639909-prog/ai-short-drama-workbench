@@ -46,6 +46,18 @@ def _episode_source(sid, ep):
     return str(episode.get('prose') or episode.get('pictures') or episode.get('body') or '')
 
 
+def reference_camera_settings(sid, settings, all_cards):
+    """Resolve POV ownership before per-segment filtering, without changing the project."""
+    from . import authoring
+    effective = dict(settings or {})
+    if (authoring._pov_spec(effective)[0] == '第一视角POV'
+            and not str(effective.get('camera_owner') or '').strip()):
+        owner = authoring.camera_owner_for(sid, effective, all_cards)
+        if owner:
+            effective['camera_owner'] = owner
+    return effective
+
+
 def required_characters(sid, ep=None):
     from . import authoring, story_core, asset_core, group_entities
     cards = [c for c in authoring.cast_cards(sid) if not c.get("auto_incidental")]
@@ -55,13 +67,57 @@ def required_characters(sid, ep=None):
     slices = _current_slices(sid, ep) if ep is not None else None
     if slices and all(isinstance(s.get("director"), dict) for s in slices):
         names = {n for s in slices for n in s["director"].get("cast", [])}
+        if not names:
+            # Legacy POV planning may have removed the visible partner as the
+            # camera. An explicit timeline cast is still evidence for portraits;
+            # true environment-only shots do not introduce a character.
+            from . import saga_core
+            timeline = saga_core.ep_timeline(sid, int(ep or 1)) or {}
+            names = {name for scene in timeline.get("scenes", [])
+                     for segment in scene.get("segments", []) if not segment.get("no_chars")
+                     for name in segment.get("chars", [])}
+            if (not names and source
+                    and not any(scene.get('segments') for scene in timeline.get('scenes', []))):
+                from . import continuation_assets
+                names = {card['name'] for card in cards
+                         if any(continuation_assets.appears_in_source(alias, source)
+                                for alias in continuation_assets.aliases(card))}
         cards = [c for c in cards if c.get("name") in names]
     all_cards = asset_core.list_assets(sid, "characters") or []
     if source:
         all_cards = group_entities.scoped_cards(all_cards, source)
     cards = group_entities.reference_cards(cards, all_cards)
-    _, camera = authoring.h3_char_order(cards, (story_core.get_story(sid) or {}).get("settings") or {})
+    settings = reference_camera_settings(sid,
+        (story_core.get_story(sid) or {}).get('settings') or {}, all_cards)
+    _, camera = authoring.h3_char_order(cards, settings)
     return [c for c in cards if c.get("name") != camera]
+
+
+def portrait_characters(sid, ep=None):
+    """Create identity assets independently of a shot's camera/reference selection.
+
+    A project's grounded character card still needs its portrait when an old
+    director cache lost the cast, or when that character holds the camera.
+    Cards explicitly belonging to later episodes wait for their own episode.
+    """
+    from . import authoring, asset_core, group_entities
+    cards = [c for c in authoring.cast_cards(sid) if not c.get('auto_incidental')]
+    if ep is not None:
+        eligible = []
+        for card in cards:
+            try:
+                if int(card.get('first_episode') or 0) > int(ep):
+                    continue
+            except (ValueError, TypeError):
+                pass
+            eligible.append(card)
+        cards = eligible
+    all_cards = asset_core.list_assets(sid, 'characters') or []
+    source = _episode_source(sid, ep)
+    if source:
+        cards = group_entities.scoped_cards(cards, source)
+        all_cards = group_entities.scoped_cards(all_cards, source)
+    return group_entities.reference_cards(cards, all_cards)
 
 
 def resolve_scene_card(sid, ep, name, cards=None):
@@ -140,7 +196,7 @@ def ensure_characters(sid, ep, on_step=None):
     from . import authoring
     result = authoring.gen_char_images(sid, only_missing=True, on_step=on_step, ep=ep) or {}
     paths = adopted_paths(sid, "character")
-    missing = [str(c.get("name") or "") for c in required_characters(sid, ep)
+    missing = [str(c.get("name") or "") for c in portrait_characters(sid, ep)
                if str(c.get("character_id") or "") not in paths]
     if missing:
         reason = "；".join(str(x) for x in result.get("failed", []))
@@ -156,7 +212,8 @@ def assert_references(sid, segments, ep=None):
     char_paths = adopted_paths(sid, "character")
     scene_paths = adopted_paths(sid, "scene")
     scene_cards = {c.get("name"): c for c in asset_core.list_assets(sid, "scenes") or []}
-    settings = (story_core.get_story(sid) or {}).get("settings") or {}
+    settings = reference_camera_settings(sid,
+        (story_core.get_story(sid) or {}).get('settings') or {}, all_cards)
     missing = []
     for g in segments:
         source = str(g.get('source_text') or _episode_source(sid, ep))

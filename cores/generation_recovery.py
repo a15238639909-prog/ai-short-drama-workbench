@@ -65,6 +65,11 @@ class RecoveryStore:
 
     def save(self, record):
         with _LOCK:
+            previous = self.load(record["sid"])
+            if previous and previous.get('id') == record.get('id') and previous.get('cleared_at') and not record.get('cleared_at'):
+                return previous
+            if previous and previous.get('id') != record.get('id') and previous.get('created_at', 0) > record.get('created_at', 0):
+                return previous
             destination = self.path(record["sid"])
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary = destination.with_suffix(".json.tmp")
@@ -77,6 +82,8 @@ class RecoveryStore:
         return record
 
     def register(self, sid, request, input_hash):
+        from . import runtime_reset
+        runtime_reset.assert_current()
         previous = self.load(sid)
         if previous:
             # Preserve previous records for diagnosis; no task history is removed.
@@ -87,6 +94,7 @@ class RecoveryStore:
                 archive.write_text(json.dumps(previous, ensure_ascii=False, indent=2), encoding="utf-8")
         return self.save({"schema": SCHEMA, "id": uuid.uuid4().hex, "sid": sid,
                           "request": dict(request), "input_hash": input_hash,
+                          "runtime_generation": runtime_reset.generation(),
                           "status": "queued", "phase": "text", "attempts": {},
                           "restarts": 0, "external_inflight": "", "cancel": False,
                           "created_at": time.time(), "updated_at": time.time(), "job": {}})

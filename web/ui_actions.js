@@ -27,6 +27,7 @@ window.UIActions = (function () {
 
   /* 生成类操作要几十秒（Qwen 冷启动 30–60 秒）。没有加载态，用户会以为按钮是坏的。
      所有耗时操作统一用 busy() 包起来：按钮禁用 + 转字 + 计时，结束自动恢复。 */
+  var activeBusy=[];
   function busy(btn, text, promise) {
     if (!btn) return promise;
     var old = btn.innerHTML, t0 = Date.now(), timer;
@@ -36,9 +37,13 @@ window.UIActions = (function () {
       btn.innerHTML = (text || "生成中") + "… " + s + "s";
     };
     tick(); timer = setInterval(tick, 1000);
+    var record={active:true};
     var done = function () {
+      if(!record.active)return;
+      record.active=false;activeBusy=activeBusy.filter(function(item){return item!==record;});
       clearInterval(timer); btn.disabled = false; btn.innerHTML = old;
     };
+    record.done=done;activeBusy.push(record);
     return Promise.resolve(promise).then(function (r) { done(); return r; },
                                          function (e) { done(); throw e; });
   }
@@ -52,9 +57,17 @@ window.UIActions = (function () {
      耗时操作统一调它，用户就不用盯着一个没反应的按钮猜。 */
   var dismissedProgress = [];
   try { var storedProgress = JSON.parse(localStorage.getItem('dismissedProgress') || '[]'); if (Array.isArray(storedProgress)) dismissedProgress = storedProgress; } catch (_) {}
+  var progressEpoch=0;
+  if(window.addEventListener)window.addEventListener('workbench-runtime-reset',function(event){if(event.detail&&event.detail.phase==='begin'){progressEpoch++;activeBusy.slice().forEach(function(record){record.done();});}});
   var P = {
     _noticeKey: '',
+    reset: function () {
+      P._set('', 0, '空闲');
+      var panel = document.getElementById('logpanel');
+      if (panel) panel.style.display = 'none';
+    },
     _set: function (cls, frac, note, noticeKey) {
+      if(cls && window.api && window.api.isRuntimeIdle && window.api.isRuntimeIdle()){cls='';frac=0;note='空闲';}
       P._noticeKey = cls === 'stuck' ? (noticeKey || 'message:' + note) : '';
       if (P._noticeKey && dismissedProgress.indexOf(P._noticeKey) >= 0) {
         cls = ''; frac = 0; note = '空闲'; P._noticeKey = '';
@@ -81,20 +94,24 @@ window.UIActions = (function () {
     },
     done: function (note) {
       P._set("", 0, note || "空闲");
-      if (note) setTimeout(function () { P._set("", 0, "空闲"); }, 4000);
+      var epoch=progressEpoch;
+      if (note) setTimeout(function () { if(epoch===progressEpoch)P._set("", 0, "空闲"); }, 4000);
     },
     /* 进度条已常驻顶栏（在日志按钮右边），不用再展开日志面板 */
     _open: function () {},
     /* 把一个 Promise 包起来：开始 busy，成功 done，失败 stuck */
     wrap: function (note, promise) {
+      var epoch=progressEpoch;
       P.busy(note);
-      return Promise.resolve(promise).then(function (r) { P.done("完成"); return r; },
-                                           function (e) { P.stuck("失败"); throw e; });
+      return Promise.resolve(promise).then(function (r) { if(epoch===progressEpoch)P.done("完成"); return r; },
+                                           function (e) { if(epoch===progressEpoch)P.stuck("失败"); throw e; });
     },
     /* 分步任务：steps 是 [{note, run}]，逐步跑并推进进度 */
     steps: function (steps) {
+      var epoch=progressEpoch;
       var i = 0, total = (steps || []).length;
       var next = function (acc) {
+        if(epoch!==progressEpoch)return acc;
         if (i >= total) { P.done("完成 " + total + "/" + total); return acc; }
         var s = steps[i++];
         P.run((i - 1) / total, s.note + "（" + i + "/" + total + "）");

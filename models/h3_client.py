@@ -203,9 +203,16 @@ def _http(method, path, data=None, timeout=60):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+def _validate_reference_image_size(value):
+    if value not in ("match", "max"):
+        raise ValueError("参考图精度须为match或max")
+
+
 def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
-                   filename_prefix=None, size_tier=None, steps=None, reference_videos=None, exact_frames=None):
+                   filename_prefix=None, size_tier=None, steps=None, reference_videos=None, exact_frames=None,
+                   reference_image_size="match"):
     """装配 H3 工作流。images 为本地图片路径列表（正式制作=Reference Pack）。"""
+    _validate_reference_image_size(reference_image_size)
     mode = str(mode or "t2va").lower()
     # Motion-transfer opt-in only. Existing story generation keeps its frame policy.
     if exact_frames is not None:
@@ -245,7 +252,7 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
         for i, item in enumerate(images):
             fname = _copy_to_input(item, "refimg%d" % (i + 1))
             h3["inputs"]["ref_images.ref_image_%d" % i] = _add_load_image(graph, fname)
-        h3["inputs"]["ref_image_size"] = "match"
+        h3["inputs"]["ref_image_size"] = reference_image_size
         for i, video in enumerate(reference_videos):
             # motion_core prepares a bounded 24fps clip; H3 receives the full frame batch.
             fname = _copy_to_input(video, 'refvideo%d' % (i + 1))
@@ -274,12 +281,15 @@ def build_workflow(mode, prompt, images=None, seconds=15, ratio=None, seed=None,
     _, combine = _find_node(graph, "VHS_VideoCombine")
     if combine:
         combine["inputs"]["filename_prefix"] = filename_prefix or ("MiniMaxH3/v41_" + time.strftime("%Y%m%d_%H%M%S"))
-    return graph, {"mode": mode, "width": w, "height": h, "frames": frame_count,
+    meta = {"mode": mode, "width": w, "height": h, "frames": frame_count,
                    "seconds": max(4, min(15, int(round(float(seconds))))),
                    "seed": used_seed,
                    "size_tier": (size_tier if size_tier is not None else SIZE_TIER),
                    "ratio": ratio, "steps": steps,
                    "expect_audio": bool(combine and isinstance(combine.get("inputs", {}).get("audio"), (list, tuple)))}
+    if mode == "ref2va":
+        meta["reference_image_size"] = reference_image_size
+    return graph, meta
 
 _START_LOCK = threading.Lock()
 
@@ -295,9 +305,11 @@ def up(timeout=5):
 
 def _game_mode_guard():
     """游戏模式暂停旗立着时拒绝上卡——用户在打游戏，显卡不能碰。"""
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     from pathlib import Path as _P
     if (_P(__file__).resolve().parent.parent / "cache" / "game_mode.flag").exists():
-        raise RuntimeError("游戏模式暂停中——点右上角「恢复任务」再继续")
+        raise RuntimeError("旧的暂停状态尚未清除，请点右上角「清理缓存」再开始新任务")
 
 def start_h3(timeout=240):
     if os.environ.get("V41_NO_MODEL"):
@@ -319,12 +331,13 @@ def start_h3(timeout=240):
             env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONUTF8"] = "1"
             log = open(str(H3_ROOT / "v41_h3.log"), "ab")
-            subprocess.Popen([str(H3_PYTHON), "-s", r"ComfyUI\main.py", "--port", "8190",
+            gpu_manager.spawn("h3", [str(H3_PYTHON), "-s", r"ComfyUI\main.py", "--port", "8190",
                               "--disable-auto-launch"],
                              cwd=str(H3_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
                              creationflags=0x08000000)
             for _ in range(int(timeout / 3)):
                 time.sleep(3)
+                _game_mode_guard()
                 if up():
                     return True
             raise RuntimeError("H3 ComfyUI %d 秒内未就绪，看 %s" % (timeout, H3_ROOT / "v41_h3.log"))
@@ -362,12 +375,16 @@ def _has_audio_stream(path):
 
 
 def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeout=3600,
-             size_tier=None, steps=None, reference_videos=None, exact_frames=None, recovery_key=None):
+             size_tier=None, steps=None, reference_videos=None, exact_frames=None, recovery_key=None,
+             reference_image_size="match"):
     """提交一次 H3 生成，轮询并复制 mp4 到 outputs/video。"""
+    _validate_reference_image_size(reference_image_size)
     from cores.age_policy import assert_model_request
 
     if os.environ.get("V41_NO_MODEL"):
         raise RuntimeError("V41_NO_MODEL=1：零模型测试不许调模型（视频生成）")
+    from cores import runtime_reset
+    runtime_reset.assert_current()
     CANCEL["flag"] = False
     recovery_key = recovery_key or ('standalone:' + uuid.uuid4().hex)
     receipt = recovery_receipt(recovery_key)
@@ -428,7 +445,8 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
         prefix = 'MiniMaxH3/v41_recovery_' + pid
         graph, meta = build_workflow(mode, prompt, images, seconds, ratio, seed,
                                      filename_prefix=prefix, size_tier=size_tier, steps=steps,
-                                     reference_videos=reference_videos, exact_frames=exact_frames)
+                                     reference_videos=reference_videos, exact_frames=exact_frames,
+                                     reference_image_size=reference_image_size)
         _t0, _steps_used = time.time(), _graph_steps(graph)
         receipt = {'status': 'submitting', 'prompt_id': pid, 'meta': meta,
                    'started_at': _t0, 'steps': _steps_used, 'filename_prefix': prefix}
@@ -438,6 +456,7 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
             receipt['status'] = 'cancelled'
             _save_receipt(recovery_key, receipt)
             raise RuntimeError('已取消')
+        runtime_reset.assert_current()
         try:
             result = _http("POST", "/prompt", {"prompt": graph, "prompt_id": pid}, timeout=60)
         except urllib.error.HTTPError as exc:
@@ -455,6 +474,7 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
         _save_receipt(recovery_key, receipt)
     deadline = time.time() + timeout
     while time.time() < deadline:
+        runtime_reset.assert_current()
         if CANCEL["flag"]:
             # 用户点了取消：让 ComfyUI 打断当前队列，不等这段生完
             try:
@@ -483,6 +503,7 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
                     sub = v.get("subfolder") or ""
                     src = H3_OUTPUT / sub / fn
                     if src.exists():
+                        runtime_reset.assert_current()
                         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
                         dst = OUTPUT_ROOT / fn
                         shutil.copy2(str(src), str(dst))

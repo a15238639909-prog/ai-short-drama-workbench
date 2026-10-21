@@ -111,6 +111,80 @@ class StoryVideoClientTests(unittest.TestCase):
         self.acquire.assert_not_called()
         self.guard.assert_not_called()
 
+    def test_truncated_thinking_retries_the_identical_request_once_without_thinking(self):
+        schema = {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}
+        metadata = {'finish_reason': 'length', 'reasoning': True,
+                    'reasoning_content_len': 20000, 'content_len': 7}
+        self.chat.side_effect = [('partial', metadata), ('{"ok":true}', {'finish_reason': 'stop', 'reasoning': False})]
+        result = client.text('Plan the same complete story.', {'count': 10, 'previous_draft': 'unchanged'},
+                             self.root, max_tokens=6000, schema=schema)
+        self.assertEqual(result, '{"ok":true}')
+        self.assertEqual(self.calls, ['qwen', 'qwen'])
+        first_call, second_call = self.chat.call_args_list
+        self.assertEqual(first_call.args, second_call.args)
+        self.assertEqual(first_call.kwargs['max_tokens'], 10000)
+        self.assertTrue(first_call.kwargs['reasoning'])
+        self.assertFalse(second_call.kwargs['reasoning'])
+        self.assertEqual({k: v for k, v in first_call.kwargs.items() if k != 'reasoning'},
+                         {k: v for k, v in second_call.kwargs.items() if k != 'reasoning'})
+        folders = sorted(self.root.glob('text_*'))
+        self.assertEqual(len(folders), 2)
+        first_request = json.loads((folders[0]/'request.json').read_text(encoding='utf-8'))
+        retry_request = json.loads((folders[1]/'request.json').read_text(encoding='utf-8'))
+        self.assertEqual(retry_request['messages'], first_request['messages'])
+        self.assertEqual(retry_request['retry_reason'], 'thinking_output_truncated')
+        self.assertEqual(retry_request['parent_trace'], str(folders[0].resolve()))
+        self.assertEqual(json.loads((folders[0]/'response.json').read_text(encoding='utf-8'))['meta'], metadata)
+        self.assertEqual((folders[0]/'response.txt').read_text(encoding='utf-8'), 'partial')
+        self.assertTrue((folders[0]/'retry.json').is_file())
+        self.assertIsNone(self.owner())
+
+    def test_without_thinking_retry_is_bounded_and_incomplete_results_still_fail(self):
+        for index, second in enumerate((('partial again', {'finish_reason': 'length', 'reasoning': False}),
+                                        (' ', {'finish_reason': 'stop', 'reasoning': False}))):
+            trace = self.root/str(index)
+            before = self.chat.call_count
+            self.chat.side_effect = [('partial', {'finish_reason': 'length', 'reasoning': True}), second]
+            with self.subTest(second=second), self.assertRaisesRegex(RuntimeError, '为空或被截断'):
+                client.text('Plan.', {'count': 10}, trace)
+            self.assertEqual(self.chat.call_count-before, 2)
+            self.assertEqual(len(list(trace.glob('text_*/response.json'))), 2)
+            self.assertEqual(len(list(trace.glob('text_*/error.json'))), 1)
+
+    def test_empty_normal_reply_reported_no_thinking_or_runtime_error_does_not_trigger_retry(self):
+        cases = [(' ', {'finish_reason': 'stop', 'reasoning': True}),
+                 ('partial', {'finish_reason': 'length', 'reasoning': False})]
+        for reply in cases:
+            before = self.chat.call_count
+            self.chat.side_effect = None
+            self.chat.return_value = reply
+            with self.subTest(reply=reply), self.assertRaises(RuntimeError):
+                client.text('Plan.', {'count': 10}, self.root)
+            self.assertEqual(self.chat.call_count-before, 1)
+        before = self.chat.call_count
+        self.chat.side_effect = RuntimeError('backend connection failed')
+        with self.assertRaisesRegex(RuntimeError, 'backend connection failed'):
+            client.text('Plan.', {'count': 10}, self.root)
+        self.assertEqual(self.chat.call_count-before, 1)
+
+    def test_pubg_blocks_the_retry_before_a_second_model_call(self):
+        self.chat.return_value = ('partial', {'finish_reason': 'length', 'reasoning': True})
+        count = 0
+        def acquire(who, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 2:
+                raise RuntimeError('PUBG_RUNNING')
+            return self.acquire_call(who, **kwargs)
+        self.acquire.side_effect = acquire
+        with self.assertRaisesRegex(RuntimeError, 'PUBG'):
+            client.text('Plan.', {'count': 10}, self.root)
+        self.assertEqual(self.acquire.call_count, 2)
+        self.assertEqual(self.chat.call_count, 1)
+        self.assertEqual(len(list(self.root.glob('text_*'))), 2)
+        self.assertTrue(any('PUBG' in path.read_text(encoding='utf-8') for path in self.root.glob('text_*/error.json')))
+        self.assertIsNone(self.owner())
+
     def test_pubg_block_and_incomplete_reply_remain_logged(self):
         with patch.object(client.gpu_manager, 'acquire', side_effect=RuntimeError('PUBG_RUNNING')):
             with self.assertRaisesRegex(RuntimeError, 'PUBG'):
@@ -122,6 +196,7 @@ class StoryVideoClientTests(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob('text_*/error.json'))), 2)
         responses = list(self.root.glob('text_*/response.txt'))
         self.assertEqual(responses[0].read_text(encoding='utf-8'), 'partial draft')
+        self.assertEqual(self.chat.call_count, 1)
 
     def test_warm_models_do_not_repeat_startup_memory_guard(self):
         client.text('Write using the loaded model.', {}, self.root)

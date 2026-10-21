@@ -71,6 +71,7 @@ def new_pack(sid, g, ep=None):
     _settings = (story_core.get_story(sid) or {}).get("settings") or {}
     _all = asset_core.list_assets(sid, "characters") or []
     _source_cards = list(_all)
+    _settings = reference_ready.reference_camera_settings(sid, _settings, _source_cards)
     _want_chars = [str(x) for x in ((g or {}).get("chars") or [])]      # 这一段只绑出场的人（提示词里也只列了他们）
     if (g or {}).get("no_chars") or ((g or {}).get("shot") and not _want_chars) or ('chars' in (g or {}) and not _want_chars and ((g or {}).get('plan') or {}).get('flow') == 'source-v1'):
         _all = []                                                          # P316：开场的空场段不带任何人物图；P388：节拍段的空镜（在场为空）也不带——带了 Picture 1 就不是场景
@@ -196,7 +197,7 @@ def render_opening(sid, ep, k, size_tier=None, log_fn=None):
     prompt = str(g.get("prompt") or "")
     if not prompt.strip():
         raise RuntimeError("开场段 %s 没有提示词" % k)
-    imgs = [x for x in new_pack(sid, g) if x and os.path.exists(x)][:9]
+    imgs = [x for x in new_pack(sid, g, ep=ep) if x and os.path.exists(x)][:9]
     if not imgs:
         raise RuntimeError("开场段 %s 没有参考图——先出人物/场景的设定图" % k)
     secs = float(g.get("seconds") or 4)
@@ -433,12 +434,18 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
                 and request.get('requested_seed') == seed
                 and receipt_status not in ('cancelled', 'invalid_media'))
 
+    if (request.get('key') and request.get('status') == 'pending'
+            and receipt_status not in ('cancelled', 'invalid_media')
+            and not same_pending_request()):
+        raise ValueError('已有未完成视频请求的输入与当前参考绑定不一致，原请求已保留，未新建重复任务')
+
     snapshot_fields = ('final_prompt', 'final_refs', 'resolved_params')
     frozen = same_pending_request() and all(k in request for k in snapshot_fields)
     if same_pending_request() and any(k in request for k in snapshot_fields) and not frozen:
         raise ValueError('待恢复的视频请求快照不完整，已保留原任务，不能更换输入后重复提交')
     appearance_frame = ''
     handoff_version = 'none'
+    reference_binding_audit = None
     if frozen:
         h3p = request['final_prompt']
         imgs = list(request['final_refs'])
@@ -448,6 +455,10 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         # 「自定义作品」传了自己的图也白传（2026-09-05 查出）。和 gen_segment 同一套规则。
         imgs = base_refs
         h3p = prompt
+        if not same_pending_request() and any(ref.get('n') for ref in (g.get('refs') or [])):
+            from cores import reference_bindings
+            h3p, reference_binding_audit = reference_bindings.rebind_prompt(
+                h3p, imgs, new_pack(sid, g, ep=ep), reference_bindings.adopted_catalog(sid))
         # 【姿势参考】上一段的最后一帧当第 N 张参考图，只参考姿势/位置/构图
         # （用户 2026-09-02 提法，实验 V13a：接口几乎无缝，脸没换）。
         prev = previous['segment'] if previous else None
@@ -516,6 +527,8 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             'handoff_version': handoff_version,
             'appearance_frame': appearance_frame,
         })
+        if reference_binding_audit is not None:
+            request['reference_binding_audit'] = reference_binding_audit
     resolved = request['resolved_params']
     if not isinstance(resolved, dict) or any(k not in resolved for k in ('mode', 'seconds', 'ratio', 'size_tier', 'steps', 'seed')):
         raise ValueError('待恢复的视频参数快照不完整，已保留原任务，不能更换参数后重复提交')
@@ -1739,7 +1752,7 @@ def gen_segment(h, path, d):
     if is_new_prompt(g.get("prompt")):
         from cores import reference_ready
         try:
-            reference_ready.assert_references(sid, [g])
+            reference_ready.assert_references(sid, [g], ep=_ep_of(sid))
         except RuntimeError as error:
             return _RESP({"ok": False, "error": str(error)}, 400)
     critical = _render_critical_problems(st, tl, g, str(g.get("prompt") or ""), _ep_of(sid), sno)
@@ -1823,14 +1836,15 @@ def gen_segment(h, path, d):
     # 出高清时原样传回去（hd=true 时把尺寸档拉到 1.0）。
     hd = bool(d.get("hd"))
     seed = d.get("seed") or (g.get("seed") if (hd or d.get("same_seed")) else None)
-    # 任务登记：游戏模式暂停时靠它知道该恢复哪一段
+    # Runtime marker belongs to this request; an old finally cannot clear a new request.
+    from cores import runtime_reset
+    _runtime_token = uuid.uuid4().hex
     _task_file = Path(__file__).resolve().parent.parent / "cache" / "current_task.json"
-    try:
-        _task_file.parent.mkdir(parents=True, exist_ok=True)
-        _task_file.write_text(json.dumps({"sid": sid, "scene_no": no, "seg_no": sno,
-                                          "hd": hd}, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    with runtime_reset.LOCK:
+        runtime_reset.assert_current()
+        store.save_json(_task_file, {"sid": sid, "scene_no": no, "seg_no": sno,
+                                    "hd": hd, "runtime_token": _runtime_token,
+                                    "runtime_generation": runtime_reset.capture()})
     try:
         log("video", "开始生成 场%d段%d（%s，%d张参考图，%s秒）"
             % (no, sno, plan["mode"], len(imgs), g.get("seconds")))
@@ -1855,10 +1869,10 @@ def gen_segment(h, path, d):
             pass
         return _RESP({"ok": False, "error": str(e)[:300]}, 500)
     finally:
-        try:
-            _task_file.unlink()
-        except Exception:
-            pass
+        with runtime_reset.LOCK:
+            _current_marker = store.load_json(_task_file, {})
+            if _current_marker.get('runtime_token') == _runtime_token:
+                runtime_reset.recycle_transient(_task_file)
     try:
         log("video", "完成 场%d段%d → %sx%s" % (no, sno, r.get("width"), r.get("height")))
     except Exception:

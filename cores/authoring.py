@@ -4622,34 +4622,22 @@ def _h3_cine(settings, scene_space, lead=""):
 
 
 def camera_owner_for(sid, settings=None, chars=None):
-    """P461：拍摄者。settings.camera_owner（且是卡名）> 口述里最先出现的卡 > 正文里出现最多的卡 > 第一张卡。"""
-    from . import asset_core as _ac, oral_story as _os_
+    """统一拍摄者规则；未指定的第一视角属于画外观众，不按人物顺序或词频猜。"""
+    from . import asset_core as _ac, camera_view
+    # POV does not need card/story reads; a visible character is never inferred
+    # to be the viewer merely because theirs is the only card in the project.
+    if str((settings or {}).get("camera_owner") or "").strip() or str(
+            (settings or {}).get("pov") or "").strip() == "第一视角POV":
+        return camera_view.owner(chars or [], settings)
     cards = chars if chars is not None else (_ac.list_assets(sid, "characters") or [])
-    names = [str(c.get("name") or "") for c in cards if isinstance(c, dict) and c.get("name")]
-    if not names:
-        return ""
-    exp = str((settings or {}).get("camera_owner") or "").strip()
-    if exp in names:
-        return exp
-    try:
-        _saga, e = _ep(sid, 1, create=False)
-        brief = str((e or {}).get("brief") or "") + " " + str((settings or {}).get("one_line") or "")
-        prose = str((e or {}).get("prose") or "")
-    except Exception:
-        brief, prose = "", ""
-    al = _os_.card_aliases(cards)
-    first = [(brief.find(a), full) for a, full in al.items() if a and brief.find(a) >= 0]
-    if first:
-        return min(first)[1]
-    cnt = {n: sum(prose.count(a) for a, full in al.items() if full == n and a) for n in names}
-    best = max(names, key=lambda n: cnt.get(n, 0))
-    return best if cnt.get(best, 0) > 0 else names[0]
+    return camera_view.owner(cards, settings)
 
 
 def h3_char_order(characters, settings=None):
     """H3 提示词里人物的顺序（＝Subject 编号）。
 
-    第一视角：主角（第一张人设卡）是摄像机，排到最后、不带参考图；其他人按卡的顺序。
+    第一视角：明确的拍摄者若有同名卡，排到最后、不带参考图；其他人按卡的顺序。
+    未指定拍摄者时使用画外「我」，保留所有出镜人物的参考图。
     返回 (顺序列表, 不带图的人名或空)。参考包和提示词都用这个函数，编号才对得上。
     """
     chars = [c for c in (characters or []) if (c or {}).get("name")]
@@ -7517,6 +7505,9 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
                     "不是人也不是生物。画面里出现不在人物表上的东西（追兵、机甲、野兽、车），"
                     "直接写它是什么、在画面哪个位置，**不要给它编号**。" % len(chars))
     n_sc = len(chars) + 1
+    # A POV operator has a Subject identity but no image slot. Scene Subject
+    # numbers therefore cannot double as Picture numbers in that mode.
+    first_scene_picture = sum(c['name'] != _cam for c in chars) + 1
     # 场景可以是多个（一个地点拆成内部/门口/墙边），每个有图的场景绑一个 Subject，
     # 顺序和参考包（segment_api.new_pack：人物图 + 场景图按卡的顺序）一致——
     # 原来只绑第一个，参考包里第 4、5 张图没人认领（项目97 查出）。
@@ -7524,7 +7515,7 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
     _scenes = [str(x or "").strip() for x in _scenes if str(x or "").strip()] or [""]
     for k, _sn in enumerate(_scenes):
         if scene_image:
-            head.append(_H3_SCENE_PIC % (n_sc + k, n_sc + k, _sn))
+            head.append(_H3_SCENE_PIC % (n_sc + k, first_scene_picture + k, _sn))
         else:
             head.append(_H3_SCENE % (n_sc + k, _sn))
     # 【摄影】光线/镜头/色调/机位——原来提示词里一句电影语言都没有，出来就是平光正面照。
@@ -11841,13 +11832,13 @@ def gen_char_images(sid, only_missing=True, on_step=None, ep=None):
     settings = project_settings.get(st)
     from . import reference_ready
     have = reference_ready.adopted_paths(sid, "character")
-    source = (reference_ready.required_characters(sid, ep) if ep is not None
+    source = (reference_ready.portrait_characters(sid, ep) if ep is not None
               else asset_core.list_assets(sid, "characters"))
     cards = [c for c in source
              if not c.get("auto_incidental")
              and not (only_missing and c.get("character_id") in have)]
     if not cards:
-        return {"ok": 0, "failed": [], "note": "所有人物都已经有设定图了"}
+        return {"ok": 0, "failed": [], "note": "所有人物都已经有设定图了" if source else "本次没有需要生成人设图的出镜人物"}
     r = _gen_char_images(sid, cards, settings, on_step) or {}
     r["total"] = len(cards)
     return r

@@ -140,17 +140,28 @@ def _ask(kind, system, content, trace_dir, max_tokens, schema):
     started = time.perf_counter()
     with gpu_manager.GPU_LOCK:
         try:
-            with _offline():
-                # acquire checks PUBG for warm calls without requiring another
-                # 12 GB of free RAM after the model has already loaded.
-                gpu_manager.acquire('qwen', note='automatic story ' + kind)
-                reply, meta = qwen_client.chat(system, content, **options)
-            _save(folder / 'response.json', {'text': reply, 'meta': meta,
-                  'elapsed_seconds': time.perf_counter() - started})
-            (folder / 'response.txt').write_text(str(reply), encoding='utf-8')
-            if not isinstance(reply, str) or not reply.strip() or meta.get('finish_reason') == 'length':
-                raise RuntimeError('本地故事模型回复为空或被截断，已保留原始回复')
-            return reply
+            for attempt in range(2):
+                if attempt:
+                    options = dict(options, reasoning=False)
+                    request = dict(request, options=options, retry_reason='thinking_output_truncated',
+                                   parent_trace=str(folder.resolve()))
+                    folder = _new_trace(trace_dir, kind, request)
+                    started = time.perf_counter()
+                with _offline():
+                    # Recheck PUBG on each actual call, including the bounded retry.
+                    gpu_manager.acquire('qwen', note='automatic story ' + kind)
+                    reply, meta = qwen_client.chat(system, content, **options)
+                _save(folder / 'response.json', {'text': reply, 'meta': meta,
+                      'elapsed_seconds': time.perf_counter() - started})
+                (folder / 'response.txt').write_text(str(reply), encoding='utf-8')
+                if (attempt == 0 and deliberate and options['reasoning'] and meta.get('reasoning', True)
+                        and meta.get('finish_reason') == 'length'):
+                    _save(folder / 'retry.json', {'retry_reason': 'thinking_output_truncated',
+                          'next_reasoning': False, 'max_additional_calls': 1})
+                    continue
+                if not isinstance(reply, str) or not reply.strip() or meta.get('finish_reason') == 'length':
+                    raise RuntimeError('本地故事模型回复为空或被截断，已保留原始回复')
+                return reply
         except Exception as error:
             _save(folder / 'error.json', {'type': type(error).__name__, 'error': str(error),
                   'elapsed_seconds': time.perf_counter() - started})

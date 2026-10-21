@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """story 域路由（由 server.py 的 do_POST 拆分而来）。"""
+from cores import runtime_reset
 from api import post
 from api._shared import _RESP, ctx
 from cores import style_presets
@@ -407,6 +408,7 @@ _S1_JOBS = {}
 
 
 @post(("/api/story/", "/auto-stage1"))
+@runtime_reset.admission
 def r_stage1(h, path, d):
     """一句话 → 正文 + 全部设定卡 + 全部设定图，然后停下等审。后台跑。"""
     import threading
@@ -417,6 +419,8 @@ def r_stage1(h, path, d):
         one_line = str((st0.get("settings") or {}).get("one_line") or st0.get("one_line") or "")
     if not one_line:
         return _RESP({"ok": False, "error": "缺一句话设定"}, 400)
+    if _S1_JOBS.get(sid, {}).get("cleared_at"):
+        _S1_JOBS.pop(sid)
     j = _S1_JOBS.setdefault(sid, {})
     if j.get("running"):
         return _RESP({"ok": False, "error": "已经在跑了"}, 400)
@@ -433,11 +437,15 @@ def r_stage1(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
 @post(("/api/story/", "/auto-stage1-progress"))
 def r_stage1_prog(h, path, d):
     sid = path.split("/")[3]
-    return _RESP({"ok": True, "data": _S1_JOBS.get(sid) or {}})
+    return _RESP({"ok": True, "data": runtime_reset.job_view(_S1_JOBS.get(sid)) or {}})
+
+
+def clear_runtime_jobs():
+    return runtime_reset.clear_jobs(_S1_JOBS)

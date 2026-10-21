@@ -2,7 +2,7 @@
 """runtime_core.py — V4.1 Runtime Core：TaskCenter / GPU 游戏模式 / 存储 / 归档 / 问题。"""
 import json, os, shutil, threading, time, uuid, zipfile
 from pathlib import Path
-from . import store
+from . import store, runtime_reset
 
 TASKS_DIR = store.DATA / "tasks"
 MANIFESTS_DIR = store.DATA / "manifests"
@@ -19,19 +19,48 @@ class TaskPaused(Exception):
 def _task_path(tid):
     return TASKS_DIR / (tid + ".json")
 
+_TASK_LOCK = threading.RLock()
+
+
 def save(t):
-    store.save_json(_task_path(t["id"]), t)
+    with _TASK_LOCK:
+        current = load(t['id'])
+        if current and current.get('cleared_at'):
+            return current
+        store.save_json(_task_path(t["id"]), t)
+    return t
+
+
+def clear_all_tasks():
+    now = time.time()
+    with _TASK_LOCK, _CV:
+        queued = len(_QUEUE)
+        _QUEUE.clear()
+        cleared = cancelled = 0
+        for path in TASKS_DIR.glob('task_*.json'):
+            t = store.load_json(path, None)
+            if not isinstance(t, dict):
+                continue
+            if t.get('status') not in ('completed', 'cancelled', 'failed'):
+                t['status'] = 'cancelled'
+                cancelled += 1
+            t.update(cleared_at=now, done=0, total=0, detail='空闲', error='',
+                     cancel_requested=True, pause_requested=False, updated=now)
+            store.save_json(path, t)
+            cleared += 1
+        return {'cleared': cleared, 'cancelled': cancelled, 'queued': queued}
 
 def load(tid):
     return store.load_json(_task_path(tid), None)
 
-def list_tasks(limit=50):
+def list_tasks(limit=50, include_cleared=False):
     out = []
     for p in TASKS_DIR.glob("task_*.json"):
         t = store.load_json(p, None)
-        if t:
+        if t and (include_cleared or not t.get("cleared_at")):
             out.append(t)
-    return sorted(out, key=lambda x: x.get("created", 0), reverse=True)[:max(1, int(limit))]
+    ordered = sorted(out, key=lambda x: x.get("created", 0), reverse=True)
+    return ordered if limit is None else ordered[:max(1, int(limit))]
 
 def _restore():
     for t in list_tasks(200):
@@ -51,7 +80,10 @@ class TaskHandle:
 
     def set(self, **kw):
         with self._lock:
-            t = load(self.tid) or {"id": self.tid}
+            t = load(self.tid)
+            if not t or t.get('cleared_at') or t.get('status') == 'cancelled':
+                raise TaskPaused()
+            runtime_reset.assert_current(t.get('runtime_generation', 'initial'))
             t.update(kw)
             t["updated"] = time.time()
             if "heartbeat" not in kw:
@@ -80,6 +112,8 @@ def action(tid, act):
     t = load(tid)
     if not t:
         return None
+    if t.get("cleared_at"):
+        return t
     st = t.get("status")
     if act == "pause" and st in ("running", "queued", "waiting_user"):
         t["status"] = "paused"; t["detail"] = "已暂停（检查点已保存）"; save(t)
@@ -101,10 +135,13 @@ def _queue(tid):
         _QUEUE.append(tid)
         _CV.notify_all()
 
+@runtime_reset.admission
 def create_task(kind, title, inputs, steps=None):
+    runtime_reset.assert_current()
     tid = store.seq_id("task", len(list(TASKS_DIR.glob("task_*.json"))) + 1)
     t = {"id": tid, "kind": kind, "title": title, "status": "queued",
          "inputs": inputs, "steps": steps or [], "checkpoint": {},
+         "runtime_generation": runtime_reset.generation(),
          "heartbeat": time.time(), "created": time.time(), "updated": time.time(),
          "error": "", "output": None, "detail": "排队中"}
     save(t)
@@ -112,6 +149,18 @@ def create_task(kind, title, inputs, steps=None):
     return t
 
 def _run(tid):
+    t = load(tid) or {}
+    runtime_reset.bind_thread(t.get('runtime_generation', 'initial'))
+    try:
+        runtime_reset.assert_current()
+        return _run_current(tid)
+    except runtime_reset.Cancelled:
+        return
+    finally:
+        runtime_reset.bind_thread(None)
+
+
+def _run_current(tid):
     t = load(tid)
     if not t or t.get("status") != "queued":
         return

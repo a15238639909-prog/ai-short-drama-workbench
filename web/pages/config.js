@@ -43,7 +43,7 @@ window.Pages.config = (function () {
 
   /* ---- 模型与显存（原来挂在顶栏「设置」按钮里，现在统一收到这一页）----
      注意：老弹窗里那排 /api/models/<名字>/stop|start 按钮后端根本没有这个路由，
-     点了只会 404。这里只放真实可用的两个：释放全部显存 / 恢复任务。 */
+     点了只会 404。这里和顶栏共用清理缓存入口。 */
   function dot(on) {
     return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;' +
       'vertical-align:middle;background:' + (on ? "#3f8a4a" : "#cfc7b8") + '"></span>';
@@ -53,7 +53,7 @@ window.Pages.config = (function () {
     var g = gpu || {}, ms = g.models || {};
     var used = g.used_gb, total = g.total_gb;
     var pct = (total > 0 && used != null) ? Math.round(used / total * 100) : 0;
-    var paused = !!g.game_paused;
+    var clearing = !!(window.Shell && window.Shell.isClearing());
     return '<div class="card" id="cfgRuntime"><h3 style="font-size:16px">🖥 模型与显存</h3>' +
       '<p class="note-gray" style="margin:0 0 10px">三个模型共用一张显卡，谁要干活谁加载，用完自动让位。</p>' +
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
@@ -64,11 +64,8 @@ window.Pages.config = (function () {
       '<p style="margin:6px 0 12px;font-size:13.5px">' +
       dot(ms.qwen) + "Qwen 写作　" + dot(ms.comfyui) + "ComfyUI 生图　" + dot(ms.h3) + "MiniMax H3 视频</p>" +
       '<div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-      (paused
-        ? '<button class="btn primary" id="cfgResume">▶ 恢复任务</button>' +
-          '<span class="note-gray" style="margin:0">显存已释放、任务暂停中</span>'
-        : '<button class="btn" id="cfgFree">🎮 释放全部显存（暂停任务）</button>' +
-          '<span class="note-gray" style="margin:0">和顶栏「游戏模式」是同一个开关，打完游戏回来点恢复接着跑</span>') +
+      '<button class="btn" id="cfgFree"' + (clearing ? ' disabled' : '') + '>' + (clearing ? '清理中…' : '🧹 清理缓存') + '</button>' +
+      '<span class="note-gray" style="margin:0">取消全部生成和排队，释放模型；项目、素材、成品与配置保留</span>' +
       '<span style="flex:1"></span><button class="btn small" id="cfgGpuRefresh">↻ 刷新</button></div></div>';
   }
 
@@ -79,13 +76,6 @@ window.Pages.config = (function () {
       var box = document.getElementById("cfgRuntime");
       if (box) { box.outerHTML = runtimeCard(); wire(); }
     }).catch(function () {});
-  }
-
-  function gpuAct(url, okMsg) {
-    window.api.post(url, {}).then(function (d) {
-      UI.toast(d && d.refired ? okMsg + "，被打断的那段已重新提交" : okMsg);
-      refreshGpu();
-    }).catch(function (e) { UI.toast("失败：" + e.message, "err"); });
   }
 
   function sel(id, opts, val) {
@@ -460,9 +450,7 @@ window.Pages.config = (function () {
     var r = document.getElementById("cfgReload"); if (r) r.onclick = function () { dirty = false; openFile(current); };
     var ds = document.getElementById("dfSave"); if (ds) ds.onclick = saveDefaults;
     var fr = document.getElementById("cfgFree");
-    if (fr) fr.onclick = function () { gpuAct("/api/gpu/pause", "模型已全部停止，显存已释放"); };
-    var rs = document.getElementById("cfgResume");
-    if (rs) rs.onclick = function () { gpuAct("/api/gpu/resume", "已恢复"); };
+    if (fr) fr.onclick = function () { return window.Shell.clearCache().then(refreshGpu); };
     var gr = document.getElementById("cfgGpuRefresh"); if (gr) gr.onclick = refreshGpu;
 
     /* ── 预设表 ── 选表 / 加 / 删 / 存 / 放弃。
