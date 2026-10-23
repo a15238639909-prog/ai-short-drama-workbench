@@ -305,7 +305,8 @@ def _fill(ins, settings, characters=None, scale_layers=("story",)):
     return out
 
 
-def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, response_format=None):
+def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, response_format=None,
+       _check_context=False):
     """调模型。**瞬时故障要自己扛住**：显存吃紧时（实测 23.1/24.5 GB）长上下文
     请求会让 llama-server 吐 500，一次抖动就让整条链断掉、整段没有片子。
     退避重试三次；三次都不成才把异常抛出去（2026-08-30）。
@@ -320,6 +321,8 @@ def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, respon
         t0 = time.time()
         try:
             _structured = {"response_format": response_format} if response_format else {}
+            if _check_context:
+                _structured["check_context"] = True
             _reply = qwen_client.chat(system, user, temperature=temperature,
                                      max_tokens=mt, reasoning=reasoning, timeout=_to, return_meta=True, **_structured)
             if isinstance(_reply, tuple):
@@ -336,10 +339,11 @@ def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, respon
                         except Exception:
                             pass
                         continue
-                    if _length_retries < 3 and int(mt) < 16000:
+                    output_limit = min(16000, int((_meta or {}).get("context_output_limit") or 16000))
+                    if _length_retries < 3 and int(mt) < output_limit:
                         _length_retries += 1
                         previous_limit = int(mt)
-                        mt = min(16000, max(4000, previous_limit * 2))
+                        mt = min(output_limit, max(4000, previous_limit * 2))
                         _to = int(min(900, 90 + 0.6 * mt))
                         _log_slow_call(time.time() - t0, previous_limit, system, -1,
                             err="输出截断，自动增加当前回复额度至%d tokens（第%d次）" % (mt, _length_retries))
@@ -357,8 +361,9 @@ def _q(system, user, mt=4200, temperature=0.8, _tries=3, reasoning=False, respon
             raise
         except Exception as ex:
             last = ex
-            _log_slow_call(time.time() - t0, mt, system, -1, err=str(ex)[:60])
-            if getattr(ex, "code", None) == "model_output_limit":
+            _log_slow_call(time.time() - t0, mt, system, -1, err=str(ex)[:400])
+            if (getattr(ex, "code", None) == "model_output_limit"
+                    or getattr(ex, "retryable", True) is False):
                 raise
             _failures += 1
             if _failures < _tries:
@@ -13833,12 +13838,31 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
         _ordered_chars = [c for c in group_entities.scoped_cards(_ac.list_assets(sid, "characters") or [], pics) if c.get("name") in _allowed_names]
         from . import reference_ready
         slices = reference_ready.canonical_scene_slices(sid, ep, slices, cards=_scs_all)
+        from . import workbench_story_director as _released_director
+        _writer, _writer_options = director_flow, {}
+        if _released_director.enabled(settings):
+            # Adopt the approved Chinese multi-shot writer for new prompts.
+            # Image identity comes from actual adopted files, not stale cards.
+            _paths = reference_ready.adopted_paths(sid)
+            settings['_director_reference_paths'] = {
+                card['name']: _paths[str(card.get('character_id') or card.get('scene_id') or '')]
+                for card in _ordered_chars + _scs_all
+                if str(card.get('character_id') or card.get('scene_id') or '') in _paths}
+            for _card in _ordered_chars:
+                _card['_has_image'] = _card.get('name') in settings['_director_reference_paths']
+            settings['_director_user_brief'] = '\n'.join(str(value) for value in (
+                settings.get('one_line'), (e or {}).get('brief'),
+                settings.get('extra_requirements'), direction,
+                (e or {}).get('prose') or pics) if value)
+            from . import workbench_director_runtime as _director_runtime
+            _writer = _released_director
+            _writer_options['actual_state_for'] = lambda index: _director_runtime.actual_state_for(sid, ep, index)
         try:
-            return director_flow.make_prompts(slices, _ordered_chars, [s["name"] for s in _scs_all], _q,
+            return _writer.make_prompts(slices, _ordered_chars, [s["name"] for s in _scs_all], _q,
                 settings=settings, start=start, count=count, on_step=on_step, prev_tail=prev_tail, direction=direction,
                 on_prompt=on_prompt, on_error=on_error,
                 trace_dir=(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "节拍表",
-                                       "%s_e%d_连续写词" % (sid, ep)) if on_prompt else None))
+                                       "%s_e%d_连续写词" % (sid, ep)) if on_prompt else None), **_writer_options)
         finally:
             # 旧分镜的对白契约可原地修复；同时保存修复依据，重启后无需再猜。
             # 每次重新读时间轴，保留 on_prompt 已保存的视频、提示词和失败记录。

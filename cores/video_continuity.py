@@ -151,7 +151,7 @@ def scope_prompt(prompt, segment, director=None):
     marker = 'Reference scope (' + REFERENCE_SCOPE_VERSION + '):'
     if marker in sections['detailed_description']:
         return prompt
-    environments = re.findall(r'<Subject\s+(\d+)>[^\n]*the environment from <Picture\s+\d+>',
+    environments = re.findall(r'<Subject\s+(\d+)>[^\n]*the environment(?: from <Picture\s+\d+>)?(?=[.,\s]|$)',
                               sections['subject_definitions'])
     if len(environments) != 1:
         raise ValueError('场景引用范围校验失败：缺少唯一场景主体定义')
@@ -181,6 +181,11 @@ def scope_prompt(prompt, segment, director=None):
                    'Continue completed transfers using the same physical objects; do not duplicate objects or restore their earlier staging from a reference image.')
     wardrobe_rule = ('Keep the latest confirmed garment type, collar, color and coverage from the source and preceding video. '
                      'Sheet clothing supplies a baseline when no current wardrobe state is specified; it must not replace an already established garment.')
+    from .observed_identity_continuity import POLICY
+    if 'Identity authority (' + POLICY + '):' in sections['retention_analysis']:
+        wardrobe_rule = ('Character references define stable face, hair and wardrobe identity. '
+                         'Apply explicit written wardrobe or hairstyle changes in story order; do not restore an earlier outfit after such a change. '
+                         'Preceding video carries pose, position and held objects, but an unapproved face, hair or clothing drift does not become a new design.')
     definitions = []
     for line in sections['subject_definitions'].splitlines():
         if re.match(r'<Subject\s+' + scene_number + r'>', line):
@@ -203,7 +208,10 @@ def scope_prompt(prompt, segment, director=None):
                 line = line.replace('fully_preserved', 'partially_preserved') + shirt_rule
         retained.append(line)
     sections['retention_analysis'] = '\n'.join(retained)
-    note = marker + ' Character references define identity; the set reference defines fixed room structure and lighting. ' + arrival_rule + wardrobe_rule + ' ' + object_rule
+    scene_has_picture = bool(re.search(r'<Subject\s+' + scene_number + r'>[^\n]*<Picture\s+\d+>', sections['subject_definitions']))
+    environment_rule = ('the set reference defines fixed room structure and lighting. ' if scene_has_picture else
+                        'the environment continues its established architecture and lighting from the current story state. ')
+    note = marker + ' Character references define identity; ' + environment_rule + arrival_rule + wardrobe_rule + ' ' + object_rule
     # These notes are staging constraints, not extra spoken lines. Avoid adding
     # quoted dialogue from a director's shorthand to an already voiced prompt.
     start = str((director or {}).get('start_state') or '').strip()

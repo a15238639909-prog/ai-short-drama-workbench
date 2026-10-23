@@ -1055,6 +1055,16 @@ def _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, stat
                 warnings.append('分镜修订格式不可用，保留已验证有效的原提示词')
                 break
             written = prompts.compile_written(draft, request[1])
+            dialogue_adjustments = [item for item in written.get('automatic_adjustments', [])
+                if str(item.get('kind', '')).startswith('dialogue_text_')]
+            if dialogue_adjustments:
+                ambiguous = any(item.get('kind') == 'dialogue_text_overlap_warning' for item in dialogue_adjustments)
+                report = dict(status='warning' if ambiguous else 'normalized',
+                              quality_gate=False, adjustments=dialogue_adjustments)
+                _save(work/'dialogue_text_adjustments.json', report)
+                entry['dialogue_text_adjustments'] = copy.deepcopy(report)
+                if ambiguous:
+                    warnings.append('对白与普通描述存在文字重合，已保留原对白和动作并记录提醒继续')
             stage('第%d/%d段：本地分镜预审%s' % (index, len(plan['beats']), '复核' if revision else ''), index-1)
             review_request = quality.storyboard_request(inputs['story_direction'], inputs['style'],
                 plan, beat, written, state, seconds)

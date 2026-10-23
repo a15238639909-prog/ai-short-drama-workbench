@@ -2380,6 +2380,32 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
             pass
         if _whole:
             n = max(1, _can)
+    # Share the same original-director write/render/observe order as the
+    # storyboard page. Text-only requests retain the existing batch contract.
+    from cores import workbench_director_runtime as _original_runtime
+    if not text_only and _original_runtime.enabled(sid, ep):
+        wanted = list(range(1, min(n, _can or n) + 1))
+        def _original_render(scene_no, no):
+            return _generation_step(j, "video:%d:%d" % (ep, no),
+                lambda: seg_api.render_segment_checked(sid, ep, scene_no, no,
+                    size_tier=size_tier, log_fn=lambda m: _set_step(j, m)),
+                phase="render", model=True, external="video:%d:%d" % (ep, no))
+        def _original_complete(no, reused):
+            _complete_step(j)
+            _complete_step(j)
+            _job_event(j, "info", "第%d段%s，已保存原词和视频" % (no, "已有视频" if reused else "生成完成"))
+        outs = _original_runtime.run_sequence(sid, ep, wanted, render=_original_render,
+            on_step=lambda m: _set_step(j, m), on_complete=_original_complete, size_tier=size_tier)
+        try:
+            from cores import episode_ledger as _ledg
+            _set_step(j, "记这一话结束时的状态账本")
+            _ledg.build(sid, ep)
+        except JobCancelled:
+            raise
+        except Exception as _lx:
+            _job_event(j, "error", "状态账本没记成：" + str(_lx)[:120])
+        _job_event(j, "info", "原版中文导演逐段完成，共保留或生成%d段视频" % len(outs))
+        return outs
     if authoring.use_new_pipeline():
         _set_step(j, "写 %d 段视频提示词" % n)
         try:

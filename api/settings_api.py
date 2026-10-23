@@ -13,6 +13,7 @@ def r_017(h, path, d):
 @post("/api/project/settings")
 def r_026(h, path, d):
     from cores import project_settings, style_presets, character_setup, project_prompt
+    from cores import workbench_story_director
     sid = str(d.get("story_id") or "")
     story = story_core.get_story(sid)
     if not story:
@@ -29,6 +30,7 @@ def r_026(h, path, d):
         # 只提示不拦截：保存照常成功，冲突信息随响应带回去让页面说一声。
         return _RESP({"ok": True, "data": {
             "settings": saved,
+            "director_profile": workbench_story_director.profile_info(story.get('settings') or {}),
             "conflicts": project_prompt.settings_conflicts(saved)}})
     from cores import auto_repair
     raw_scenes = asset_core.list_assets(sid, "scenes")
@@ -66,6 +68,7 @@ def r_026(h, path, d):
         _characters.append(_c)
     return _RESP({"ok": True, "data": {
         "title": story.get("title") or "",
+        "director_profile": workbench_story_director.profile_info(story.get('settings') or {}),
         "settings": ps,
         # 四界四风；老项目的旧值不在名单里时追加一项，免得下拉把它顶成第一项、一保存就改了画风
         "world_types": list(style_presets.WORLD_TYPES) + (

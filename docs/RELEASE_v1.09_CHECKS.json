@@ -1,0 +1,268 @@
+{
+  "version": "1.09",
+  "checked_at": "2026-10-23T06:15:43.577956+00:00",
+  "baseline_commit": "343e04dc9be131c03f2d2aacaa8ccef28b02e405",
+  "tests": 893,
+  "unique_tests": 893,
+  "unique_test_ids": 893,
+  "unique_passed": 892,
+  "unique_failures": 0,
+  "unique_errors": 0,
+  "unique_skipped": 1,
+  "expected_failures": 0,
+  "initial_execution_count": 885,
+  "total_execution_count": 893,
+  "groups": [
+    {
+      "label": "characters_continuation_recovery",
+      "modules": [
+        "tests.test_episode_contract",
+        "tests.test_dialogue_timing",
+        "tests.test_continuation_assets",
+        "tests.test_generation_recovery",
+        "tests.test_h3_request_recovery",
+        "tests.test_video_continuity",
+        "tests.test_segment_render_recovery",
+        "tests.test_character_display_template",
+        "tests.test_short_episode_pipeline",
+        "tests.test_character_image_versions",
+        "tests.test_character_clothing_visibility",
+        "tests.test_episode_scene_references",
+        "tests.test_timeline_generation_completion",
+        "tests.test_new_episode_assets",
+        "tests.test_group_entities",
+        "tests.test_speaker_resolution_recovery",
+        "tests.test_source_authority_recovery",
+        "tests.test_character_story_first",
+        "tests.test_outfit_world_options"
+      ],
+      "discovered": 249,
+      "duplicate_ids_not_rerun": 0,
+      "tests": 249,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "pov_workbench_recovery",
+      "modules": [
+        "tests.test_pov_default_owner",
+        "tests.test_pov_external_viewer",
+        "tests.test_pov_reference_binding",
+        "tests.test_new_project_portraits",
+        "tests.test_h3_pov_picture_slots",
+        "tests.test_h3_reference_image_size",
+        "tests.test_workbench_reference_recovery",
+        "tests.test_workbench_reference_transport",
+        "tests.test_workbench_partial_status",
+        "tests.test_workbench_http_stability",
+        "tests.test_runtime_cache_reset",
+        "tests.test_episode_film_names"
+      ],
+      "discovered": 99,
+      "duplicate_ids_not_rerun": 0,
+      "tests": 99,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "bundled_motion_media",
+      "modules": [
+        "tests.test_bundled_tools",
+        "tests.test_motion_anima_release",
+        "tests.test_motion_v104",
+        "tests.test_finished_products",
+        "tests.test_image_drop",
+        "tests.test_video_geometry_media"
+      ],
+      "discovered": 30,
+      "duplicate_ids_not_rerun": 0,
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true,
+      "initial_round_errors": 1,
+      "isolated_http_cases_passed": 8,
+      "resolution": "Shared-module pollution verified by a fresh-process HTTP recheck"
+    },
+    {
+      "label": "local_story_video",
+      "modules": [
+        "tests.test_story_video_action_format",
+        "tests.test_story_video_asr",
+        "tests.test_story_video_audio_option",
+        "tests.test_story_video_automatic",
+        "tests.test_story_video_automatic_timing",
+        "tests.test_story_video_checkpoint_writes",
+        "tests.test_story_video_cinematic",
+        "tests.test_story_video_client",
+        "tests.test_story_video_continuation",
+        "tests.test_story_video_continue_mode",
+        "tests.test_story_video_core",
+        "tests.test_story_video_dialogue_continue_runtime",
+        "tests.test_story_video_dialogue_recover_cached",
+        "tests.test_story_video_dialogue_text_normalization",
+        "tests.test_story_video_evidence",
+        "tests.test_story_video_flow_optimization",
+        "tests.test_story_video_full_duration",
+        "tests.test_story_video_media",
+        "tests.test_story_video_mode_prompts",
+        "tests.test_story_video_mode_runtime",
+        "tests.test_story_video_offline",
+        "tests.test_story_video_plan_severity",
+        "tests.test_story_video_prompts",
+        "tests.test_story_video_quality",
+        "tests.test_story_video_qwen_port",
+        "tests.test_story_video_reference_continue",
+        "tests.test_story_video_reference_detail",
+        "tests.test_story_video_reference_image_authority",
+        "tests.test_story_video_reference_image_authority_runtime",
+        "tests.test_story_video_reference_inputs",
+        "tests.test_story_video_reference_prompts",
+        "tests.test_story_video_reference_prop_cast",
+        "tests.test_story_video_reference_runtime",
+        "tests.test_story_video_reference_scene_continuity",
+        "tests.test_story_video_reference_shot_range",
+        "tests.test_story_video_reference_speaker_prefix",
+        "tests.test_story_video_resume_integrity",
+        "tests.test_story_video_review_evidence",
+        "tests.test_story_video_runtime",
+        "tests.test_story_video_shot_consistency",
+        "tests.test_story_video_source_continue",
+        "tests.test_story_video_speech_advisory",
+        "tests.test_story_video_staged",
+        "tests.test_story_video_unquoted_source",
+        "tests.test_verify_story_video"
+      ],
+      "discovered": 445,
+      "duplicate_ids_not_rerun": 18,
+      "tests": 427,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "original_director_identity_shot_context",
+      "modules": [
+        "tests.test_workbench_story_director_release",
+        "tests.test_workbench_story_director_trial",
+        "tests.test_workbench_director_runtime",
+        "tests.test_workbench_director_dispatch",
+        "tests.test_original_director_http_release",
+        "tests.test_workbench_scene_entry_render",
+        "tests.test_workbench_director_context_budget",
+        "tests.test_visible_identity_references",
+        "tests.test_observed_identity_continuity",
+        "tests.test_character_continuity_integration",
+        "tests.test_story_video_shot_consistency",
+        "tests.test_qwen_context_budget"
+      ],
+      "discovered": 112,
+      "duplicate_ids_not_rerun": 24,
+      "tests": 88,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "passed": true
+    }
+  ],
+  "node_checks": [
+    {
+      "file": "tests/test_image_drop.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_progress_dismiss.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_taskbar_controls.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_frontend_generation_status.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_runtime_cache_reset.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_settings_pov_owner_ui.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_story_video_reference_ui.js",
+      "passed": true
+    }
+  ],
+  "skipped_tests": [
+    {
+      "test_id": "tests.test_workbench_director_context_budget.DirectorContextBudgetTests.test_project50_saved_requests_keep_all_current_source_and_reduce_payload",
+      "reason": "项目50本地只读日志未随代码分发"
+    }
+  ],
+  "passed": true,
+  "syntax": {
+    "python_files": 283,
+    "json_files": 28,
+    "javascript_files": 30,
+    "reference_only_exceptions": [
+      "presets/8848_底层定义原文.js"
+    ]
+  },
+  "public_files_scanned": 470,
+  "credential_candidates": 0,
+  "public_file_range_passed": true,
+  "audit_findings": [],
+  "model_inference_run": false,
+  "real_ai_media_generated": false,
+  "test_files_retained": true,
+  "required_environment": {
+    "V41_NO_MODEL": "1",
+    "V41_NO_BROWSER": "1",
+    "V41_RELEASE_TEST": "1"
+  },
+  "scope_note": "Release-only regressions. Mocked models and artificial media verify program flow, not AI image quality.",
+  "validation_note": "The first shared-process round is retained separately, including its original class-setup error. A prior test imported server with a placeholder app module; this shared-module pollution was verified in a fresh process and retained source sandbox by executing exactly the eight previously unexecuted real HTTP tests. No business code or already-passed test was changed or rerun. The one private-project trace check is an expected skip because private fixtures are excluded. Final passed means every other planned test and all seven frontend checks passed.",
+  "initial_discovered_test_occurrences": 935,
+  "expected_private_fixture_skips": 1,
+  "unexpected_skipped": 0,
+  "initial_round": {
+    "report": "release-first-round-validation.json",
+    "log": "release-first-round-validation.txt",
+    "unique_passed": 884,
+    "unique_skipped": 1,
+    "framework_errors": 1,
+    "framework_error_test_id": "setUpClass (tests.test_bundled_tools.BundledToolsTest)",
+    "framework_error": "AttributeError: test placeholder module app has no __file__",
+    "tests_not_executed_due_to_framework_error": 8,
+    "original_passed": false
+  },
+  "isolated_http_recheck": {
+    "tests": 8,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": true,
+    "test_ids": [
+      "tests.test_bundled_tools.BundledToolsTest.test_all_five_entries",
+      "tests.test_bundled_tools.BundledToolsTest.test_character_save_and_edit",
+      "tests.test_bundled_tools.BundledToolsTest.test_chat_save_and_read",
+      "tests.test_bundled_tools.BundledToolsTest.test_director_workflows",
+      "tests.test_bundled_tools.BundledToolsTest.test_empty_missing_models_no_side_effect",
+      "tests.test_bundled_tools.BundledToolsTest.test_generation_guards",
+      "tests.test_bundled_tools.BundledToolsTest.test_model_scoped_presets",
+      "tests.test_bundled_tools.BundledToolsTest.test_shared_model_paths"
+    ],
+    "model_inference_run": false,
+    "fixtures_retained": true,
+    "permanent_deletion_disabled": true
+  },
+  "generated_report_json_validated": true
+}

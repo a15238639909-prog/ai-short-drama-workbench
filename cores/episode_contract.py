@@ -265,14 +265,25 @@ def unsupported_departure(model_text, source_text):
 _ACTION = (r'递|接|拿|握|持|提|抱|背(?!影)|扶|拉|推|扛|举|放|捡|拾|搬|扔|藏|取|收|端|托|垂|'
            r'走|跑|跳|踏|迈|爬|穿|坐|站|躺|蹲|跪|靠|倚|转|回头|起身|停|'
            r'看|望|瞥|盯|发现|察觉|听|摸|伸|抬|低头|点头|摇头|喝|吃|'
-           r'说|问|答|喊|叫|笑|哭|敲|拍|按|拧|打开|关闭|挡|挥|刺|砍|搜|寻找|检查|进入|离开|出现|回来|侧身|俯身|躬身')
+           r'说|问|答|喊|叫|笑|哭|敲|拍|按|拧|打开|关闭|挡|挥|刺|砍|搜|寻找|检查|进入|离开|离场|走远|出现|回来|侧身|俯身|躬身')
 _ABSENT = re.compile(r'^(?:(?:已经|已|仍然|仍|早已|突然|却|也|并|不知何时|此时|现在|竟然|竟)\s*)*'
                      r'(?:失踪|不见了|不在(?:场|这里|此处|屋内)|消失(?:了|无踪)|下落不明|尚未到场)')
 _MENTION = re.compile(r'(?:想起|想念|回忆|记得|寻找|找到|提起|提到|关于|听说|梦见|照片中的|画像上的)$')
 _ACTION_MODIFIER = r'(?:(?:正在|正|又|已经|已|先|再|随即|缓缓|慢慢|轻轻|稳稳|立刻|连忙|悄悄|仍然|仍|也|一边|一起|一齐|齐声|异口同声|同时|纷纷|都|共同)\s*)*'
 _BODY_PART = r'(?:左手|右手|双手|手指|指尖|左臂|右臂|双臂|左脚|右脚|双脚|双腿|头部|肩膀|肩头)'
 _NAMED_ACTION = re.compile(r'^' + _ACTION_MODIFIER + r'(?:(?:的)?' + _BODY_PART + r'\s*' + _ACTION_MODIFIER + r')?(?:' + _ACTION + r')')
-_GAZE_ACTION = re.compile(r'^' + _ACTION_MODIFIER + r'(?:的)?(?:目光|视线|眼神)' + _ACTION_MODIFIER + r'(?:落在|移向|转向|停在|扫过|追随|注视)')
+_GAZE_ACTION = re.compile(r'^' + _ACTION_MODIFIER + r'(?:的)?(?:目光|视线|眼神)' + _ACTION_MODIFIER + r'(?:落在|移向|转向|停在|扫过|追随|注视|从)')
+_VISUAL_TARGET = re.compile(
+    r'(?:看向|看着|看回|望向|望着|望回|盯着|注视|凝视|打量|面对|对着|'
+    r'(?:目光|视线|眼神)' + _ACTION_MODIFIER + r'(?:落在|移向|转向|停在|扫过|追随|注视|从))'
+    r'(?:(?:身旁|面前|对面|眼前|一旁)(?:的)?)?$')
+_VISUAL_CONTEXT_SKIP = re.compile(
+    r'想起|想念|回忆|回想|忆起|记得|梦见|梦到|想象|设想|假如|如果|要是|'
+    r'曾经|当年|照片中|照片里|画像上|画像中|屏幕中|屏幕里|画外|镜头外|'
+    r'提起|提到|听说|寻找|失踪|已离场|已经离场|缺席|不在场|不在画面|尚未到场|'
+    r'不要|不能|不应|不得|避免|禁止|不拍|不显示|不出现|没有|并未|未曾|尚未|'
+    r'不曾|不再|(?:不|未|别)(?:看|望|盯|注视|凝视|打量|面对|对视|与|和|跟|同)')
+_VISUAL_PAIR_ACTION = r'(?:(?:一起|共同|正在|正|仍然|仍|并肩|面对面|相对)\s*)*(?:同框|对视|对话|交谈|说话|相视|交换目光|站|坐)'
 
 
 def camera_identity_evidence(camera, chars=(), absent=()):
@@ -285,6 +296,7 @@ def camera_identity_evidence(camera, chars=(), absent=()):
     camera = re.sub(r'“[^”]*”|「[^」]*」|‘[^’]*’|"[^"\n]*"', '', str(camera or ''))
     camera = re.sub(r'(?:台词|旁白|画外音|说|问|答)[：:][^。！？!?；;\n]*', '', camera)
     pattern = re.compile('|'.join(re.escape(a) for a in sorted(aliases, key=len, reverse=True)))
+    paired_after = re.compile(r'^(?:与|和|跟|同|、)(?:' + pattern.pattern + r')' + _VISUAL_PAIR_ACTION)
     excluded = set(absent)
     for clause in re.split(r'[。！？!?；;\n，,]', camera):
         for match in pattern.finditer(clause):
@@ -292,15 +304,18 @@ def camera_identity_evidence(camera, chars=(), absent=()):
             before, after = clause[:match.start()].strip(), clause[match.end():].strip()
             if who in excluded or _MENTION.search(before) or _ABSENT.match(after):
                 continue
-            if (re.search(r'(?:不要|不能|不应|不得|避免|禁止|不拍|不显示|不出现|画外|离场|缺席)', before)
-                    or re.match(r'^(?:的)?(?:照片|画像|名字|消息|传闻|声音|声线|台词)', after)
-                    or re.match(r'^(?:(?:的)?(?:背影|身影|侧影|面部|脸部|侧脸|双手|手部))?(?:(?:仍然|仍|保持|继续|已|已经)\s*)*(?:不出镜|不出现|不在画面|在画外|在镜头外|位于画外|失踪|缺席|已离场)', after)):
+            if (_VISUAL_CONTEXT_SKIP.search(before)
+                    or re.match(r'^(?:的)?(?:照片|画像|名字|消息|传闻|声音|声线|台词|录音)', after)
+                    or re.match(r'^(?:(?:的)?(?:背影|身影|侧影|面部|脸部|侧脸|双手|手部))?(?:(?:仍然|仍|保持|继续|已|已经|昨天|昨日|当年|曾经)\s*)*(?:不出镜|不出现|不在画面|在画外|在镜头外|位于画外|失踪|缺席|离场|离去|离开|走远|消失)', after)):
                 continue
             body = re.match(r'^(?:的)?(?:背影|身影|侧影|面部|脸部|侧脸|正脸|双手|左手|右手|手部|手指|指尖|上半身|全身|肩膀|肩头)', after)
-            framing = (re.search(r'(?:跟随|跟拍|对准|聚焦|拍摄|捕捉|推近至|拉近至|特写|近景|中景|远景|画面中|背景中|前景中|镜头中的?)$', before)
+            framing = (re.search(r'(?:跟随|跟拍|对准|聚焦|拍摄|捕捉|推近至|拉近至|反打|特写|近景|中景|远景|画面中|背景中|前景中|镜头中的?)$', before)
                        or re.match(r'^(?:的)?(?:特写|近景|中景|远景)', after))
             action = not before and (_NAMED_ACTION.match(after) or _GAZE_ACTION.match(after))
-            if body or framing or action:
+            target = _VISUAL_TARGET.search(before)
+            paired = paired_after.match(after) or (re.search(r'(?:与|和|跟|同|、)$', before)
+                                                   and re.match(r'^' + _VISUAL_PAIR_ACTION, after))
+            if body or framing or action or target or paired:
                 if who not in result['names']:
                     result['names'].append(who)
                 result['evidence'].append({'name': who, 'evidence': clause.strip(), 'role': 'visible_if_framed'})
@@ -311,7 +326,7 @@ def presence_evidence(source, chars=()):
     """Return only explicit actor/absence evidence, never all named entities."""
     aliases = {a: n for a, n in _aliases(chars).items() if a and a not in ('他', '她', '你', '我')}
     if not aliases:
-        return {'actors': [], 'absent': [], 'evidence': []}
+        return {'actors': [], 'absent': [], 'evidence': [], 'visible': [], 'visual_identity_candidates': []}
     actions, absent, facts = [], [], []
     # Dialogue content can mention missing people; do not treat it as action.
     script, _, _ = prepare_source(source, chars)
@@ -333,14 +348,18 @@ def presence_evidence(source, chars=()):
                 facts.append({'name': who, 'presence': 'interaction', 'evidence': clause.strip()})
             if not subject or _MENTION.search(before):
                 continue
-            if _ABSENT.match(after):
+            if _ABSENT.match(after) or re.match(r'^(?:已经|已|早已)(?:离开|离场|走远)', after):
                 if who not in absent:
                     absent.append(who)
                 facts.append({'name': who, 'presence': 'absent', 'evidence': clause.strip()})
             elif _NAMED_ACTION.match(after) or _GAZE_ACTION.match(after):
                 if who not in actions:
                     actions.append(who)
-                if who in absent:
+                departing = (next(_departure_matches(who + after, source=True), None)
+                             or re.match(r'^' + _ACTION_MODIFIER + r'(?:离开|离场|走远)', after))
+                if departing and who not in absent:
+                    absent.append(who)
+                elif not departing and who in absent:
                     absent.remove(who)
                 facts.append({'name': who, 'presence': 'action', 'evidence': clause.strip()})
     counts = []
@@ -367,7 +386,9 @@ def presence_evidence(source, chars=()):
                 anonymous_minimum += count if count is not None else 2
         else:
             participants.add(name)
+    visible = camera_identity_evidence(narrative, chars, absent)
     return {'actors': actions, 'absent': absent, 'evidence': facts,
+            'visible': visible['names'], 'visual_identity_candidates': visible['evidence'],
             'minimum_action_participants': len(participants) + anonymous_minimum,
             'group_entities': groups, 'explicit_group_counts': counts}
 

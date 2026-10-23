@@ -694,6 +694,17 @@ def run_job(tid):
                     draft = candidate
                     written = characters.bind_delivery(draft, request[1], cards, refs,
                         compiler=advisory_compiler if budget_advisory else prompts.compile_written)
+                    dialogue_adjustments = [item for item in written.get('automatic_adjustments', [])
+                        if str(item.get('kind', '')).startswith('dialogue_text_')]
+                    if dialogue_adjustments:
+                        ambiguous = any(item.get('kind') == 'dialogue_text_overlap_warning'
+                                        for item in dialogue_adjustments)
+                        report = dict(status='warning' if ambiguous else 'normalized',
+                                      quality_gate=False, adjustments=dialogue_adjustments)
+                        _save(work / 'dialogue_text_adjustments.json', report)
+                        if ambiguous:
+                            _warning(manifest, '第%d段 dialogue_text' % index, report,
+                                '对白与普通描述文字重合，保留原对白和动作并记录提醒继续')
                     budget_notes = [row for row in written.get('automatic_adjustments', [])
                                     if row.get('kind') == 'speech_budget_warning']
                     if budget_notes:

@@ -409,6 +409,122 @@ def _normalize_chinese_shot_ranges(description, seconds):
     return normalized, adjustments
 
 
+_DIALOGUE_QUOTE = re.compile(r'“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*"|\'[^\'\r\n]*\'')
+_SPEECH_VERB = (r'(?:回答道|回应道|说道|问道|答道|喊道|叫道|念道|唱道|说出|读出|念出|唱出|喊出|'
+                r'回答|回应|询问|复述|朗读|说|问|答|喊|叫|念|唱)'
+                r'(?:了)?(?:一句|一声)?\s*[：:，,]?\s*')
+_SPEECH_END = re.compile(_SPEECH_VERB + r'$')
+_WRITTEN_CONTEXT = re.compile(r'写着|写下|书写|字样|文字|字幕|题字|刻着|印着|标着|标注|显示|'
+                              r'屏幕|标牌|牌面|纸上|书页|书面|题名|书名|店名|歌名|名为|标题|名字|命名')
+_VOICE_CONTEXT = re.compile(r'(?:音色(?:描述)?|声线(?:描述)?|声音描述|声音特征)\s*[：:][^；;。\r\n]*$')
+
+
+def _speech_letters(text):
+    return ''.join(char for char in text if char.isalnum())
+
+
+def _dialogue_overlap_evidence(text, words):
+    """Locate punctuation-insensitive text overlap, without classifying it as speech."""
+    positions = [index for index, char in enumerate(text) if char.isalnum()]
+    compact = ''.join(text[index] for index in positions)
+    evidence, offset = [], 0
+    while words and (found := compact.find(words, offset)) >= 0:
+        start, stop = positions[found], positions[found + len(words) - 1] + 1
+        evidence.append(dict(source_start=start, source_end=stop, from_text=text[start:stop]))
+        offset = found + len(words)
+    return evidence
+
+
+def _normalize_dialogue_text(result, content, slots):
+    """Remove only proven spoken copies; ordinary lexical overlap is advisory.
+
+    All spans refer to the original field, never the caller's object. The fixed
+    dialogue rows retain their words, identity, order and timing. Quoted writing
+    and voice metadata remain evidence, rather than guessed extra speech.
+    """
+    groups = {}
+    for index, slot in enumerate(slots):
+        words = _speech_letters(slot['text'])
+        if words:
+            group = groups.setdefault(words, dict(text=slot['text'], line_indices=[]))
+            group['line_indices'].append(index)
+    if not groups:
+        return
+    adjustments = result.setdefault('automatic_adjustments', [])
+    fields = [(field, value) for field, value in content.items()]
+    fields += [('dialogue[%d].delivery' % index, line['delivery'])
+               for index, line in enumerate(result['dialogue'])]
+    for field, original in fields:
+        candidates = []
+        for match in _DIALOGUE_QUOTE.finditer(original):
+            words = _speech_letters(match.group()[1:-1])
+            if words not in groups:
+                continue
+            prefix = original[:match.start()]
+            clause = re.split(r'[。！？!?；;\r\n]', prefix)[-1]
+            cue = _SPEECH_END.search(prefix)
+            # Quotes alone do not establish speech: object names and visible
+            # text can contain the same words. Only a quote-only delivery may
+            # omit the speaking verb, since its field already owns performance.
+            remainder = original[:match.start()] + original[match.end():]
+            remainder = re.sub(r'<Subject\s+\d+>', '', remainder, flags=re.I)
+            quote_only_delivery = field.startswith('dialogue[') and not _speech_letters(remainder)
+            if not cue and not quote_only_delivery:
+                continue
+            if not cue and (_WRITTEN_CONTEXT.search(clause) or _VOICE_CONTEXT.search(clause)):
+                continue
+            start = cue.start() if cue else match.start()
+            candidates.append(dict(source_start=start, source_end=match.end(),
+                from_text=original[start:match.end()], form='quoted_complete_line', **groups[words]))
+        for words, group in groups.items():
+            letters = r'[\s，,、：:…—-]*'.join(re.escape(char) for char in words)
+            # A speaking verb and a whole utterance boundary are both required.
+            # Thus “好” never deletes the “好” in “好奇”, “好看” or a voice trait.
+            spoken = re.compile(_SPEECH_VERB + letters + r'(?=$|[，,。.!！?？；;\r\n])')
+            for match in spoken.finditer(original):
+                if any(match.start() < row['source_end'] and match.end() > row['source_start']
+                       for row in candidates):
+                    continue
+                candidates.append(dict(source_start=match.start(), source_end=match.end(),
+                    from_text=match.group(), form='attributed_complete_line', **group))
+        candidates.sort(key=lambda row: (row['source_start'], -row['source_end']))
+        accepted = []
+        for row in candidates:
+            if not accepted or row['source_start'] >= accepted[-1]['source_end']:
+                accepted.append(row)
+        value = original
+        for row in reversed(accepted):
+            start, stop = row['source_start'], row['source_end']
+            separator = '，' if (start and stop < len(value) and
+                re.match(r'[\u4e00-\u9fff]', value[start-1]) and
+                re.match(r'[\u4e00-\u9fff]', value[stop])) else ''
+            value = value[:start] + separator + value[stop:]
+        if accepted:
+            value = re.sub(r'([，,：:；;])(?:\s*[，,：:；;])+', r'\1', value)
+            if field.startswith('dialogue['):
+                value = value.strip(' \t\r\n，,。.!！?？；;：:、')
+                if not re.search(r'[\u4e00-\u9fff]', value):
+                    value = (value + '，' if value else '') + '自然清楚地说话'
+            elif not re.search(r'[\u4e00-\u9fffA-Za-z0-9]', value):
+                value = 'N/A' if field == 'non_diegetic_music' else '现场环境声。'
+            adjustments.append(dict(kind='dialogue_text_deduplicated', field=field,
+                                    count=len(accepted), matches=accepted))
+        for words, group in groups.items():
+            overlap = _dialogue_overlap_evidence(value, words)
+            if overlap:
+                adjustments.append(dict(kind='dialogue_text_overlap_warning', field=field,
+                    count=len(overlap), matches=overlap, **group,
+                    evidence_scope='normalized_field',
+                    reason='文字重合无法确定为重复发声，保留原描述并继续，尚未验证成片发声'))
+        if field in content:
+            content[field] = value
+            result[field] = value
+        else:
+            result['dialogue'][int(re.search(r'\[(\d+)\]', field)[1])]['delivery'] = value
+    if not adjustments:
+        result.pop('automatic_adjustments', None)
+
+
 def compile_written(obj, payload):
     """Mechanical Chinese transport; no creative repair, media choice or mutation."""
     if not isinstance(obj, dict) or not isinstance(payload, dict):
@@ -439,12 +555,34 @@ def compile_written(obj, payload):
         elif re.search(r'<\s*(?:Subject|Picture|Video|Audio)\s+\d+\s*>', value, re.I):
             raise ValueError('图生或文生正文不能自行定义参考素材')
         content[field] = value.strip()
+    from .story_video_shot_consistency import assert_shot_consistency
+    assert_shot_consistency(content['integrated_multimodal_description'], refs)
     for field in ('brief', 'expected_end_state'):
         value = result.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(field + '须为非空中文字符串')
         _assert_chinese(value, field)
     _timeline(result, seconds)
+    slots = payload.get('dialogue_slots') or []
+    lines = result.get('dialogue')
+    if not isinstance(lines, list) or len(lines) != len(slots):
+        raise ValueError('dialogue须逐项覆盖固定原话')
+    for line, slot in zip(lines, slots):
+        if any(line.get(key) != slot[key] for key in ('speaker', 'text')):
+            raise ValueError('对白说话者、原字和顺序须与计划一致')
+        delivery = line.get('delivery')
+        if not isinstance(delivery, str):
+            raise ValueError('delivery须为非空中文身份、语气与表演')
+        delivery = re.sub(r'\s*' + re.escape('(' + slot['speaker_id'] + ')'), '', delivery).strip()
+        _assert_chinese(delivery, 'delivery')
+        if re.search(r'</?d>|\{\{|\(S\d+\)', delivery, re.I):
+            raise ValueError('delivery不能自行绑定对白标签与编号')
+        if mode == 'ref2va':
+            _check_references(delivery, refs)
+        elif re.search(r'<\s*(?:Subject|Picture|Video|Audio)\s+\d+\s*>', delivery, re.I):
+            raise ValueError('图生或文生delivery不能引用额外素材')
+        line['delivery'] = delivery
+    _normalize_dialogue_text(result, content, slots)
     description, range_adjustments = _normalize_chinese_shot_ranges(content[CONTENT_FIELDS[0]], seconds)
     description = base._normalize_shot_format(description)
     if range_adjustments:
@@ -459,28 +597,10 @@ def compile_written(obj, payload):
         result.setdefault('automatic_adjustments', []).append(
             dict(kind='requested_live_action_style_zh', source='visual_style'))
     result[CONTENT_FIELDS[0]] = description
-    slots = payload.get('dialogue_slots') or []
-    lines = result.get('dialogue')
-    if not isinstance(lines, list) or len(lines) != len(slots):
-        raise ValueError('dialogue须逐项覆盖固定原话')
     events = []
     for line, slot in zip(lines, slots):
-        if any(line.get(key) != slot[key] for key in ('speaker', 'text')):
-            raise ValueError('对白说话者、原字和顺序须与计划一致')
         delivery = line.get('delivery')
-        if not isinstance(delivery, str):
-            raise ValueError('delivery须为非空中文身份、语气与表演')
-        delivery = re.sub(r'\s*' + re.escape('(' + slot['speaker_id'] + ')'), '', delivery).strip()
         _assert_chinese(delivery, 'delivery')
-        if re.search(r'</?d>|\{\{|\(S\d+\)', delivery, re.I):
-            raise ValueError('delivery不能自行绑定对白标签与编号')
-        if slot['text'] in '\n'.join([*content.values(), delivery]):
-            raise ValueError('对白原字仅放在dialogue，不能在正文或delivery重复')
-        if mode == 'ref2va':
-            _check_references(delivery, refs)
-        elif re.search(r'<\s*(?:Subject|Picture|Video|Audio)\s+\d+\s*>', delivery, re.I):
-            raise ValueError('图生或文生delivery不能引用额外素材')
-        line['delivery'] = delivery
         start = line['start']
         events.append((start, 'At %02d:%06.3f, %s (%s), <d>[%s] %s</d>.' %
             (int(start // 60), start % 60, delivery.rstrip('，。,. '),

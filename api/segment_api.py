@@ -3,9 +3,10 @@
 
 时间轴上的一格 = 一段视频（≤15秒）。用户在页面上点「生成这一段」走这里。
 
-参考图怎么给，沿用 A/B 实测的结论（见 cores/video_layer.generation_plan）：
-  · 新场景的第一段 → ref2va，人物图 + 场景图把人和空间立起来
-  · 同地点接着上一段 → i2va，上一段的结束帧直接当第 1 帧，接缝无痕
+参考图按计划里的场景进出决定：
+  · 进入场景的第一段 → 人物图 + 当前场景图
+  · 同一场景的后续段 → 仅人物图，依照当前剧情状态衔接
+已提交请求使用原始快照恢复，避免更改输入后重复生成。
 """
 import json
 import hashlib
@@ -48,12 +49,12 @@ def _apply(sid, scene_no, seg_no, patch, ep=None):
         return g
 
 
-def new_pack(sid, g, ep=None):
+def new_pack(sid, g, ep=None, include_scene=True, require_scene=True):
     """新链路（<SubjectN> 提示词）的参考图包：人物卡顺序 + 场景卡，
     和提示词里 <Subject 1..N> / <Picture 1..N> 一一对应，顺序不能乱。
     图在独立的 visuals 表里按 owner_id 关联，只认已采用版。"""
     from cores import reference_ready
-    reference_ready.assert_references(sid, [g], ep=ep)
+    reference_ready.assert_references(sid, [g], ep=ep, include_scene=include_scene and require_scene)
     adopted = {}
     for v in (asset_core.list_assets(sid, "visuals") or []):
         if str(v.get("status") or "") != "adopted":
@@ -96,6 +97,8 @@ def new_pack(sid, g, ep=None):
         if p:
             imgs.append(p)
     # 场景图：这一段绑了哪张（g["scene"]）就只带那张；没绑就带全部有图的（老段兼容）
+    if not include_scene:
+        return imgs
     _want = str((g or {}).get("scene") or "")
     _scene_cards = asset_core.list_assets(sid, "scenes") or []
     if _want and ep is not None:
@@ -323,10 +326,14 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
         {"seconds": g.get("seconds"), "over": g.get("over")}, g.get("scene") or "")
 
 
-def _render_references(sid, g, ep=None):
+def _render_references(sid, g, ep=None, include_scene=True):
     picked = [r for r in (g.get('refs') or []) if r.get('n')]
+    if not include_scene:
+        scene_names = {str(c.get('name') or '') for c in asset_core.list_assets(sid, 'scenes') or []}
+        character_names = {str(c.get('name') or '') for c in asset_core.list_assets(sid, 'characters') or []}
+        picked = [r for r in picked if r['n'] not in scene_names or r['n'] in character_names]
     if not picked:
-        return new_pack(sid, g, ep=ep)
+        return new_pack(sid, g, ep=ep, include_scene=include_scene)
     by_name = _adopted_paths(sid)
     missing = [r['n'] for r in picked if not by_name.get(r['n']) or not os.path.isfile(by_name[r['n']])]
     if missing:
@@ -334,8 +341,68 @@ def _render_references(sid, g, ep=None):
     return [by_name[r['n']] for r in picked]
 
 
-def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, override=None):
+def _scene_policy_active(g, fresh=False):
+    from cores import scene_reference_policy as policy
+    request = (g or {}).get('render_request') or {}
+    if request.get('key') and request.get('status') == 'pending':
+        return request.get('scene_reference_policy') == policy.VERSION
+    if fresh:
+        return True
+    if (g or {}).get('video') and (g or {}).get('render_input_signature'):
+        return request.get('scene_reference_policy') == policy.VERSION
+    return True
+
+
+def _scene_picture_slots(sid, g, ep=None):
+    """Identify set pictures by asset ownership or an explicit subject definition."""
+    from cores import reference_bindings as bindings
+    catalog = bindings.adopted_catalog(sid)
+    slots = set()
+    counts = {c['name']: sum(row['name'] == c['name'] for row in catalog) for c in catalog}
+    for line in bindings._definition_lines(str(g.get('prompt') or '')):
+        if re.search(r'the environment from <Picture\s+\d+>', line):
+            slots.update(int(number) for number in re.findall(r'<Picture\s+(\d+)>', line))
+        for card in catalog:
+            if card['role'] == 'scene':
+                number = bindings._picture_for(line, card, counts[card['name']] == 1)
+                if number is not None:
+                    slots.add(number)
+    if slots:
+        # The stored prompt predates a user's reordered image selection. Its
+        # explicit bindings identify the old slots; selection positions do not.
+        return slots
+    picked = [row for row in (g.get('refs') or []) if row.get('n')]
+    if picked:
+        scene_names = {row['name'] for row in catalog if row['role'] == 'scene'}
+        character_names = {row['name'] for row in catalog if row['role'] == 'character'}
+        slots.update(index for index, row in enumerate(picked, 1)
+                     if row['n'] in scene_names and row['n'] not in character_names)
+    else:
+        paths = new_pack(sid, g, ep=ep, require_scene=False)
+        scene_paths = {os.path.normcase(os.path.abspath(row['path'])) for row in catalog
+                       if row['role'] == 'scene' and row.get('path')}
+        slots.update(index for index, path in enumerate(paths, 1)
+                     if os.path.normcase(os.path.abspath(path)) in scene_paths)
+    return slots
+
+
+def _include_scene_reference(sid, g, ep, tl, active):
+    from cores import scene_reference_policy as policy
+    if not active or policy.include_scene(sid, g, ep=ep, timeline=tl):
+        return True
+    if is_new_prompt(g.get('prompt')):
+        try:
+            policy.strip_scene_images(str(g.get('prompt') or ''), _scene_picture_slots(sid, g, ep=ep))
+        except ValueError:
+            # Unrecognized custom bindings retain their original evidence.
+            # A transport-policy update must not corrupt dialogue or stop a job.
+            return True
+    return False
+
+
+def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, override=None, fresh=False):
     from cores import video_continuity as vc
+    from cores import scene_reference_policy as policy
     from models import h3_client as h3
     st, tl = _load(sid, ep)
     sc, g = _seg_of(tl, int(scene_no or 1), int(seg_no))
@@ -348,8 +415,12 @@ def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, overrid
     previous = vc.previous_segment(st, tl, ep, scene_no, seg_no)
     if str(os.environ.get('V41_RELAY') or '').lower() == 'none':
         previous = None
-    refs = _render_references(sid, g, ep=ep) if is_new_prompt(g.get('prompt')) else director_pack(sid, g)[2]
-    signature = vc.segment_signature(g, params, previous, refs)
+    active = _scene_policy_active(g, fresh=fresh)
+    include_scene = _include_scene_reference(sid, g, ep, tl, active)
+    refs = (_render_references(sid, g, ep=ep, include_scene=include_scene)
+            if is_new_prompt(g.get('prompt')) else director_pack(sid, g, ep=ep, include_scene=include_scene)[2])
+    signature_params = dict(params, scene_reference_policy=policy.VERSION) if active else params
+    signature = vc.segment_signature(g, signature_params, previous, refs)
     return st, tl, sc, g, params, previous, refs, signature
 
 
@@ -413,7 +484,9 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         raise RuntimeError("第 %s 段还没有提示词" % seg_no)
     if is_new_prompt(prompt):
         from cores import reference_ready
-        reference_ready.assert_references(sid, [g], ep=ep)
+        from cores import scene_reference_policy as policy
+        include_scene = _include_scene_reference(sid, g, ep, tl, _scene_policy_active(g, fresh=True))
+        reference_ready.assert_references(sid, [g], ep=ep, include_scene=include_scene)
     # 严重问题不能只标红后继续烧视频额度。新提示词会把确定性问题写进
     # critical_problems；旧时间轴也在这里按现有字段补算一次。
     critical = _render_critical_problems(st, tl, g, prompt, ep, seg_no)
@@ -422,7 +495,10 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         raise ValueError("第 %s 段提示词待修复：%s" % (seg_no, "；".join(str(x) for x in critical[:3])))
     from cores import video_continuity as vc
     st, tl, sc, g, params, previous, base_refs, signature = _render_context(
-        sid, ep, scene_no, seg_no, size_tier, hd, override)
+        sid, ep, scene_no, seg_no, size_tier, hd, override, fresh=True)
+    from cores import scene_reference_policy as policy
+    scene_policy = _scene_policy_active(g, fresh=True)
+    include_scene = _include_scene_reference(sid, g, ep, tl, scene_policy)
     seed = (override or {}).get('seed')
     if seed is None and (hd or (override or {}).get('same_seed')):
         seed = g.get('seed')
@@ -455,15 +531,17 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         # 「自定义作品」传了自己的图也白传（2026-09-05 查出）。和 gen_segment 同一套规则。
         imgs = base_refs
         h3p = prompt
+        if scene_policy and not include_scene:
+            h3p = policy.strip_scene_images(h3p, _scene_picture_slots(sid, g, ep=ep))
         if not same_pending_request() and any(ref.get('n') for ref in (g.get('refs') or [])):
             from cores import reference_bindings
             h3p, reference_binding_audit = reference_bindings.rebind_prompt(
-                h3p, imgs, new_pack(sid, g, ep=ep), reference_bindings.adopted_catalog(sid))
+                h3p, imgs, new_pack(sid, g, ep=ep, include_scene=include_scene), reference_bindings.adopted_catalog(sid))
         # 【姿势参考】上一段的最后一帧当第 N 张参考图，只参考姿势/位置/构图
         # （用户 2026-09-02 提法，实验 V13a：接口几乎无缝，脸没换）。
-        prev = previous['segment'] if previous else None
+        prev = previous['segment'] if previous and not scene_policy else None
         pef = str((prev or {}).get("end_frame") or "")
-        if previous and (not pef or not os.path.isfile(pef)):
+        if previous and not scene_policy and (not pef or not os.path.isfile(pef)):
             pef = str(Path(prev['video']).with_suffix('')) + '_handoff_' + uuid.uuid4().hex[:8] + '.png'
             extracted = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-sseof', '-0.1',
                                         '-i', prev['video'], '-frames:v', '1', pef], capture_output=True, timeout=120)
@@ -504,7 +582,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             h3p = vc.handoff_prompt(h3p, frame_number, g, previous, d,
                                     appearance_number=appearance_number)
     else:
-        _ok, _names_, imgs, h3p = director_pack(sid, g)
+        _ok, _names_, imgs, h3p = director_pack(sid, g, ep=ep, include_scene=include_scene)
     secs = float(g.get("seconds") or 12)
     if not frozen:
         resuming_legacy = same_pending_request()
@@ -517,7 +595,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             h3p = vc.scope_prompt(h3p, g, d)
         request.update({
             'final_prompt': h3p, 'final_refs': list(imgs),
-            'resolved_params': {'mode': 'ref2va', 'seconds': min(15, max(4, int(round(secs)))),
+            'resolved_params': {'mode': 'ref2va' if imgs else 't2va', 'seconds': min(15, max(4, int(round(secs)))),
                                 'ratio': params['ratio'], 'size_tier': params['size_tier'],
                                 'steps': params['steps'], 'seed': seed},
             'reference_scope_version': (vc.REFERENCE_SCOPE_VERSION
@@ -529,6 +607,11 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         })
         if reference_binding_audit is not None:
             request['reference_binding_audit'] = reference_binding_audit
+        if scene_policy:
+            request['scene_reference_policy'] = policy.VERSION
+            request['scene_image_included'] = include_scene
+            if include_scene and not policy.include_scene(sid, g, ep=ep, timeline=tl):
+                request['reference_policy_note'] = '自定义场景绑定无法安全转换，本次保留原参考包并继续，未改对白或重新写词'
     resolved = request['resolved_params']
     if not isinstance(resolved, dict) or any(k not in resolved for k in ('mode', 'seconds', 'ratio', 'size_tier', 'steps', 'seed')):
         raise ValueError('待恢复的视频参数快照不完整，已保留原任务，不能更换参数后重复提交')
@@ -539,7 +622,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         raise ValueError('参考图在生成前发生变化，已暂停，不能移动图片编号后继续生成')
     if len(imgs) > 9:
         raise ValueError('参考图超过9张，请调整本段引用，不能截断图片编号')
-    if not imgs:
+    if not imgs and not (scene_policy and not include_scene and resolved['mode'] == 't2va'):
         raise RuntimeError("第 %s 段没有参考图——先去 🗂 资源 生成并采用人物和场景的设定图" % seg_no)
     vc.validate_prompt_references(h3p, imgs)
     if log_fn:
@@ -561,7 +644,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         receipt['status'] = 'invalid_media'
         h3._save_receipt(request['key'], receipt)
         raise ValueError('视频校验失败：' + str(exc)) from exc
-    if _render_context(sid, ep, scene_no, seg_no, size_tier, hd, override)[-1] != signature:
+    if _render_context(sid, ep, scene_no, seg_no, size_tier, hd, override, fresh=True)[-1] != signature:
         raise RuntimeError('输入已改变：本次视频文件已保留，不覆盖当前分镜，请按新内容继续生成')
     from cores import saga_core as _sgc
     out = _sgc.seg_video_path(sid, ep, scene_no, seg_no, hd=hd)   # P237 文件名带话号
@@ -569,7 +652,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
     if os.path.exists(out):
         out = str(Path(out).with_suffix('')) + '__' + uuid.uuid4().hex[:8] + '.mp4'
     shutil.copy2(src, out)
-    patch = {"mode": "ref2va", "seed": r.get("seed"),
+    patch = {"mode": resolved['mode'], "seed": r.get("seed"),
              "used_refs": [os.path.basename(x) for x in imgs],
              "h3_prompt_sent": h3p,
              "h3_prompt_sha256": request['final_prompt_sha256'],
@@ -1633,7 +1716,7 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
     return final
 
 
-def director_pack(sid, g):
+def director_pack(sid, g, ep=None, include_scene=None):
     """导演段的最终出片包：(是不是导演段, 参考图名单, 图片路径, 送H3的完整提示词)。
 
     出片（gen_segment）和提示词预审用的是**同一个函数**——给用户过目的提示词
@@ -1667,9 +1750,14 @@ def director_pack(sid, g):
     else:
         hide = set(str(x) for x in (g.get("ref_hide") or []))
         names = [n for n in names if n not in hide]
+    if include_scene is None:
+        from cores import scene_reference_policy as policy
+        include_scene = policy.include_scene(sid, g, ep=ep)
+    if not include_scene:
+        names = [name for name in names if name not in scn_names or name in _names(sid)]
     byname = _adopted_paths(sid)
     names = [n for n in names if byname.get(n) and os.path.exists(byname[n])][:9]
-    if not picked and _wants_scene_ref(body):
+    if include_scene and not picked and _wants_scene_ref(body):
         hit = director.seg_location(sid, body)
         if hit and hit not in names and byname.get(hit) and os.path.exists(byname[hit]):
             names = (names + [hit])[:9]
@@ -1751,8 +1839,10 @@ def gen_segment(h, path, d):
 
     if is_new_prompt(g.get("prompt")):
         from cores import reference_ready
+        from cores import scene_reference_policy as policy
         try:
-            reference_ready.assert_references(sid, [g], ep=_ep_of(sid))
+            include_scene = _include_scene_reference(sid, g, _ep_of(sid), tl, _scene_policy_active(g, fresh=True))
+            reference_ready.assert_references(sid, [g], ep=_ep_of(sid), include_scene=include_scene)
         except RuntimeError as error:
             return _RESP({"ok": False, "error": str(error)}, 400)
     critical = _render_critical_problems(st, tl, g, str(g.get("prompt") or ""), _ep_of(sid), sno)

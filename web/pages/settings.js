@@ -5,6 +5,14 @@ window.Pages.settings = (function () {
   var KD = {};
   var D = null, draft = null, loadVersion = 0;
   function esc(s) { return UI.esc(s); }
+  function directorProfileBadge() {
+    var p = (D || {}).director_profile;
+    if (!p || p.id !== "original-story-zh-v1" || p.label !== "原版中文多镜头导演" ||
+        p.status !== "formal" || p.scope !== "new-prompts") return "";
+    return '<div class="note-gray" data-director-profile="' + esc(p.id) + '" style="margin:0 0 10px">' +
+      '<span class="badge completed">' + esc(p.label) + '·正式版</span>' +
+      '新写的视频提示词生效；已有提示词和视频保留。</div>';
+  }
   function ph(label, id, val, ph, note) {
     return '<p style="margin:0 0 8px"><label style="display:block;font-size:14px;color:#5a5348;margin-bottom:4px">' + label + "</label>" +
       '<input id="' + id + '" value="' + esc(val) + '" placeholder="' + esc(ph) + '" style="width:100%;height:36px;padding:0 12px">' +
@@ -1132,7 +1140,7 @@ window.Pages.settings = (function () {
       visualText = [visualText, legacyGuide].filter(Boolean).join("；");
     }
     var _split = ((s.story_mode || ((s.story_plan && (s.story_plan.episodes || []).length) ? "split" : "single")) === "split");
-    main.innerHTML = '<div class="setwrap">' +
+    main.innerHTML = '<div class="setwrap">' + directorProfileBadge() +
       /* P452：单话模式一张卡——项目名 → 第一话讲什么（slotIdea）→ 选项 → 尺度 → 按钮（slotActions）；split 模式保持旧的两张卡 */
       (_split ? '<div id="slotIdea"></div><div class="card project-setup-card"><h3 style="font-size:16px">偏好与生成参数</h3>'
               : '<div class="card project-setup-card"><h3 style="font-size:16px">① 故事设定</h3>') +

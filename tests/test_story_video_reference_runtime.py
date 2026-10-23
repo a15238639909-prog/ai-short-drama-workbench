@@ -55,7 +55,8 @@ class Handle:
 
 
 class ReferenceRuntimeTests(unittest.TestCase):
-    def _flow(self, scene=True, guided=False, quality_failure=None, pause_second=False):
+    def _flow(self, scene=True, guided=False, quality_failure=None, pause_second=False,
+              writer_reply_hook=None):
         folder, task, plan = fixture(scene, guided)
         stages, requests, generated = [], [], []
         initial = [True]
@@ -80,13 +81,15 @@ class ReferenceRuntimeTests(unittest.TestCase):
                 if pause_second and initial[0] and payload['beat']['index'] == 2:
                     raise reference.core.ControlStop()
                 self.assertNotIn('少年男声', str(payload))
-                return dict(integrated_multimodal_description='[Shot 1] 中景展现四位14～15岁少年自然观察。前五秒查看线索，中间五秒交流回应。\n\n[Shot 2] At 00:10.000, 镜头切至侧前方近景，最后五秒呈现人物的选择和表情。',
+                value = dict(integrated_multimodal_description='[Shot 1] 中景展现四位14～15岁少年自然观察。前五秒查看线索，中间五秒交流回应。\n\n[Shot 2] At 00:10.000, 镜头切至侧前方近景，最后五秒呈现人物的选择和表情。',
                     overall_soundscape='自然风声与脚步声。', non_diegetic_music='N/A', brief='自然理解并回应。',
                     expected_end_state='四位少年继续自然互动。',
                     timeline=[dict(start=start, end=start + 5, action='自然交流', visible_result='人物反应可见') for start in (0, 5, 10)],
                     dialogue=[dict(speaker=line['speaker'], text=line['text'], start=.5 + index * 3,
                         end=2 + index * 3, delivery='自然回应') for index, line in enumerate(payload['dialogue_slots'])],
                     continuity_notes=[])
+                return (writer_reply_hook(value, request, directory, validator)
+                        if writer_reply_hook else value)
             if stage == 'storyboard_review':
                 if quality_failure:
                     trace = directory / 'call_1_fixture' / 'text_fixture'

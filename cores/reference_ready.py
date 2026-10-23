@@ -206,7 +206,7 @@ def ensure_characters(sid, ep, on_step=None):
     return result
 
 
-def assert_references(sid, segments, ep=None):
+def assert_references(sid, segments, ep=None, include_scene=True):
     from . import asset_core, authoring, story_core, group_entities
     all_cards = asset_core.list_assets(sid, "characters") or []
     char_paths = adopted_paths(sid, "character")
@@ -232,7 +232,7 @@ def assert_references(sid, segments, ep=None):
         card = scene_cards.get(scene)
         if scene and not card and ep is not None:
             card = resolve_scene_card(sid, ep, scene, list(scene_cards.values()))
-        if scene and str((card or {}).get("scene_id") or "") not in scene_paths:
+        if include_scene and scene and str((card or {}).get("scene_id") or "") not in scene_paths:
             missing.append("场景「%s」" % scene)
     if missing:
         raise MissingReferencesError("缺少已采用且文件有效的参考图：%s。请补图或上传并采用后再生成视频。" % "、".join(dict.fromkeys(missing)))

@@ -319,7 +319,7 @@ def source_plan_fallback(payload):
             return
         body = '\n'.join(u['text'] for u in current)
         presence = contract.presence_evidence(body, [{'name': name} for name in names])
-        cast = list(dict.fromkeys(presence['actors'] + [spoken[u['dialogue_id']]['speaker']
+        cast = list(dict.fromkeys(presence['actors'] + presence['visible'] + [spoken[u['dialogue_id']]['speaker']
             for u in current if u.get('dialogue_id') and spoken[u['dialogue_id']]['speaker'] in names]))
         narrative = [u['text'] for u in current if not u.get('dialogue_id')]
         end_state = '\n'.join(narrative[-2:]) or '当前原文第%d条台词已说完，承接上一镜状态。' % end
@@ -451,7 +451,7 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                        'units': units,
                        'continuity_contract': {
                            'source_presence': contract.presence_evidence(event, chars),
-                           'rules': 'cast包含本镜实际行动者和说话人；仅被提及、被寻找或已失踪的人不能因此在场。承接state_context中的人数、姿势、携带关系、道具归属和地点；发生变化必须有原文动作依据。end_state明确留下谁、谁离开以及手中物和姿势，不能把整个项目人物表当作本镜在场表。'},
+                           'rules': 'cast包含本镜实际行动者和说话人，以及原文视线目标、明确同框对象的身份参考；参考槽位不要求全员出镜。仅被提及、被寻找或已失踪的人不能因此在场。承接state_context中的人数、姿势、携带关系、道具归属和地点；发生变化必须有原文动作依据。end_state明确留下谁、谁离开以及手中物和姿势，不能把整个项目人物表当作本镜在场表。'},
                        'dialogue': [{'id': u['dialogue_id'], 'speaker': dialogue[u['dialogue_id']-1][0],
                                      'text': dialogue[u['dialogue_id']-1][1]}
                                     for u in units if u['dialogue_id']]}
@@ -481,8 +481,11 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                     presence['absent'] = progress['absent']
                     ids = [u['dialogue_id'] for u in current if u['dialogue_id']]
                     visible = contract.camera_identity_evidence(shot.get('camera'), chars, presence['absent'])
-                    presence['visual_identity_candidates'] = visible['evidence']
-                    required = list(dict.fromkeys([dialogue[d-1][0] for d in ids] + presence['actors'] + visible['names']))
+                    presence['visible'] = [name for name in presence['visible'] if name not in presence['absent']]
+                    presence['visual_identity_candidates'] = [row for row in presence['visual_identity_candidates']
+                        if row['name'] not in presence['absent']] + visible['evidence']
+                    required = list(dict.fromkeys([dialogue[d-1][0] for d in ids] + presence['actors']
+                                                 + presence['visible'] + visible['names']))
                     # A source voice without an individual card is still valid
                     # speech. It is not an instruction to invent another person.
                     required = [name for name in required if name in names]
@@ -563,9 +566,15 @@ def _clip(sl, number, chars, speakers, prior, settings, direction):
     presence['absent']=list(dict.fromkeys(progress['absent'] + [n for n in (d.get('presence') or {}).get('absent', [])
                                                              if n not in presence['actors']]))
     visible=contract.camera_identity_evidence(camera, chars, presence['absent'])
-    presence['visual_identity_candidates']=visible['evidence']
+    presence['visible']=[name for name in presence['visible'] if name not in presence['absent']]
+    presence['visual_identity_candidates']=[row for row in presence['visual_identity_candidates']
+        if row['name'] not in presence['absent']] + visible['evidence']
     names.update(presence['actors'])
+    names.update(presence['visible'])
     names.update(visible['names'])
+    current_speakers={u['speaker'] for u in content if u.get('dialogue_id')}
+    names.difference_update(name for name in presence['absent']
+                            if name not in presence['actors'] and name not in current_speakers)
     d['cast']=[c['name'] for c in chars if c['name'] in names]
     d['presence']=presence
     # Same expanded card order as segment_api.new_pack; collective member cards
@@ -771,7 +780,8 @@ def repair_slice_source(sl, chars, q, on_step=None, trace=None):
     candidate.update(blocks=blocks, says=says, source_contract_version=contract.VERSION,
                      source_contract={'original_blocks': copy.deepcopy(director.get('blocks')), 'reports': reports})
     candidate['presence'] = contract.presence_evidence('\n'.join(b[2] for b in blocks), chars)
-    required = list(dict.fromkeys([name for name, _ in says] + candidate['presence']['actors']))
+    required = list(dict.fromkeys([name for name, _ in says] + candidate['presence']['actors']
+                                 + candidate['presence']['visible']))
     candidate['cast'] = list(dict.fromkeys((candidate.get('cast') or []) + required))
     candidate['cast'] = [name for name in candidate['cast']
                          if name not in candidate['presence']['absent'] or name in required]

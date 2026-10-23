@@ -183,8 +183,11 @@ def tl_get(h, path, d):
     if not st:
         return _RESP({"ok": False, "error": "故事不存在"}, 404)
     _rec = _recover(sid, tl, _ep_of(sid))     # P237 找回要按话号找
+    from cores import workbench_story_director as _original_director
+    _director_profile = _original_director.profile_info(st.get("settings") or {})
     return _RESP({"ok": True, "data": {
         "timeline": tl,
+        "director_profile": _director_profile,
         "recover_notes": _rec,                # 老片子认不出属于哪一话时，页面要能看见
 
         "characters": asset_core.list_assets(sid, "characters"),
@@ -986,15 +989,18 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
                 tg = list(tl.get("opening") or _op0.ensure(sid, ep) or []) + tg     # P316：开场段绑的人物/场景一起补图
         except Exception:
             pass
+        from api import segment_api as _segment_refs
+        scene_needs = [(_g, _segment_refs._include_scene_reference(
+            sid, _g, ep, tl, _segment_refs._scene_policy_active(_g, fresh=True))) for _g in tg]
         chars = []
         scenes = []
-        for g in tg:
+        for g, need_scene in scene_needs:
             for nm in (g.get("chars") or []):
                 nm = str(nm or "").strip()
                 if nm and nm not in chars:
                     chars.append(nm)
             s = str(g.get("scene") or "").strip()
-            if s and s not in scenes:
+            if need_scene and s and s not in scenes:
                 scenes.append(s)
         adopted = set()
         for v in asset_core.list_assets(sid, "visuals"):
@@ -1057,7 +1063,8 @@ def _ensure_refs(sid, ep, targets, j, chk, JC):
 
     # 自动补图可以分别失败，但缺图不能静默进入 H3。
     from cores import reference_ready
-    reference_ready.assert_references(sid, tg, ep=ep)
+    for segment, need_scene in scene_needs:
+        reference_ready.assert_references(sid, [segment], ep=ep, include_scene=need_scene)
 
 
 def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
@@ -1194,6 +1201,30 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                          note="%s；前 %d 段视频都已出完" % (_cut_note, _limit))
                 return
             targets = [t for t in targets if t <= _limit]
+
+        # The original Chinese director consumes actual prior frames. Only its
+        # missing current prompt is written before rendering; frozen rows stay.
+        from cores import workbench_director_runtime as _original_runtime
+        if not prompts_only and _original_runtime.enabled(sid, ep):
+            total = _au.total_segments(sid, ep)
+            targets = [t for t in targets if not total or t <= total]
+            if not targets:
+                j.update(running=False, status="completed", step="已到结尾")
+                return
+            j["total"], j["done"] = len(targets) * 2, 0
+            def _original_prepare(no):
+                _ensure_refs(sid, ep, [no], j, _chk, _Cancelled)
+            def _original_render(scene_no, no):
+                return _seg.render_segment_checked(sid, ep, scene_no, no,
+                    size_tier=size_tier, log_fn=_chk)
+            def _original_complete(no, reused):
+                j["done"] = min(j["total"], j["done"] + 2)
+            outs = _original_runtime.run_sequence(sid, ep, targets,
+                render=_original_render, prepare=_original_prepare, on_step=_chk,
+                on_complete=_original_complete, size_tier=size_tier)
+            j.update(running=False, status="completed", step="完成",
+                note="原版中文导演逐段完成，共保留或生成 %d 段视频" % len(outs))
+            return
 
         # ① 提示词：补到第 first+n-1 段为止（已有的不重写）
         j["step"] = "写第 %d~%d 段的视频提示词" % (targets[0], targets[-1])

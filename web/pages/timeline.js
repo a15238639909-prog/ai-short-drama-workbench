@@ -18,6 +18,14 @@ window.Pages = window.Pages || {};
 (function () {
   var esc = function (s) { return window.UI.esc(s); };
   var D = { timeline: { scenes: [] }, characters: [], scenes: [] };
+  function directorProfileBadge() {
+    var p = (D || {}).director_profile;
+    if (!p || p.id !== "original-story-zh-v1" || p.label !== "原版中文多镜头导演" ||
+        p.status !== "formal" || p.scope !== "new-prompts") return "";
+    return '<div class="note-gray" data-director-profile="' + esc(p.id) + '" style="margin:0 0 10px">' +
+      '<span class="badge completed">' + esc(p.label) + '·正式版</span>' +
+      '新写的视频提示词生效；已有提示词和视频保留。</div>';
+  }
   var ST = null;        // shell 传进来的 state（它不挂 window）
   var cur = 1;          // 当前场
   var seg = 0;          // 当前段
@@ -416,7 +424,7 @@ window.Pages = window.Pages || {};
     var sc = scene();
     /* #tlPreview 在工具条之下、视频条之上：出片前先看一遍每段讲什么，再点确认 */
     /* P353（用户 9-14 定）：出片前预览、确认按钮、对话框、问题清单全部去掉——只留段卡片和提示词框 */
-    main.innerHTML = '<div class="tlpage">' + bar(sc) +
+    main.innerHTML = '<div class="tlpage">' + directorProfileBadge() + bar(sc) +
       (sc ? timeline(sc) + panel(sc)
           : '<div class="tl-empty">还没有内容。点「🎬 生成」</div>') +
       '<div class="job" id="jobBox" style="display:none"></div></div>';

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """qwen_client.py — V4.1 clean-room Qwen3.6 文本客户端（llama-server :8080）。"""
-import json, os, subprocess, threading, time, urllib.request, urllib.error
+import json, os, re, subprocess, threading, time, urllib.request, urllib.error
 from .gpu_manager import QWEN_PORT
 
 QWEN_URL = os.environ.get("V41_QWEN_URL", "http://127.0.0.1:%d" % QWEN_PORT)
@@ -261,8 +261,102 @@ def budget_reset(limit=None):
     except Exception:
         pass
 
+class ModelContextError(RuntimeError):
+    code = "model_context_limit"
+    retryable = False
+
+    def __init__(self, message, *, input_tokens=None, context_window=None,
+                 requested_output_tokens=None, context_output_limit=None):
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.context_window = context_window
+        self.requested_output_tokens = requested_output_tokens
+        self.context_output_limit = context_output_limit
+
+
+class ModelHTTPError(RuntimeError):
+    code = "model_http_error"
+
+    def __init__(self, status, message, response_body):
+        super().__init__("文字模型请求失败（HTTP %s）：%s" % (status, message))
+        self.http_status = status
+        self.response_body = response_body
+        self.retryable = status in (408, 429) or status >= 500
+
+
+class ContextCheckError(RuntimeError):
+    code = "model_context_check_unavailable"
+    retryable = False
+
+
+def _http_error(error):
+    try:
+        body = error.read().decode("utf-8", "replace")
+    finally:
+        error.close()
+    message = body.strip() or str(error)
+    try:
+        detail = json.loads(body)
+        detail = detail.get("error", detail) if isinstance(detail, dict) else detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or message)
+        elif isinstance(detail, str):
+            message = detail
+    except ValueError:
+        pass
+    match = re.search(r"request \((\d+) tokens\).*?context size \((\d+) tokens\)",
+                      message, re.I | re.S)
+    if match or any(term in message.lower() for term in
+                    ("context_length_exceeded", "exceeds the available context",
+                     "maximum context length", "context window exceeded")):
+        count, capacity = (map(int, match.groups()) if match else (None, None))
+        failure = ModelContextError("文字模型上下文超限：" + message,
+                                    input_tokens=count, context_window=capacity)
+        failure.http_status = error.code
+        failure.response_body = body
+        return failure
+    return ModelHTTPError(error.code, message, body)
+
+
+def _request_json(path, payload=None, timeout=10):
+    request = urllib.request.Request(QWEN_URL.rstrip("/") + path,
+        data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as error:
+        raise _http_error(error) from error
+
+
+def _check_context_budget(payload):
+    try:
+        props = _request_json("/props")
+        capacity = props["default_generation_settings"]["n_ctx"]
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0:
+            raise ValueError("服务未返回有效的上下文容量")
+        counted = _request_json("/v1/chat/completions/input_tokens", payload)
+        count = counted["input_tokens"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("服务未返回有效的输入token数量")
+    except ModelContextError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, ModelHTTPError) as error:
+        raise ContextCheckError("文字模型额度检查不可用，已停止本次写词：" + str(error)) from error
+    output_limit = max(0, capacity - count - 32)
+    requested = payload["max_tokens"]
+    if requested > output_limit:
+        raise ModelContextError(
+            "文字模型上下文容量不足：输入 %d tokens，加回复预留 %d tokens及安全余量32 tokens，"
+            "超过服务容量 %d tokens；请精简当前请求后重试。" % (count, requested, capacity),
+            input_tokens=count, context_window=capacity,
+            requested_output_tokens=requested, context_output_limit=output_limit)
+    return dict(context_window=capacity, context_output_limit=output_limit,
+                context_input_tokens=count)
+
+
 def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
-         reasoning=None, return_meta=False, response_format=None):
+         reasoning=None, return_meta=False, response_format=None, check_context=False):
     from cores.age_policy import assert_model_request, assert_model_response
 
     if os.environ.get("V41_NO_MODEL"):
@@ -304,14 +398,12 @@ def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
                 payload[_k] = _v
     if response_format is not None:
         payload["response_format"] = response_format
-    body = json.dumps(payload).encode("utf-8")
     t0 = time.time()
-    req = urllib.request.Request(QWEN_URL + "/v1/chat/completions", data=body,
-                                 headers={"Content-Type": "application/json"})
     from cores import runtime_reset
     runtime_reset.assert_current()
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        obj = json.loads(response.read().decode("utf-8", "replace"))
+    context_meta = _check_context_budget(payload) if check_context else {}
+    runtime_reset.assert_current()
+    obj = _request_json("/v1/chat/completions", payload, timeout=timeout)
     from cores import runtime_reset
     runtime_reset.assert_current()
     choice = obj["choices"][0]
@@ -331,6 +423,7 @@ def chat(system, user, temperature=0.7, max_tokens=3600, timeout=1800,
             "reasoning_content_len": len(str(msg.get("reasoning_content") or "")),
             "reasoning_content": str(msg.get("reasoning_content") or ""),
         }
+        meta.update(context_meta)
         return content, meta
     return content
 

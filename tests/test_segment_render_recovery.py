@@ -52,6 +52,9 @@ class SegmentRenderRecoveryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(api, '_save', side_effect=self.save))
         self.stack.enter_context(patch.object(api, '_render_params', return_value=('0.7', '16:9', 25)))
         self.stack.enter_context(patch.object(api, '_render_critical_problems', return_value=[]))
+        # These recovery fixtures retain the legacy relay contract. The scene
+        # entry contract is exercised separately with its real policy enabled.
+        self.stack.enter_context(patch.object(api, '_scene_policy_active', return_value=False))
         # These fixtures test renderer boundaries, not six-field prompt syntax.
         self.scope = self.stack.enter_context(patch.object(vc, 'scope_prompt', side_effect=lambda prompt, *_: prompt))
         self.stack.enter_context(patch.object(api, 'new_pack', side_effect=lambda *a, **kw: [str(p) for p in self.refs]))

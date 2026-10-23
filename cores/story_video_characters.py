@@ -460,6 +460,10 @@ def bind_delivery(raw, payload, cards, refs, compiler=None):
     if [(line['speaker'], line['text']) for line in result['dialogue']] != [
             (line['speaker'], line['text']) for line in raw['dialogue']]:
         raise ValueError('编译改变了原说话者或逐字台词')
+    for row, line in zip(audit, result['dialogue']):
+        if row['final_delivery'] != line['delivery']:
+            row['pre_normalization_delivery'] = row['final_delivery']
+            row['final_delivery'] = line['delivery']
     result['voice_binding_audit'] = audit
     return result
 
