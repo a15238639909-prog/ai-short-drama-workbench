@@ -163,9 +163,17 @@ def write(sid, no, on_step=None):
     if target is None:
         raise ValueError("生成期间这一话已删除")
     changed = before != uw.signature({"settings": latest.get("settings"), "episodes": sg.get("episodes")})
-    if changed or not str(result.get('prose') or '').strip():
-        target.update(prose_draft=result["prose"], writing_attempt=result["review"])
+    blocked = bool(result.get('review', {}).get('production_blocked'))
+    if changed or not str(result.get('prose') or '').strip() or blocked:
+        attempt = copy.deepcopy(result['review'])
+        for key in ('revision', 'revision_error', 'revision_skipped'):
+            if key in result:
+                attempt[key] = copy.deepcopy(result[key])
+        attempt['writing_request'] = result.get('request') or getattr(uw.write, 'last_request', '')
+        target.update(prose_draft=result["prose"], writing_attempt=attempt)
         saga_core.save_saga(sid, sg)
+        if blocked:
+            raise uw.DraftNotReady(result)
         raise ValueError("本轮正文留作草稿，没有覆盖旧稿：" + ("生成期间输入有变化" if changed else "模型正文为空"))
     if result['review']['verdict'] in ('fail', 'unknown') and not result['review'].get('source_authority') and on_step:
         on_step('正文核对仍有提示，保留核对记录并继续；未标记为核对通过')

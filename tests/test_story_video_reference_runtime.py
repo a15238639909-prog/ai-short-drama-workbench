@@ -220,9 +220,12 @@ class ReferenceRuntimeTests(unittest.TestCase):
                 self.assertTrue(all(row['storyboard']['status'] == 'unavailable' for row in result['segments']))
                 self.assertTrue(all('passed' not in row['storyboard'] for row in result['segments']))
 
-    def test_service_unavailable_is_not_swallowed_as_optional_quality(self):
-        with self.assertRaisesRegex(RuntimeError, '服务不可用'):
-            self._flow(quality_failure='network')
+    def test_optional_service_outage_preserves_unknown_report_and_continues(self):
+        _, _, result, output, _, _, generated = self._flow(quality_failure='network')
+        self.assertEqual(len(generated), 2)
+        self.assertTrue(output['generation_completed'])
+        self.assertTrue(all(row['storyboard']['status'] == 'unavailable' for row in result['segments']))
+        self.assertTrue(all('passed' not in row['storyboard'] for row in result['segments']))
 
     def test_only_latest_native_response_can_prove_optional_truncation(self):
         folder = Path(tempfile.mkdtemp(prefix='reference_quality_trace_'))

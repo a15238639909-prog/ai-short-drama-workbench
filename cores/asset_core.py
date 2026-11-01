@@ -16,6 +16,8 @@ def list_assets(story_id, kind):
         if d:
             if kind == "characters":
                 d = normalize_character(d)
+            elif kind == "scenes":
+                d = effective_scene_card(d)
             out.append(d)
     return sorted(out, key=lambda x: x.get("created", 0))
 
@@ -24,13 +26,55 @@ _ID_FIELD = {"characters": "character_id", "scenes": "scene_id",
 
 def get_asset(story_id, kind, aid):
     d = store.load_json(assets_path(story_id, kind) / (aid + ".json"), None)
-    return normalize_character(d) if d and kind == "characters" else d
+    if d and kind == "characters":
+        return normalize_character(d)
+    return effective_scene_card(d) if d and kind == "scenes" else d
 
 def save_asset(story_id, kind, data):
     fid = _ID_FIELD.get(kind, kind + "_id")
     payload = normalize_character(data, for_storage=True) if kind == "characters" else data
     store.save_json(assets_path(story_id, kind) / (payload[fid] + ".json"), payload)
     return data
+
+
+def effective_scene_card(data):
+    """Read one coherent scene baseline without changing the stored card.
+
+    Confirmed design fields supersede earlier automatic extraction. A snapshot
+    identifies fields subsequently edited by the user; legacy user-edited cards
+    remain authoritative when no such per-field history exists.
+    """
+    card = dict(data or {})
+    if not card.get('design'):
+        return card
+    from . import authoring
+    designs = authoring.parse_design(card['design'])
+    design = next((d for d in designs if d.get('name') in
+                   (card.get('name'), card.get('design_title'))),
+                  designs[0] if len(designs) == 1 else None)
+    if not design:
+        return card
+    fields = authoring._design_fields(design)
+    baseline = card.get('design_fact_snapshot')
+    if not isinstance(baseline, dict):
+        baseline = None
+    # Determine user edits before projecting a newly confirmed design. Otherwise
+    # the projection itself can be mistaken for a manual space edit.
+    space_changed = baseline is not None and card.get('space') != baseline.get('space')
+    contract_changed = baseline is not None and card.get('contract_text') != baseline.get('contract_text')
+    for key, value in fields['design_fact_snapshot'].items():
+        if baseline is not None:
+            edited = key in card and card.get(key) != baseline.get(key)
+        else:
+            edited = bool(card.get('edited_by_user') and key in card)
+        if not edited:
+            card[key] = value
+    # These two fields are aliases of the same fact, not two competing spaces.
+    if contract_changed and not space_changed:
+        card['space'] = card.get('contract_text') or ''
+    else:
+        card['contract_text'] = card.get('space') or card.get('contract_text') or ''
+    return card
 
 
 def normalize_character(data, for_storage=False):
@@ -284,6 +328,7 @@ def adopt_visual(story_id, visual_id):
 def generate_character_master(story_id, character_id, style_profile="电影级写实", quality="formal",
                               custom_prompt=None):
     from models import krea_client
+    from cores import main_images
     c = get_asset(story_id, "characters", character_id)
     if not c:
         raise ValueError("人物不存在")
@@ -303,25 +348,29 @@ def generate_character_master(story_id, character_id, style_profile="电影级�
     # 手动稿直接使用；自动稿与批量、提示词窗口共用同一文字入口。
     # “左臂戴护腕”等衣物位置不是伤残事实；此处不再从左右部位词推断断肢。
     if str(custom_prompt or "").strip():
-        prompt = str(custom_prompt).strip()
+        prompt = str(custom_prompt)
     else:
-        from cores import authoring as _au
-        prompt = _au.write_char_sheet(story_id, c, c.get("_project") or {})
+        prompt = main_images.write_character(story_id, c, c.get("_project") or {})
    
 
     # Turbo 检查点 + 两段式：7 步 / cfg 1.0。尺寸是**出底**，成品是它的 1.5 倍。
     # 正式 1920×1080 → 2880×1616：四视图并排时每格才有 700+ 像素承载脸部细节。
     steps = 5 if quality == "preview" else 7
     wh = (1280, 720) if quality == "preview" else (1920, 1080)
-    res = krea_client.generate(prompt, width=wh[0], height=wh[1], steps=steps)
+    settings = c.get("_project") or {}
+    options = main_images.current(settings)
+    res = (main_images.generate(prompt, settings, quality=quality) if options['model'] == 'moss'
+           else krea_client.generate(prompt, width=wh[0], height=wh[1], steps=steps))
     version = len([v for v in list_assets(story_id, "visuals")
                    if v.get("owner_id") == character_id and v.get("kind", "").startswith("character")]) + 1
     v = add_approved_visual(story_id, "character_master", character_id, version, res["output_path"],
                             style_profile=style_profile, prompt=prompt)
+    v = main_images.record_visual(story_id, v, res, settings)
     quality_core.build_manifest(output_id=v["visual_id"], story_id=story_id,
                                 production_type="character_master", style_profile_name=style_profile,
-                                model="krea2", model_mode="txt2img", prompt=prompt,
-                                parameters={"character_contract_version": c.get("version", 1)},
+                                model=options['model'], model_mode="txt2img", prompt=prompt,
+                                parameters=dict(main_images.generation_parameters(res, settings),
+                                                character_contract_version=c.get("version", 1)),
                                 output_path=res["output_path"])
     return v, prompt
 
@@ -342,6 +391,7 @@ _SCENE_SMALL = ("血迹", "血泊", "血水", "黑血", "灰烬", "残骸", "信
 def scene_indoor(card):
     """室内外由代码定，不信模型：景名/空间描述里有殿厅室房堂教室…且没写露天就是室内。"""
     import re as _re
+    card = effective_scene_card(card)
     s = str(card.get("name") or "") + str(card.get("space") or card.get("contract_text") or "")[:60]
     _nm = str(card.get("name") or "")
     _sp0 = str(card.get("space") or card.get("contract_text") or "")[:8]
@@ -354,14 +404,80 @@ def scene_indoor(card):
     return bool(_re.search(r"内部|殿内|室内|大殿|厅|书房|卧室|房间|地牢|牢房|教室|走廊|船舱|洞内|堂|阁|殿", s))
 
 
-def scene_design_user(card, one, cast=None):
-    """设计稿 → 出图用户文本（正式版和实验室共用）。
-    只给：室内外（代码定）、空间、戏区方位（去掉人名列）、意图、一件镇场主体、光、纵深（去掉前景遮挡段）。
-    人物痕迹不进图——场景图是干净的底，人物和小件由视频阶段带进去（用户 2026-09-06 定）。"""
+def _scene_board_static_text(value, names=()):
+    """Remove explicit story residues from a board projection, not source facts.
+
+    Garment stock, fixed locks and existing damage remain scene facts. Only
+    clearly temporary clothing on general furniture and completed lock actions
+    are handled here; an ordinary closed door is not inferred to be temporary.
+    """
     import re as _re
-    indoor = scene_indoor(card)
+    text = str(value or "")
+    garments = r"(?:衣物|衣服|外套|披风|上衣|衬衣|衬衫|裙子|长裙|短裙|长裤|围巾|手套)"
+    support = r"(?:椅背|木椅|椅子|沙发|床沿|床边|床面|地毯|地板|地面|桌面)"
+    placement = r"(?:搭|丢|扔|堆|落|搁|放)(?:着|在)"
+    human = r"(?:人物|两个人|三个人|(?:两|二|三)人(?![高宽长深大小])|[他她](?:们的?|的)"
+    if names:
+        human += "|" + "|".join(_re.escape(n) for n in names)
+    human += ")"
+    reflection = human + r"[^，。；｜\n]{0,24}(?:倒影|影子|投影|剪影|身影)"
+
+    def clean_clause(clause):
+        if _re.search(reflection, clause):
+            return ""
+        # "已反锁" is an action result; "反锁装置/铜制门锁" is hardware.
+        clause = _re.sub(r"(?:已经|现已|此时已|刚刚|刚|随后|最终|已)(?:被)?"
+                         r"(?:反锁|上锁|锁上|锁住)(?:了)?(?:的)?", "", clause)
+        clause = _re.sub(r"(?:处于)?关闭反锁状态|处于反锁状态|反锁后的", "", clause)
+        # An intentional display can contain clothing even on a seat or table.
+        if _re.search(r"陈列|展陈|展品|商品|展示", clause):
+            return clause
+        # Retain the named support instead of dropping the whole furniture fact.
+        # "右侧木椅上搭着刚脱下的外套" -> "右侧木椅".
+        attached = (r"(?P<support>" + support + r")(?:上|边|处)?(?:面)?"
+                    + placement + r"(?:的)?[^，。；｜\n]*" + garments
+                    + r"[^，。；｜\n]*")
+        clause = _re.sub(attached, lambda m: m.group('support'), clause)
+        # "黑色外套搭在右侧木椅上" -> "右侧木椅".
+        subject = (r"^[^，。；｜\n]*" + garments + r"(?:被)?" + placement
+                   + r"(?P<support>[^，。；｜\n]*" + support + r")(?:上|边|处)?[^，。；｜\n]*$")
+        clause = _re.sub(subject, lambda m: m.group('support'), clause)
+        if _re.search(r"(?:刚脱下|脱下|脱掉|褪下|临时放置|临时堆放)的?[^，。；｜\n]*" + garments, clause):
+            return ""
+        return clause
+
+    parts = _re.split(r"([，,。；;｜|\n])", text)
+    result = "".join(clean_clause(part) if i % 2 == 0 else part
+                     for i, part in enumerate(parts))
+    result = _re.sub(r"[，,；;]+(?=[。\n]|$)", "", result)
+    result = _re.sub(r"(?:^|(?<=[。\n]))[，,；;。]+", "", result)
+    return _re.sub(r"。{2,}", "。", result).strip()
+
+
+def scene_image_card(card, cast=None):
+    """Shared source-fact curation for empty scene reference boards."""
+    import re as _re
+    card = effective_scene_card(card)
     # 人物卡名字整个删掉：设计稿的一句话空间/光/戏区里常带人名（"照亮沈青"），写提示词的模型见名就画人
     names = sorted({str(n).strip() for n in (cast or []) if str(n).strip()}, key=len, reverse=True)
+    # Historical design cards projected 【人物痕迹】 into furniture. That column
+    # belongs to story continuity; fixed set furnishings already live in fixtures.
+    # Preserve furniture manually changed after the accepted design snapshot.
+    if card.get('design') and card.get('furniture'):
+        from . import authoring
+        designs = authoring.parse_design(card['design'])
+        design = next((d for d in designs if d.get('name') in
+                       (card.get('name'), card.get('design_title'))),
+                      designs[0] if len(designs) == 1 else None)
+        if design and card.get('furniture') == design.get('traces'):
+            card['furniture'] = ''
+    board_fields = ('space', 'contract_text', 'furniture', 'fixtures', 'depth',
+                    'light', 'ground', 'walls', 'door', 'window', 'landmarks',
+                    'materials', 'regions', 'fixed_landmarks', 'base_light_color',
+                    'layout')
+    for key in board_fields:
+        if isinstance(card.get(key), str):
+            card[key] = _scene_board_static_text(card[key], names)
     def _strip(x):
         x = strip_headcount(str(x or ""))     # P218「中央是三人围坐的圆桌」→「中央是圆桌」
         for n in names:
@@ -386,6 +502,16 @@ def scene_design_user(card, one, cast=None):
     # P157：设计稿里的人多半是称呼（老对手、爸爸、二姨），不在人物卡名字表里。按分句再删一遍。
     _pseg = r"[^，。；｜\n]*(?:" + _PERSON_RE + r")[^，。；｜\n]*[，；]?"
     card = {k: (_re.sub(_pseg, "", v) if isinstance(v, str) else v) for k, v in card.items()}
+    return card
+
+
+def scene_design_user(card, one, cast=None):
+    """设计稿 → 出图用户文本（正式版和实验室共用）。
+    只给：室内外（代码定）、空间、戏区方位（去掉人名列）、意图、一件镇场主体、光、纵深（去掉前景遮挡段）。
+    人物痕迹不进图——场景图是干净的底，人物和小件由视频阶段带进去（用户 2026-09-06 定）。"""
+    import re as _re
+    indoor = scene_indoor(card)
+    card = scene_image_card(card, cast)
     space = str(card.get("space") or card.get("contract_text") or "").strip()
     space = _re.sub(r"^(室内|室外)[，,、 ]*", "", space)
     depth = [seg.strip() for seg in _re.split(r"[｜|\n]", str(card.get("depth") or ""))
@@ -867,7 +993,7 @@ def generate_scene_master(story_id, scene_id, style_profile=None, quality="forma
     两个参数保留只为兼容旧调用方，参考板不再用它们。
     """
     from models import krea_client
-    from cores import prompt_writer as _pw, project_settings as _pset, story_core as _sc
+    from cores import prompt_writer as _pw, project_settings as _pset, story_core as _sc, main_images
     sc = get_asset(story_id, "scenes", scene_id)
     if not sc:
         raise ValueError("场景不存在")
@@ -881,30 +1007,43 @@ def generate_scene_master(story_id, scene_id, style_profile=None, quality="forma
         P = dict(P, style=style_profile)
 
     if str(custom_prompt or "").strip():
-        prompt = str(custom_prompt).strip()
+        prompt = str(custom_prompt)
+    elif main_images.current(P, kind='scene')['model'] == 'moss':
+        # Moss layouts are structured JSON; the legacy Krea text repairs below
+        # must never run over their captions, keys or coordinates.
+        prompt = main_images.write_scene(story_id, sc, P)
     else:
         # 参考板只描述空间本身：地点+内外+时间 +【空间】【布局】【材质】【主光】【标志物】
-        _card = dict(sc)
+        from .scene_condition import condition_for_scene, positive_condition, project_condition_facts
+        from .scene_prompt_content import ScenePromptContentError, validate_scene_prompt
+        condition = condition_for_scene(_story, sc,
+            scene_names=[str(c.get('name') or '') for c in list_assets(story_id, 'scenes')])
+        _cast = [str(c.get('name') or '') for c in list_assets(story_id, 'characters')
+                 if c.get('name')]
+        _card = scene_image_card(sc, _cast)
+        _card = project_condition_facts(_card, condition)
+        _card['layout'] = scene_layout_for_image(_card.get('layout'))
         if not str(_card.get("space") or "").strip():
-            _card["space"] = sc.get("contract_text") or scene_action or ""
+            _card["space"] = _card.get("contract_text") or _card.get("name") or ""
         one = _pw.scene_plate_one_line(_card)
-        # 【2026-08-28 用户定】场景设计师改读故事正文直供：旧链路
-        # 正文→编剧压成60字【空间】→再压一句话→Qwen扩写，两次压缩把尺度氛围
-        # 全漏光，出图全是闭塞小房间。现在把正文全文一并喂给场景设计师，
-        # 让它自己提取该场景的全部描写（场景图_指令词 新版信息来源规则）。
-        _user = "【场景基本信息】%s\n【场景布局】%s" % (one, sc.get("layout") or "无")
-        try:
-            from cores import saga_core as _sg
-            _e = _sg.episode(_sg.get_saga(story_id), int(sc.get("episode") or 1)) or {}
-            if str(_e.get("prose") or "").strip():
-                _user += "\n\n【故事正文】\n" + str(_e["prose"]).strip()
-        except Exception:
-            pass
+        # The reference board is the opening set, not a frame after the story.
+        # Only curated spatial facts reach the image writer; episode prose and
+        # its later action results remain available to video generation.
+        _user = "【场景基本信息】%s\n【场景布局】%s" % (
+            one, scene_layout_for_image(_card.get("layout")) or "无")
         # 【美术指导设计稿】2026-09-06：卡上有设计稿就按设计稿出图，不再喂正文全文
         # （正文让 Qwen 滑回剧情插图；设计稿已经把意图/主体/戏区/光/尺度定死，
         # 实验十五、十六实测同 seed 出图更大更干净）。
         if str(sc.get("design") or "").strip():
-            _user = scene_design_user(sc, one, [str(c.get("name") or "") for c in list_assets(story_id, "characters")])
+            _user = scene_design_user(dict(_card, intent=''), one, _cast)
+        else:
+            # Keep full source-card detail when no design document exists.
+            import json as _scene_json
+            _user += '\n【固定空间事实】\n' + _scene_json.dumps({
+                key: _card[key] for key in main_images._SCENE_FIELDS
+                if key not in ('design', 'intent', 'scene_condition')
+                and _card.get(key) not in (None, '')}, ensure_ascii=False)
+        _user += '\n\n【场景当前状态】' + positive_condition(condition)
         # 【场景提示词验收器】喂正文全文后 Qwen 会滑回"剧情插图"：实测把女仆/
         # 艾拉/人影写进了空间参考板（画面直接出人），"壁炉"跨分区重复描述 5 次
         # （画面画了两个壁炉）。规则是愿望，验收打回是兜底。
@@ -919,6 +1058,10 @@ def generate_scene_master(story_id, scene_id, style_profile=None, quality="forma
         for _try in (1, 2, 3):
             prompt = _pw.write("scene", _user, P)
             errs = _scene_prompt_problems(prompt, sc, _cast, grade=_grade)
+            try:
+                validate_scene_prompt(prompt, sc, condition=condition)
+            except ScenePromptContentError as error:
+                errs.extend(error.issues)
             if not errs:
                 break
             _user += "\n\n★★【上一版不合格，重写】" + "；".join(errs)
@@ -949,19 +1092,24 @@ def generate_scene_master(story_id, scene_id, style_profile=None, quality="forma
         _st = style_tail(P.get("style") or style_profile) if _kind in ("2d", "3d") else ""
         if _st:
             prompt = prompt.rstrip("。 ") + "。" + _st
+        validate_scene_prompt(prompt, sc, condition=condition)
     # Turbo 检查点 + 两段式：7 步 / cfg 1.0。尺寸是**出底**，成品是它的 1.5 倍。
     # 正式 1920×1080 → 2880×1616：四视图并排时每格才有 700+ 像素承载脸部细节。
     steps = 5 if quality == "preview" else 7
     wh = (1280, 720) if quality == "preview" else (1920, 1080)
-    res = krea_client.generate(prompt, width=wh[0], height=wh[1], steps=steps)
+    options = main_images.current(P, kind='scene')
+    res = (main_images.generate(prompt, P, quality=quality, kind='scene') if options['model'] == 'moss'
+           else krea_client.generate(prompt, width=wh[0], height=wh[1], steps=steps))
     version = len([v for v in list_assets(story_id, "visuals")
                    if v.get("owner_id") == scene_id and v.get("kind") == "scene_master"]) + 1
     v = add_approved_visual(story_id, "scene_master", scene_id, version, res["output_path"],
                             style_profile=style_profile, prompt=prompt)
+    v = main_images.record_visual(story_id, v, res, P, kind='scene')
     quality_core.build_manifest(output_id=v["visual_id"], story_id=story_id,
                                 production_type="scene_master", style_profile_name=style_profile,
-                                model="krea2", model_mode="txt2img", prompt=prompt,
-                                parameters={"scene_contract_version": sc.get("version", 1)},
+                                model=options['model'], model_mode="txt2img", prompt=prompt,
+                                parameters=dict(main_images.generation_parameters(res, P, kind='scene'),
+                                                scene_contract_version=sc.get("version", 1)),
                                 output_path=res["output_path"])
     return v, prompt
 

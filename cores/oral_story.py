@@ -162,14 +162,20 @@ def quoted_lines_all(brief, q=None):
     return out
 
 
-_GARMENT_W = re.compile(r"T恤|t恤|内裤|校服|水手服|衬衫|连衣裙|裙|睡衣|睡裙|西装|外套|制服|比基尼|泳装|泳衣|盔甲|铠甲|皮甲|长袍|道袍|袈裟|旗袍|和服|运动服|背心|长裤|短裤|裤子|牛仔裤|牛仔|风衣|毛衣|卫衣|夹克|皮衣|长裙|短裙|丝袜|长袜|围巾|围裙|斗篷|披风|军装|警服|护士服|女仆装|婚纱|礼服|汉服|长衫|马甲|裸")
-_WEAR_W = re.compile(r"穿|套上|裹着|披着|换上|脱")
+_GARMENT_W = re.compile(r"T恤|t恤|内裤|校服|水手服|衬衫|连衣裙|裙|睡衣|睡裙|西装|外套|制服|比基尼|泳装|泳衣|盔甲|铠甲|皮甲|长袍|道袍|袈裟|旗袍|和服|运动服|背心|长裤|短裤|裤子|牛仔裤|牛仔|风衣|毛衣|卫衣|夹克|皮衣|长裙|短裙|丝袜|长袜|围巾|围裙|斗篷|披风|军装|警服|护士服|女仆装|婚纱|礼服|汉服|长衫|马甲|病号服|宇航服|太空服|防护服|作战服|上衣|下装|褐|褂|鞋|靴|袜|赤足|光脚|裸")
+_OUTFIT_PART = re.compile(r"(?:上装|上身|下装|下身|鞋履|脚部)\s*[：:]")
+_WEAR_W = re.compile(r"身着|穿|套上|裹着|披着|换(?:上|下|成|掉)|脱")
+_OUTFIT_CHANGE = re.compile(r"脱(?:下|掉|去|了)?|换(?:上|下|成|掉)|穿上|套上")
 
 
 def outfit_hints(text, card_names=(), aliases=None, sexes=None):
-    """P459：口述/正文里「谁穿什么」的句子 → {卡名: [句子]}。
-    穿的人＝穿着词前 14 字内最近的卡名/别名，或 他/她（只有一张男卡/女卡时）；句里一个名字都没有 → 沿用上一句的主语。"""
+    """Extract each person's initial visible clothing, before any wardrobe action.
+
+    A later change remains in the story, not in the shared character baseline.
+    Uncertain plans, questions and quoted claims are not visible clothing facts.
+    """
     out = {}
+    entries = []
     sents = [p.strip() for p in re.split(r"(?<=[。！？；\n])", str(text or "")) if p.strip()]
     al = aliases or aliases_of(list(card_names or []))
     sx = sexes or {}
@@ -180,12 +186,10 @@ def outfit_hints(text, card_names=(), aliases=None, sexes=None):
     # 明确的归属边界，不能把同句另一个人的服装串到这张卡上。
     for key in keys:
         for match in re.finditer(re.escape(key) + r"\s*[（(]([^）)\n]*)[）)]", str(text or "")):
-            parts = [p.strip() for p in re.split(r"[，,、；;]", match[1]) if _GARMENT_W.search(p)]
+            parts = [p.strip() for p in re.split(r"[，,、；;]", match[1]) if _GARMENT_W.search(p) or _OUTFIT_PART.search(p)]
             if parts:
                 value = "、".join(parts)
-                values = out.setdefault(al[key], [])
-                if value not in values:
-                    values.append(value)
+                entries.append((match.start(), al[key], value))
         # Plain character definitions also use commas: 姓名，55岁男性，白发、棕色夹克。
         # The adjacent explicit age provides an ownership boundary without
         # treating every narrative comma as a new clothing instruction.
@@ -195,14 +199,24 @@ def outfit_hints(text, card_names=(), aliases=None, sexes=None):
             other = [m.start() for k in keys if k != key for m in re.finditer(re.escape(k), detail)]
             if other:
                 detail = detail[:min(other)]
-            parts = [p.strip() for p in re.split(r"[，,、；;]", detail) if _GARMENT_W.search(p)]
+            parts = [p.strip() for p in re.split(r"[，,、；;]", detail) if _GARMENT_W.search(p) or _OUTFIT_PART.search(p)]
             if parts:
                 value = "、".join(parts)
-                values = out.setdefault(al[key], [])
-                if value not in values:
-                    values.append(value)
+                entries.append((match.start(), al[key], value))
+        # Explicit wardrobe definitions need no age or “穿” verb.
+        pattern = re.escape(key) + r"\s*(?:的)?(?:初始|开场)?(?:服装|衣着|装束)\s*(?:是|为|[：:])([^。！？；;\n]*)"
+        for match in re.finditer(pattern, str(text or "")):
+            detail = match[1]
+            other = [m.start() for k in keys if k != key for m in re.finditer(re.escape(k), detail)]
+            if other:
+                detail = detail[:min(other)]
+            if _GARMENT_W.search(detail) or _OUTFIT_PART.search(detail):
+                entries.append((match.start(), al[key], detail.strip("，, ")))
     carry = ""
+    offset = 0
     for s in sents:
+        start = str(text or "").find(s, offset)
+        offset = start + len(s)
         names_here = [(m.start(), al[k]) for k in keys for m in re.finditer(re.escape(k), s)]
         subj = max(names_here)[1] if names_here else ""              # 句里最后出现的名字当这句的主语（给下一句沿用）
         if not (_GARMENT_W.search(s) and _WEAR_W.search(s)):
@@ -226,12 +240,36 @@ def outfit_hints(text, card_names=(), aliases=None, sexes=None):
             if not who and not names_here:
                 who = carry                                                   # 「这个妹妹叫小爱…」→「在家里喜欢穿T恤和内裤」
             if who:
-                out.setdefault(who, [])
-                t = s.strip("，,。；！？ ")
-                if t not in out[who]:
-                    out[who].append(t)
-                break
+                pre = s[:m.start()]
+                clause = re.split(r"[，,。；;：:]", pre)[-1]
+                # A spoken/hypothetical outfit must not dress the card. Name
+                # resolution alone does not establish that it is being worn.
+                if (re.search(r"是否|能否|要不要|打算|准备|计划|想要|想|将要|将会|会不会|如果|假如|应该|可能|希望|建议|不要|不再|没有|并未|未曾|不曾", clause)
+                        or re.search(r"(?:不(?:想|愿|会|肯|要)?|没(?:有)?|未(?:曾)?|不是(?:在)?)$", clause)
+                        or re.search(r"(?:说|问|喊|答|道)[：:]?[“\"「『][^”\"」』]*$", pre)
+                        or re.search(r"吗[？?]?\s*[”\"」』]?\s*$|[？?]", re.split(r"[，,]", s[m.end():], maxsplit=1)[0])):
+                    continue
+                if _OUTFIT_CHANGE.match(s, m.start()):
+                    entries.append((start + m.start(), who, None))
+                    continue
+                # A sentence may dress several people. Keep this wear clause
+                # only up to the next named subject instead of copying it all.
+                ends = [p for p, nm in names_here if p > m.end() and nm != who]
+                ends += [change.start() for change in _OUTFIT_CHANGE.finditer(s, m.end())]
+                t = s[m.start():min(ends) if ends else len(s)].strip("，,。；！？ ")
+                entries.append((start + m.start(), who, t))
         carry = subj or carry
+    changed = set()
+    for _, who, value in sorted(entries, key=lambda entry: entry[0]):
+        if value is None:
+            changed.add(who)
+        elif who not in changed:
+            value = _OUTFIT_CHANGE.split(value, maxsplit=1)[0].strip("，,、；; ")
+            if not (_GARMENT_W.search(value) or _OUTFIT_PART.search(value)):
+                continue
+            values = out.setdefault(who, [])
+            if value not in values:
+                values.append(value)
     return out
 
 
@@ -252,14 +290,39 @@ def fixed_outfit_description(hints, designed=""):
     original pieces are authoritative; a designer cannot add another compulsory
     layer, accessory or colour scheme. A partial requirement keeps other slots.
     """
+    def slots(text):
+        # Explicit body-part labels work for unfamiliar fictional garments too.
+        # Classify underwear separately: it does not replace outer trousers.
+        result = set()
+        if re.search(r"内裤|底裤", text):
+            result.add('underwear')
+        if re.search(r"(?<![内底])裤|短裙|长裙|半身裙|下装|下身", text):
+            result.add('bottom')
+        if re.search(r"上衣|上装|上身|衫|T恤|t恤|背心|马甲|毛衣|卫衣", text):
+            result.add('top')
+        if re.search(r"外套|风衣|夹克|皮衣|披风|斗篷", text):
+            result.add('outerwear')
+        if re.search(r"鞋|靴|赤足|光脚|脚部|鞋履", text):
+            result.add('feet')
+        if re.search(r"袜", text):
+            result.add('socks')
+        if re.search(r"连衣裙|长袍|道袍|袈裟|旗袍|和服|汉服|婚纱|礼服|校服|制服|运动服|泳衣|泳装|比基尼|盔甲|铠甲|皮甲", text) and not result:
+            result.add('complete')
+        return result
+
+    def clauses(text):
+        return re.split(r"[，,、；;。\n]|(?:以及|和|及|与)(?=.{0,12}(?:衫|裤|裙|衣|服|外套|夹克|披风|鞋|靴|赤足))", str(text))
+
     pieces = []
     for hint in hints or []:
-        for raw in re.split(r"[，,、；;。\n]|(?:以及|和|及)(?=.{0,12}(?:衫|裤|裙|外套|夹克|披风))", str(hint)):
+        for raw in clauses(hint):
             garments = list(_GARMENT_W.finditer(raw))
-            if not garments:
+            if not garments and not _OUTFIT_PART.search(raw):
                 continue
-            value = raw[:garments[-1].end()]
-            wear = list(re.finditer(r"穿着|穿上|穿|套上|裹着|披着|换上", value))
+            # Retain the description after the noun (length/material/fit), but
+            # do not fold a later action into an immutable wardrobe baseline.
+            value = re.split(r"(?:然后|接着|随后|之后|并且?走|跑向|转身)", raw, maxsplit=1)[0]
+            wear = list(re.finditer(r"穿(?:着|上|了)?|套上|裹着|披着|换上", value))
             if wear:
                 value = value[wear[-1].end():]
             value = value.strip(" ：:（()）")
@@ -267,24 +330,17 @@ def fixed_outfit_description(hints, designed=""):
                 pieces.append(value)
     if not pieces:
         return str(designed or ""), []
-    def slots(text):
-        result = set()
-        if re.search(r"裤|短裙|长裙|半身裙", text):
-            result.add('bottom')
-        if re.search(r"衫|T恤|t恤|外套|风衣|夹克|皮衣|背心|马甲|毛衣|卫衣|披风|斗篷", text):
-            result.add('top')
-        if re.search(r"连衣裙|长袍|道袍|袈裟|旗袍|和服|汉服|婚纱|礼服|校服|制服|运动服|泳衣|泳装|比基尼|盔甲|铠甲|皮甲", text):
-            result.add('complete')
-        return result
-    required = slots("；".join(pieces))
-    if 'complete' in required or {'top', 'bottom'} <= required:
+    required = set().union(*(slots(piece) for piece in pieces))
+    if any(re.match(r'^(?:上装|上身)\s*[：:]', piece) for piece in pieces):
+        required.add('outerwear')
+    if 'complete' in required or (required & {'top', 'outerwear'} and required & {'bottom', 'underwear'}):
         return "；".join(pieces), pieces
     words = set(outfit_words(pieces))
     extra = []
-    for line in re.split(r"[。；\n]", str(designed or "")):
+    for line in clauses(designed or ""):
         # Global palettes and silhouette summaries may refer to removed clothes.
         if (not line.strip() or re.search(r"主色|副色|点缀色|配色|剪影|露肤设计|不对称|身份细节|性格细节", line)
-                or slots(line) & required or words & set(outfit_words([line]))):
+                or (slots(line) and slots(line) <= required) or words & set(outfit_words([line]))):
             continue
         extra.append(line.strip())
     return "；".join(pieces + extra), pieces
@@ -928,6 +984,44 @@ _ROLE_TAIL = re.compile(r"^(队长|守卫|首领|老板|店员|士兵|村长|长
 _GENERIC_TYPE = {"人物", "角色", "主角", "配角", "路人", "其他", "男性", "女性", "男", "女", "无", "人类", "人"}
 
 
+def merge_explicit_character_aliases(chars, source):
+    """Combine proposed new cards only when prose explicitly equates two names.
+
+    A shared profession, silhouette or nearby appearance is not identity proof.
+    Quotes/questions and negated/comparative statements cannot establish it.
+    Existing stored cards are never renamed or deleted by this helper.
+    """
+    from .group_entities import is_group
+    result = [dict(c) for c in chars or [] if isinstance(c, dict)]
+    names = {str(c.get('name') or '').strip() for c in result if not is_group(c)} - {''}
+    links = {}
+    evidence = {}
+    for sentence in re.split(r'(?<=[。！？!?\n])', str(source or '')):
+        if re.search(r'[“”「」？?]|不是|并非|不可能|好像|仿佛|可能|以为|误认|假扮|冒充', sentence):
+            continue
+        for alias in names:
+            for name in names - {alias}:
+                a, n = re.escape(alias), re.escape(name)
+                patterns = (a + r'\s*(?:原来|其实)?(?:就是|正是)\s*' + n + r'(?=$|[。，,；;：:\s])',
+                            n + r'\s*[（(](?:又名|别名|化名|绰号)[：:\s]*' + a + r'[）)]',
+                            n + r'\s*(?:又名|别名(?:是|为)?|化名(?:是|为)?|绰号(?:是|为)?)\s*' + a + r'(?=$|[。，,；;：:\s])')
+                if any(re.search(pattern, sentence) for pattern in patterns):
+                    links.setdefault(alias, set()).add(name)
+                    evidence[(alias, name)] = sentence.strip()
+    unique = {alias: next(iter(targets)) for alias, targets in links.items() if len(targets) == 1}
+    # Chains and cycles need interpretation; retain all cards in those cases.
+    unique = {alias: name for alias, name in unique.items() if name not in unique}
+    by_name = {c.get('name'): c for c in result}
+    for alias, name in unique.items():
+        target = by_name[name]
+        aliases = target.get('aliases') or []
+        if isinstance(aliases, str):
+            aliases = re.split(r'[、，,；;]', aliases)
+        target['aliases'] = list(dict.fromkeys([*aliases, alias]))
+        target['alias_evidence'] = dict(target.get('alias_evidence') or {}, **{alias: evidence[(alias, name)]})
+    return [c for c in result if c.get('name') not in unique]
+
+
 def card_aliases(chars):
     """P454⑨：卡名别名表 {别名: 卡名}。名字、去括号短名之外，再加卡的「人物类型」词（精灵队长 → 瑟琳娜、小个子精灵 → 艾拉）、
     去掉性别字的写法（小个子女精灵）、类型词的尾两字（队长）——只有唯一一张卡符合的才算；再并上按年龄性别的称呼（role_aliases）。"""
@@ -938,11 +1032,19 @@ def card_aliases(chars):
     al = aliases_of([str(c.get("name") or "") if isinstance(c, dict) else str(c) for c in chars or []])
     owners = {}
     for c in chars or []:
+        if isinstance(c, dict) and not is_group(c):
+            aliases = c.get('aliases') or []
+            if isinstance(aliases, str):
+                aliases = re.split(r'[、，,；;]', aliases)
+            for alias in aliases:
+                alias = str(alias).strip()
+                if alias:
+                    owners.setdefault(alias, set()).add(c.get('name'))
         if is_group(c):
             for alias in group_aliases(c):
                 owners.setdefault(alias, set()).add(c["name"])
     for alias, owners_for_alias in owners.items():
-        if len(owners_for_alias) == 1:
+        if len(owners_for_alias) == 1 and (alias not in al or al[alias] in owners_for_alias):
             al[alias] = next(iter(owners_for_alias))
     words, tails = {}, {}
     for c in chars or []:

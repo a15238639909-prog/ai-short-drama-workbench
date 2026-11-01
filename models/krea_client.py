@@ -97,6 +97,8 @@ def _round16(v):
 
 
 def generate(prompt, negative=NEGATIVE, width=None, height=None, seed=None, steps=None, cfg=None, base_w=None, base_h=None):
+    from cores.image_prompt_content import image_prompt_content
+    image_prompt_content(prompt)
     from cores.age_policy import assert_model_request
 
     if os.environ.get("V41_NO_MODEL"):

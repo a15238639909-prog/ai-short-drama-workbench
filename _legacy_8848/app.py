@@ -4364,16 +4364,49 @@ DEFAULT_OPT = (
     "只输出优化后的一段中文提示词本身，不要解释、不要分点、不要加标题、不要英文、不要负面词。"
 )
 
+ANIMA_PRESET_ALIASES = {
+    "Anima·英文词组": "Anima·常规单图",
+    "anima动漫模型提示词": "Anima·常规单图",
+    "GPT优化指令词": "Anima·常规单图",
+    "Anima·人设三视图＋面部特写": "Anima·人设图",
+}
+ANIMA_BUILTIN_PRESETS = {
+    "Anima·常规单图": "Anima_英文词组.txt",
+    "Anima·人设图": "Anima_人物三视图.txt",
+}
+MOSS_PRESET_ALIASES = {
+    "通用提示词优化": "GPT优化指令词",
+    "仿真5.6": "GPT优化指令词", "krea2仿生活照": "GPT优化指令词",
+    "Krea2真实人物": "GPT优化指令词",
+    "三视图": "Moss·人物人设图", "三视图正常的": "Moss·人物人设图",
+    "Krea2·作品角色人设四视图": "Moss·人物人设图",
+    "场景图": "Moss·场景图", "场景专业": "Moss·场景图",
+    "Krea2·作品场景还原与定制": "Moss·场景图",
+}
+MOSS_BUILTIN_PRESETS = {"GPT优化指令词", "Moss·人物人设图", "Moss·场景图"}
+
+
 def _preset_model(name, model=None):
-    model = str(model or ("anima" if "anima" in str(name).lower() else "krea2")).lower()
-    if model not in ("krea2", "anima"):
+    inferred = "anima" if "anima" in str(name).lower() else "moss" if "moss" in str(name).lower() else "krea2"
+    model = str(model or inferred).lower()
+    if model not in ("krea2", "anima", "moss"):
         raise ValueError("不支持的预设模型")
     return model
 
 
-def _preset_path(name, model=None):
+def _preset_path(name, model=None, action=None):
     safe = "".join(c for c in str(name) if c not in '\\/:*?"<>|').strip() or "未命名"
     model = _preset_model(safe, model)
+    if model == "anima":
+        if action in ("save", "delete") and safe in ANIMA_PRESET_ALIASES:
+            raise ValueError("这是已合并的Anima旧预设，原文件保留；请使用新入口或另存新名称")
+        if action == "delete" and safe in ANIMA_BUILTIN_PRESETS:
+            raise ValueError("Anima内置预设可以编辑保存，不能删除")
+    if model == "moss":
+        if action in ("save", "delete") and safe in MOSS_PRESET_ALIASES:
+            raise ValueError("这是已归档的Moss旧预设，原文件保留；请使用Moss独立入口或另存新名称")
+        if action == "delete" and safe in MOSS_BUILTIN_PRESETS:
+            raise ValueError("Moss内置预设可以编辑保存，不能删除")
     scoped = os.path.join(PRESET_DIR, model, safe + ".txt")
     legacy = os.path.join(PRESET_DIR, safe + ".txt")
     if not os.path.isfile(scoped) and os.path.isfile(legacy) and _preset_model(safe) == model:
@@ -4388,23 +4421,34 @@ def load_presets():
         txts = ["通用提示词优化.txt"]
     res = {}
     for f in sorted(txts):
+        model = _preset_model(f[:-4])
+        if model == "anima" and f[:-4] in ANIMA_PRESET_ALIASES:
+            continue
+        if model == "moss" and f[:-4] in MOSS_PRESET_ALIASES:
+            continue
         with open(os.path.join(PRESET_DIR, f), encoding="utf-8") as fh:
-            model = _preset_model(f[:-4])
             res[(model, f[:-4])] = {"name": f[:-4], "system": fh.read(), "model": model}
-    for model in ("krea2", "anima"):
+    for model in ("krea2", "anima", "moss"):
         folder = os.path.join(PRESET_DIR, model)
         if os.path.isdir(folder):
             for f in sorted(os.listdir(folder)):
                 if f.endswith(".txt"):
+                    if model == "anima" and f[:-4] in ANIMA_PRESET_ALIASES:
+                        continue
+                    if model == "moss" and f[:-4] in MOSS_PRESET_ALIASES:
+                        continue
                     with open(os.path.join(folder, f), encoding="utf-8") as fh:
                         res[(model, f[:-4])] = {"name": f[:-4], "system": fh.read(), "model": model}
-    # The Anima default has one source; saving it creates an editable model-local override.
-    for name, filename in (("Anima·英文词组", "Anima_英文词组.txt"),
-                           ("Anima·人设三视图＋面部特写", "Anima_人物三视图.txt")):
+    for name in MOSS_BUILTIN_PRESETS:
+        if ("moss", name) in res:
+            res[("moss", name)]["builtin"] = True
+    for name, filename in ANIMA_BUILTIN_PRESETS.items():
         default = os.path.join(str(_package_paths.ROOT), "presets", "instructions", filename)
         if ("anima", name) not in res and os.path.isfile(default):
             with open(default, encoding="utf-8") as fh:
                 res[("anima", name)] = {"name": name, "system": fh.read(), "model": "anima", "builtin": True}
+        if ("anima", name) in res:
+            res[("anima", name)]["builtin"] = True
     return sorted(res.values(), key=lambda p: (p["model"], p["name"].lower()))
 
 # ================== 视频提示词预设（MiniMax H3 模板，存成独立 txt） ==================
@@ -4851,10 +4895,13 @@ def _set_latent_size(graph, w, h):
     return done
 
 def comfy_generate(prompt_text, seed=None, archive=None, wh=None, negative_prompt=None):
+    from cores.image_prompt_content import image_prompt_content
+    image_prompt_content(prompt_text)
     from cores.age_policy import assert_model_request
     assert_model_request(prompt_text, media="image")
     if os.environ.get("V41_NO_MODEL"):
         raise RuntimeError("V41_NO_MODEL=1：零模型测试不许调模型（内嵌图片入口）")
+    _local_model_guard()
     ollama_unload()   # 先腾显存
     try:
         qwen36_free()   # 出图前也释放本地视觉服务的显存
@@ -4867,14 +4914,13 @@ def comfy_generate(prompt_text, seed=None, archive=None, wh=None, negative_promp
     pos = _trace_positive(graph)
     if pos:
         graph[pos]["inputs"]["text"] = prompt_text
-    if negative_prompt:
-        _, ks = _find_ksampler(graph)
-        if ks:
-            neg = ks["inputs"].get("negative")
-            if isinstance(neg, list) and neg:
-                neg_node = graph.get(str(neg[0]))
-                if neg_node and neg_node.get("class_type") == "CLIPTextEncode":
-                    neg_node["inputs"]["text"] = negative_prompt
+    _, ks = _find_ksampler(graph)
+    if ks:
+        neg = ks["inputs"].get("negative")
+        if isinstance(neg, list) and neg:
+            neg_node = graph.get(str(neg[0]))
+            if neg_node and neg_node.get("class_type") == "CLIPTextEncode":
+                neg_node["inputs"]["text"] = ''
     sd = int(seed) if seed not in (None, "") else random.randint(0, 2**31 - 1)
     nid, ks = _find_ksampler(graph)
     for key in ("seed", "noise_seed"):
@@ -20497,7 +20543,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps(result, ensure_ascii=False))
             elif self.path == "/api/savepreset":
                 data = self._read_json()
-                p, safe = _preset_path(data.get("name", ""), data.get("model"))
+                p, safe = _preset_path(data.get("name", ""), data.get("model"), action="save")
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(data.get("system", ""))
@@ -20506,7 +20552,7 @@ class Handler(BaseHTTPRequestHandler):
 
             elif self.path == "/api/delpreset":
                 data = self._read_json()
-                p, _ = _preset_path(data.get("name", ""), data.get("model"))
+                p, _ = _preset_path(data.get("name", ""), data.get("model"), action="delete")
                 if os.path.exists(p):
                     os.remove(p)
                 self._send(200, "application/json",
@@ -21431,8 +21477,13 @@ HTML = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <h3>🎨 提示词生成 / 优化</h3>
     <div class="row" style="margin-bottom:8px">
       <label style="margin:0">出图模型</label>
-      <select id="promptModel" onchange="promptModelChanged()"><option value="krea2">Krea2</option><option value="anima">Anima 动漫</option></select>
+      <select id="promptModel" onchange="promptModelChanged()"><option value="krea2">Krea2</option><option value="moss">Moss</option><option value="anima">Anima 动漫</option></select>
       <span id="promptModelHint" class="hint">Krea2：沿用当前提示词和出图流程</span>
+    </div>
+    <div id="animaArtistRow" class="row" style="display:none;margin-bottom:8px">
+      <label style="margin:0">Anima画师</label>
+      <select id="animaArtist" onchange="animaArtistChanged()"></select>
+      <span class="hint">固定风格与质量前缀由程序拼接，千问只写画面正文；队列逐条保存所选画师。</span>
     </div>
     <div class="row">
       <label id="presetModelLabel" style="margin:0">Krea2 预设</label>
@@ -21499,7 +21550,7 @@ HTML = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
         <div id="pqList"></div>
       </details>
     </div>
-    <div class="hint">Krea2与Anima使用各自的预设。选好模型和预设，填入主题后生成；自定义指令可存为新预设。</div>
+    <div class="hint">Krea2、Moss、Anima各有独立指令词与草稿。Moss使用中文画面与布局规划，Anima使用英文词组。三个模型可加入同一待生产列表，按列表顺序生成；自定义指令可存为新预设。</div>
   </div>
 </div></div>
 
@@ -23070,6 +23121,7 @@ function stopAll(){
   try{ if(chatCtrl) chatCtrl.abort(); }catch(e){}
   try{ if(promptCtrl) promptCtrl.abort(); }catch(e){}
   try{ if(promptImageCtrl) promptImageCtrl.abort(); }catch(e){}
+  try{ pqStop(); }catch(e){}
   try{ if(comicCtrl) comicCtrl.abort(); }catch(e){}
   try{ characterImageRunning=false;if(characterImageCtrl)characterImageCtrl.abort(); }catch(e){}
   // 3) 解锁界面
@@ -26645,14 +26697,20 @@ $("chatinput").addEventListener("keydown",e=>{
 
 // ===== 提示词预设 =====
 let presets=[], promptCtrl=null, promptImageCtrl=null;
-function modelPresets(model){return presets.filter(p=>(p.model||(/anima/i.test(p.name)?"anima":"krea2"))===model);}
+function modelPresets(model){return presets.filter(p=>(p.model||(/anima/i.test(p.name)?"anima":/moss/i.test(p.name)?"moss":"krea2"))===model);}
+function promptModelLabel(model){return model==="moss"?"Moss":model==="anima"?"Anima":"Krea2";}
+function animaPresetName(name){return ({"Anima·英文词组":"Anima·常规单图","anima动漫模型提示词":"Anima·常规单图","GPT优化指令词":"Anima·常规单图","Anima·人设三视图＋面部特写":"Anima·人设图"})[name]||name;}
+function mossPresetName(name){return ({"通用提示词优化":"GPT优化指令词","仿真5.6":"GPT优化指令词","krea2仿生活照":"GPT优化指令词","Krea2真实人物":"GPT优化指令词","三视图":"Moss·人物人设图","三视图正常的":"Moss·人物人设图","Krea2·作品角色人设四视图":"Moss·人物人设图","场景图":"Moss·场景图","场景专业":"Moss·场景图","Krea2·作品场景还原与定制":"Moss·场景图"})[name]||name;}
+function promptDefaultPreset(model){return model==="anima"?"Anima·常规单图":model==="moss"?"GPT优化指令词":"通用提示词优化";}
 function fillPresetSelect(selName,apply=true,model=promptModelValue()){
   const sel=$("presetSel");sel.innerHTML="";
   const available=modelPresets(model);
+  if(model==="anima")selName=animaPresetName(selName);
+  if(model==="moss")selName=mossPresetName(selName);
   available.forEach(p=>{const o=document.createElement("option");o.value=p.name;o.textContent=p.name;sel.appendChild(o);});
-  $("presetModelLabel").textContent=(model==="anima"?"Anima":"Krea2")+" 预设";
+  $("presetModelLabel").textContent=promptModelLabel(model)+" 预设";
   if(available.length){
-    sel.value=available.some(p=>p.name===selName)?selName:(available.find(p=>p.name===(model==="anima"?"Anima·英文词组":"通用提示词优化"))||available[0]).name;
+    sel.value=available.some(p=>p.name===selName)?selName:(available.find(p=>p.name===promptDefaultPreset(model))||available[0]).name;
     if(apply)presetPick();
   }else if(apply)presetNew();
 }
@@ -26683,8 +26741,37 @@ async function presetDel(){
   presets=j.presets; fillPresetSelect();
   setStatus("已删除预设");
 }
+function isLongKreaPreset(system){
+  return /^【GPT长文：Krea2：(自然单图|精细人设)】$/.test(String(system||"").trim().split(/\r?\n/,1)[0]);
+}
+async function longKreaPromptGen(){
+  const text=$("promptIn").value.trim();if(!text){alert("请先填写画面需求");return "";}
+  if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return "";}
+  const system=$("presetSys").value;
+  if(promptModelValue()!=="krea2"||!isLongKreaPreset(system)){setStatus("请先选择Krea2长文预设");return "";}
+  const original=$("promptOut").textContent,controller=new AbortController();
+  promptCtrl=controller;
+  const controls=["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"];
+  for(const id of controls)$(id).disabled=true;
+  $("promptImageNote").textContent="千问正在设计自然动作、光线和人物服装细节…";
+  const current=()=>promptCtrl===controller&&promptModelValue()==="krea2"&&$("promptIn").value.trim()===text&&$("presetSys").value===system&&$("promptOut").textContent===original;
+  try{
+    const response=await fetch(location.origin+"/api/image/krea2/prompt",{method:"POST",signal:controller.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({text,system})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||"Krea2长文提示词生成失败");
+    if(!current()||controller.signal.aborted)return "";
+    const data=result.data;
+    if(!data||data.model!=="krea2"||data.format!=="caption"||typeof data.prompt!=="string"||!data.prompt.trim())throw new Error("Krea2长文提示词返回格式不一致");
+    $("promptOut").textContent=data.prompt;
+    $("promptImageNote").textContent="Krea2长文提示词已生成，可以编辑、出图或加入待生产列表";
+    return data.prompt;
+  }catch(error){if(current())$("promptImageNote").textContent=error.name==="AbortError"?"已停止提示词请求":"❌ "+error.message;return "";}
+  finally{if(promptCtrl===controller){promptCtrl=null;for(const id of controls)$(id).disabled=false;}}
+}
 async function promptGen(){
+  if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return;}
   if(promptModelValue()==="anima")return animaPromptGen();
+  if(promptModelValue()==="moss")return mossPromptGen();
+  if(promptModelValue()==="krea2"&&isLongKreaPreset($("presetSys").value))return longKreaPromptGen();
   const inp=$("promptIn").value.trim(); if(!inp){alert("请先填入你的主题或提示词");return;}
   $("promptOut").textContent="";$("btnPrompt").disabled=true;
   promptCtrl=new AbortController();
@@ -27527,27 +27614,77 @@ async function dvStop(mode){
 }
 /* P450：比例 × 清晰度 → 尺寸。1K 用 8848 单段直出验证过的尺寸；2K/4K 是两段链的出底（×1.5 后成图）。 */
 let promptActiveModel="krea2", promptModelDrafts={};
+let mossLayoutDraft=null;
+let animaArtistConfig=null, animaArtistConfigPromise=null, animaComposeSequence=0;
 function promptModelValue(){return ($("promptModel")||{}).value||"krea2";}
+function animaArtistValue(){return $("animaArtist").value||(animaArtistConfig&&animaArtistConfig.default_artist)||"@chigusa_minori";}
+async function animaEnsureArtistConfig(){
+  if(animaArtistConfig)return animaArtistConfig;
+  if(animaArtistConfigPromise)return animaArtistConfigPromise;
+  animaArtistConfigPromise=(async()=>{
+    const response=await fetch(location.origin+"/api/image/anima/config");
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||"Anima画师配置读取失败");
+    const config=result.data,artists=config&&config.artists;
+    if(!Array.isArray(artists)||!artists.length||artists.some(row=>!row||typeof row.value!=="string"||!row.value||typeof row.label!=="string")||!artists.some(row=>row.value===config.default_artist))throw new Error("Anima画师配置格式无效，请刷新后重试");
+    const select=$("animaArtist");select.innerHTML="";
+    for(const artist of artists){const option=document.createElement("option");option.value=artist.value;option.textContent=artist.label;select.appendChild(option);}
+    select.value=config.default_artist;animaArtistConfig=config;return config;
+  })();
+  try{return await animaArtistConfigPromise;}finally{animaArtistConfigPromise=null;}
+}
+async function animaArtistChanged(){
+  const sequence=++animaComposeSequence;
+  if(promptModelValue()!=="anima"||promptCtrl||promptImageCtrl||pqRunning)return;
+  const artist=animaArtistValue(),original=$("promptOut").textContent,input=$("promptIn").value;
+  if(!original.trim())return;
+  const current=()=>sequence===animaComposeSequence&&promptModelValue()==="anima"&&animaArtistValue()===artist&&$("promptOut").textContent===original&&$("promptIn").value===input&&!promptCtrl&&!promptImageCtrl&&!pqRunning;
+  try{
+    const response=await fetch(location.origin+"/api/image/anima/compose",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:original,artist})});
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||"Anima画师前缀更新失败");
+    if(current()){$("promptOut").textContent=result.data.prompt;$("promptImageNote").textContent="画师前缀已更新，画面正文保留；未调用模型。";}
+  }catch(error){if(current())$("promptImageNote").textContent="❌ "+error.message;}
+}
 async function promptModelChanged(){
   const chosen=promptModelValue();
   if(promptCtrl||promptImageCtrl||pqRunning){$("promptModel").value=promptActiveModel;setStatus("请等当前生成完成后再切换模型");return;}
-  promptModelDrafts[promptActiveModel]={input:$("promptIn").value,out:$("promptOut").textContent,system:$("presetSys").value,name:$("presetName").value,sel:$("presetSel").value,quality:$("promptImageQuality").value,ratio:$("promptImageRatio").value};
+  animaComposeSequence++;
+  promptModelDrafts[promptActiveModel]={input:$("promptIn").value,out:$("promptOut").textContent,system:$("presetSys").value,name:$("presetName").value,sel:$("presetSel").value,quality:$("promptImageQuality").value,ratio:$("promptImageRatio").value,layout:promptActiveModel==="moss"?mossLayoutDraft:null};
+  if(promptActiveModel==="anima")promptModelDrafts[promptActiveModel].artist=animaArtistValue();
   $("promptModel").disabled=true;
   try{
+    if(chosen==="anima")await animaEnsureArtistConfig();
     if(!promptModelDrafts[chosen]){
       const available=modelPresets(chosen);
-      const p=available.find(p=>p.name===(chosen==="anima"?"Anima·英文词组":"通用提示词优化"))||available[0];
-      promptModelDrafts[chosen]={input:"",out:"",system:p?p.system:"",name:p?p.name:"",sel:p?p.name:"",quality:"1k",ratio:"16:9"};
+      const p=available.find(p=>p.name===promptDefaultPreset(chosen))||available[0];
+      promptModelDrafts[chosen]={input:"",out:"",system:p?p.system:"",name:p?p.name:"",sel:p?p.name:"",quality:chosen==="moss"?"2x":"1k",ratio:"16:9"};
     }
     const saved=promptModelDrafts[chosen];
+    if(chosen==="moss"&&mossPresetName(saved.sel)!==saved.sel){
+      const migrated=modelPresets(chosen).find(p=>p.name===mossPresetName(saved.sel));
+      if(!migrated)throw new Error("Moss独立预设未找到，请刷新后重试");
+      saved.sel=migrated.name;saved.name=migrated.name;saved.system=migrated.system;
+    }
+    mossLayoutDraft=chosen==="moss"?(saved.layout||null):null;
+    if(chosen==="anima"&&animaPresetName(saved.sel)!==saved.sel){
+      const migrated=modelPresets(chosen).find(p=>p.name===animaPresetName(saved.sel));
+      if(!migrated)throw new Error("Anima新预设未找到，请刷新后重试");
+      saved.sel=migrated.name;saved.name=migrated.name;saved.system=migrated.system;
+    }
+    $("animaArtistRow").style.display=chosen==="anima"?"flex":"none";
+    if(chosen==="anima")$("animaArtist").value=animaArtistConfig.artists.some(row=>row.value===saved.artist)?saved.artist:animaArtistConfig.default_artist;
     fillPresetSelect(saved.sel,false,chosen);
     $("promptIn").value=saved.input||"";$("promptOut").textContent=saved.out;$("presetSys").value=saved.system;$("presetName").value=saved.name;$("presetSel").value=saved.sel;
-    $("promptImageQuality").innerHTML=chosen==="anima"
+    $("promptImageQuality").innerHTML=chosen==="moss"
+      ?'<option value="workflow">原工作流 · 双阶段×1.2</option><option value="2x">2倍 · 双阶段细化</option><option value="4k">4K · 双阶段×2</option>'
+      :chosen==="anima"
       ?'<option value="1k">1K 直出</option><option value="2k">2K 直出</option>'
       :'<option value="1k">1K 直出</option><option value="2k">2K 二次采样</option><option value="4k">4K 二次采样</option>';
     $("promptImageQuality").value=saved.quality;
+    $("promptImageQuality").title=chosen==="moss"?"Moss：原工作流×1.2、约1MP底图×2，或1920长边底图×2生成4K；均为双阶段，成图尺寸以返回值为准":chosen==="anima"?"Anima：1K / 2K 直出，独立工作流":"Krea2：1K 单段直出；2K / 4K 走两段链（出底×1.5放大细化）";
     $("promptImageRatio").value=saved.ratio||"16:9";
-    $("promptModelHint").textContent=chosen==="anima"?"Anima：独立预设与英文词组，仅用于手动出图":"Krea2：独立预设，沿用原有出图流程";
+    $("promptModelHint").textContent=chosen==="moss"?"Moss：独立中文Qwen指令，自动规划画面、文字与布局，可与Krea2/Anima混合排队":chosen==="anima"?"Anima：独立英文词组预设，可与Krea2/Moss混合排队":"Krea2：中文预设，沿用原有出图流程，可与Moss/Anima混合排队";
     $("btnPromptReverse").disabled=chosen==="anima";
     $("btnPromptReverse").title=chosen==="anima"?"本次Anima接入文字出图，图片反推仍使用原Krea2链路":"";
     promptActiveModel=chosen;promptSizeChanged();
@@ -27557,39 +27694,100 @@ async function promptModelChanged(){
 async function animaPromptGen(){
   const text=$("promptIn").value.trim();if(!text){alert("请先填写画面需求");return "";}
   if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return "";}
-  $("btnPrompt").disabled=true;$("btnPromptImage").disabled=true;$("promptModel").disabled=true;
-  promptCtrl=new AbortController();$("promptImageNote").textContent="千问正在整理Anima英文词组…";
+  $("btnPrompt").disabled=true;$("btnPromptImage").disabled=true;$("promptModel").disabled=true;$("animaArtist").disabled=true;
+  animaComposeSequence++;
+  const artist=animaArtistValue(),system=$("presetSys").value,original=$("promptOut").textContent,controller=new AbortController();
+  promptCtrl=controller;$("promptImageNote").textContent="千问正在整理Anima画面正文，固定前缀由程序拼接…";
   try{
-    const r=await fetch(location.origin+"/api/image/anima/prompt",{method:"POST",signal:promptCtrl.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({text,system:$("presetSys").value})});
+    const r=await fetch(location.origin+"/api/image/anima/prompt",{method:"POST",signal:controller.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({text,system,artist})});
     const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||"提示词生成失败");
-    $("promptOut").textContent=j.data.prompt;$("promptImageNote").textContent="英文词组已生成，可以修改后直接出图";return j.data.prompt;
+    if(promptCtrl!==controller||promptModelValue()!=="anima"||animaArtistValue()!==artist||$("promptIn").value.trim()!==text||$("presetSys").value!==system||$("promptOut").textContent!==original)return "";
+    $("promptOut").textContent=j.data.prompt;$("promptImageNote").textContent="完整Anima提示词已生成，含所选画师与固定质量前缀；可以编辑后出图";return j.data.prompt;
   }catch(e){$("promptImageNote").textContent=e.name==="AbortError"?"已停止提示词请求":"❌ "+e.message;return "";}
-  finally{promptCtrl=null;$("btnPrompt").disabled=false;$("btnPromptImage").disabled=false;$("promptModel").disabled=false;}
+  finally{if(promptCtrl===controller){promptCtrl=null;$("btnPrompt").disabled=false;$("btnPromptImage").disabled=false;$("promptModel").disabled=false;$("animaArtist").disabled=false;}}
 }
 async function animaImageGen(){
   if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return;}
   let prompt=$("promptOut").textContent.trim();
   if(!prompt){prompt=await animaPromptGen();if(!prompt)return;}
   if(/[\u3400-\u9fff]/.test(prompt)){alert("Anima需要英文词组，请先点生成转换中文需求");return;}
-  const sp=promptSizeSpec();promptImageCtrl=new AbortController();
-  for(const id of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"])$(id).disabled=true;
+  const sp=promptSizeSpec(),artist=animaArtistValue();promptImageCtrl=new AbortController();animaComposeSequence++;
+  for(const id of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality","animaArtist"])$(id).disabled=true;
   $("promptImageNote").textContent=`Anima正在生成 ${sp.w}×${sp.h}，首次需要加载模型…`;
   setTask("Anima 动漫出图");
   try{
-    const r=await fetch(location.origin+"/api/image/generate",{method:"POST",signal:promptImageCtrl.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"anima",text:prompt,base_w:sp.w,base_h:sp.h})});
+    const r=await fetch(location.origin+"/api/image/generate",{method:"POST",signal:promptImageCtrl.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"anima",text:prompt,artist,base_w:sp.w,base_h:sp.h})});
     const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||"Anima出图失败");
     const url=location.origin+j.data.url;
     $("promptImagePreview").className="show";
     $("promptImagePreview").innerHTML=`<img id="promptPreviewImg" src="${url}" alt="Anima动漫测试图"><div id="promptImageMeta"><b>${j.data.width}×${j.data.height}</b><span>Anima · seed ${j.data.seed}</span><a href="${url}" target="_blank">打开原图</a><a href="${url}" download>下载图片</a></div>`;
     $("promptImageNote").textContent="✅ Anima图片已生成，已进入历史记录（出图词·Anima）";
   }catch(e){$("promptImageNote").textContent=e.name==="AbortError"?"已停止等待，请检查任务状态":"❌ "+e.message;}
-  finally{promptImageCtrl=null;for(const id of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"])$(id).disabled=false;setTask(null);}
+  finally{promptImageCtrl=null;for(const id of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality","animaArtist"])$(id).disabled=false;setTask(null);}
+}
+async function mossPromptGen(){
+  const text=$("promptIn").value.trim();if(!text){alert("请先填写画面需求");return "";}
+  if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return "";}
+  const system=$("presetSys").value,original=$("promptOut").textContent,spec=promptSizeSpec(),controller=new AbortController();
+  promptCtrl=controller;
+  const controls=["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"];
+  for(const id of controls)$(id).disabled=true;
+  $("promptImageNote").textContent="千问正在按Moss专用规则规划中文画面与布局…";
+  const current=()=>promptCtrl===controller&&promptModelValue()==="moss"&&$("promptIn").value.trim()===text&&$("presetSys").value===system&&$("promptOut").textContent===original&&promptSizeSpec().w===spec.w&&promptSizeSpec().h===spec.h;
+  try{
+    const response=await fetch(location.origin+"/api/image/moss/prompt",{method:"POST",signal:controller.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({text,system,base_w:spec.w,base_h:spec.h,upscale:spec.upscale})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||"Moss提示词生成失败");
+    if(!current())return "";
+    const data=result.data;
+    if(!data||data.model!=="moss"||typeof data.prompt!=="string"||!data.prompt.trim()||!["caption","layout"].includes(data.format)||data.base_w!==spec.w||data.base_h!==spec.h)throw new Error("Moss提示词返回格式或尺寸不一致");
+    $("promptOut").textContent=data.prompt;
+    mossLayoutDraft=data.format==="layout"?{prompt:data.prompt,base_w:data.base_w,base_h:data.base_h}:null;
+    $("promptImageNote").textContent=data.format==="layout"?`Moss布局已生成，基底 ${data.base_w}×${data.base_h}；改比例后请重新生成提示词`:"Moss中文画面提示词已生成，可以出图或加入待生产列表";
+    return data.prompt;
+  }catch(error){if(current())$("promptImageNote").textContent=error.name==="AbortError"?"已停止提示词请求":"❌ "+error.message;return "";}
+  finally{if(promptCtrl===controller){promptCtrl=null;for(const id of controls)$(id).disabled=false;}}
+}
+function mossLayoutReady(prompt,spec){
+  let layout;try{layout=JSON.parse(prompt);}catch(error){return true;}
+  if(!layout||!layout.summary||!Array.isArray(layout.items))return true;
+  if(!mossLayoutDraft||mossLayoutDraft.base_w!==spec.w||mossLayoutDraft.base_h!==spec.h){alert("Moss布局与当前尺寸不一致或来源尺寸未知，请先按当前比例重新生成提示词");return false;}
+  return true;
+}
+async function mossImageGen(){
+  if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return;}
+  const optimized=$("promptOut").textContent.trim(),original=$("promptIn").value.trim();
+  const prompt=optimized&&!/\[出错[:：]/.test(optimized)?optimized:original;
+  if(!prompt){alert("请先输入画面主题，或先生成/优化提示词");return;}
+  const spec=promptSizeSpec();if(!mossLayoutReady(prompt,spec))return;promptImageCtrl=new AbortController();
+  for(const control of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"])$(control).disabled=true;
+  $("promptImageNote").textContent=`Moss正在生成 ${spec.label}，基底 ${spec.w}×${spec.h} → 预计 ${spec.final_w}×${spec.final_h}…`;
+  setTask("Moss 出图");
+  try{
+    const response=await fetch(location.origin+"/api/image/generate",{method:"POST",signal:promptImageCtrl.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"moss",text:prompt,kind:"free",base_w:spec.w,base_h:spec.h,upscale:spec.upscale,seed:Math.floor(Math.random()*2000000000)})});
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||"Moss出图失败");
+    if(!(result.data&&result.data.url))throw new Error("Moss出图接口没有返回图片");
+    const url=location.origin+result.data.url;
+    $("promptImagePreview").className="show";
+    $("promptImagePreview").innerHTML=`<img id="promptPreviewImg" src="${pqEsc(url)}" alt="Moss图片预览"><div id="promptImageMeta"><b>${result.data.width}×${result.data.height}</b><span>Moss · seed ${result.data.seed}</span><a href="${pqEsc(url)}" target="_blank">打开原图</a><a href="${pqEsc(url)}" download>下载图片</a></div>`;
+    $("promptImageNote").textContent="✅ Moss图片已生成，已进入历史记录（出图词·Moss）";
+  }catch(error){$("promptImageNote").textContent=error.name==="AbortError"?"已停止等待，请检查任务状态":"❌ "+error.message;}
+  finally{promptImageCtrl=null;for(const control of ["btnPrompt","btnPromptImage","promptModel","promptImageRatio","promptImageQuality"])$(control).disabled=false;setTask(null);}
 }
 const PROMPT_SIZE_1K={"1:1":[1024,1024],"4:3":[1152,864],"3:2":[1216,832],"16:9":[1536,864],"2.35:1":[1536,640],"4:5":[1024,1280],"2:3":[1024,1536],"9:16":[1080,1920]};
 const PROMPT_RATIO_WH={"1:1":[1,1],"4:3":[4,3],"3:2":[3,2],"16:9":[16,9],"2.35:1":[2.35,1],"4:5":[4,5],"2:3":[2,3],"9:16":[9,16]};
 function promptSizeSpec(ratio,quality,model){
   ratio=ratio||$("promptImageRatio").value;quality=quality||$("promptImageQuality").value;
   model=model||promptModelValue();
+  if(model==="moss"){
+    const dimensions=PROMPT_RATIO_WH[ratio]||[16,9];
+    quality=["2x","4k"].includes(quality)?quality:"workflow";
+    const upscale=quality==="workflow"?1.2:2;
+    const long=Math.max(...dimensions);
+    const width=quality==="4k"?Math.round(1920*dimensions[0]/long/16)*16:Math.max(256,Math.round(Math.sqrt(1024*1024*dimensions[0]/dimensions[1])/16)*16);
+    const height=quality==="4k"?Math.round(1920*dimensions[1]/long/16)*16:Math.max(256,Math.round(Math.sqrt(1024*1024*dimensions[1]/dimensions[0])/16)*16);
+    return {ratio,quality,w:width,h:height,upscale,final_w:Math.round(width/16*upscale)*16,final_h:Math.round(height/16*upscale)*16,label:quality==="workflow"?"原工作流 · 双阶段×1.2":quality==="4k"?"4K · 双阶段×2":"2倍 · 双阶段细化"};
+  }
   if(model==="anima"){
     const [rw,rh]=PROMPT_RATIO_WH[ratio]||[16,9],area=quality==="2k"?1920*1080:1024*1024;
     let w=Math.sqrt(area*rw/rh),h=Math.sqrt(area*rh/rw);
@@ -27604,6 +27802,7 @@ function promptSizeSpec(ratio,quality,model){
 }
 function promptSizeChanged(){
   const sp=promptSizeSpec();
+  if(promptModelValue()==="moss"){$("promptSizeHint").textContent=`Moss · ${sp.ratio} · ${sp.label}：基底 ${sp.w}×${sp.h} → 预计 ${sp.final_w}×${sp.final_h}（成图以返回尺寸为准）`;return;}
   if(promptModelValue()==="anima"){$("promptSizeHint").textContent=`Anima · ${sp.ratio} · ${sp.label} ${sp.w}×${sp.h}（40步，独立工作流）`;return;}
   $("promptSizeHint").textContent=sp.quality==="1k"
     ?`${sp.ratio} · 1K 直出 ${sp.w}×${sp.h}（几十秒）`
@@ -27647,6 +27846,8 @@ function promptImageSafeName(text){
   return String(text||"图片").replace(/[\\\/:*?"<>|]/g,"").replace(/\s+/g," ").trim().slice(0,30)||"图片";
 }
 async function promptImageGen(){
+  if(promptCtrl||promptImageCtrl||pqRunning){setStatus("请等当前任务结束");return;}
+  if(promptModelValue()==="moss")return mossImageGen();
   if(promptModelValue()==="anima")return animaImageGen();
   const optimized=$("promptOut").textContent.trim();
   const original=$("promptIn").value.trim();
@@ -27737,22 +27938,39 @@ async function promptImageGenHires(prompt,original){
   }
 }
 function promptStop(){
+  const queueStopped=pqStop();
   if(promptCtrl)promptCtrl.abort();
-  if(promptImageCtrl){
-    promptImageCtrl.abort();
+  if(promptImageCtrl||queueStopped){
+    if(promptImageCtrl)promptImageCtrl.abort();
     fetch("/api/stopall",{method:"POST"}).catch(()=>{});
   }
 }
 // ===== 出图词：待生产列表（内存版，多选/全选/顺序串行） =====
-let pqItems=[], pqRunning=false;
+let pqItems=[], pqRunning=false, pqStopped=false, pqCtrl=null;
 function pqEsc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function pqStop(){
+  if(!pqRunning)return false;
+  pqStopped=true;
+  if(pqCtrl)pqCtrl.abort();
+  return true;
+}
+function pqRequest(item){
+  if(item.request)return item.request;
+  const model=item.model||"krea2";
+  const spec=promptSizeSpec(item.ratio||"16:9",item.quality||(String(item.size)==="hires"?"2k":"1k"),model);
+  item.request=Object.freeze({model,text:item.prompt,ratio:spec.ratio,quality:spec.quality,base_w:spec.w,base_h:spec.h,final_w:spec.final_w,final_h:spec.final_h,seed:Math.floor(Math.random()*2000000000),...(model==="moss"?{upscale:spec.upscale}:{}),...(model==="anima"&&item.artist?{artist:item.artist}:{})});
+  return item.request;
+}
 function pqAdd(){
   const prompt=($("promptOut").textContent||"").trim();
   if(!prompt){alert("请先生成或填写提示词");return;}
   const sp=promptSizeSpec();const size=sp.ratio+" "+sp.label;
   const model=promptModelValue();
   if(model==="anima"&&/[\u3400-\u9fff]/.test(prompt)){alert("请先生成Anima英文词组再加入列表");return;}
-  pqItems.push({id:"pq_"+Date.now()+"_"+Math.floor(Math.random()*999),model:model,prompt:prompt,size:(model==="anima"?"Anima ":"Krea2 ")+size,ratio:sp.ratio,quality:sp.quality,checked:true,status:"ready",result:"",error:""});
+  if(model==="moss"&&!mossLayoutReady(prompt,sp))return;
+  const item={id:"pq_"+Date.now()+"_"+Math.floor(Math.random()*999),model:model,prompt:prompt,size:promptModelLabel(model)+" "+size,ratio:sp.ratio,quality:sp.quality,checked:true,status:"ready",result:"",error:""};
+  if(model==="anima")item.artist=animaArtistValue();
+  pqRequest(item);pqItems.push(item);
   pqRender();setStatus("已加入待生产列表");
 }
 function pqRender(){
@@ -27762,10 +27980,11 @@ function pqRender(){
     const st=it.status==="finished"?"✅ 完成":(it.status==="running"?"⏳ 生成中":(it.status==="failed"?"❌ 失败":"待生产"));
     const res=it.status==="finished"&&it.result?` <a href="${pqEsc(it.result)}" target="_blank">打开</a>`:"";
     const retry=it.status==="failed"?` <a href="javascript:void(0)" onclick="pqRetry('${it.id}')">重试</a>`:"";
+    const error=it.status==="failed"&&it.error?`<span style="flex-basis:100%;color:#b23;white-space:pre-wrap;overflow-wrap:anywhere">原因：${pqEsc(it.error)}</span>`:"";
     return `<div style="padding:7px 0;border-bottom:1px solid #eee;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input type="checkbox" ${it.checked?"checked":""} onchange="pqToggle('${it.id}',this.checked)">
       <span style="flex:1;min-width:180px">${pqEsc((it.prompt||"").slice(0,30))}… <span class="hint">${pqEsc(it.size)}</span></span>
-      <b>${st}</b>${res}${retry}
+      <b>${st}</b>${res}${retry}${error}
       <a href="javascript:void(0)" onclick="pqDel('${it.id}')" style="color:#b23">删除</a>
     </div>`;
   }).join("")||"暂无条目";
@@ -27778,40 +27997,52 @@ function pqDelSelected(){pqItems=pqItems.filter(x=>!x.checked);pqRender();}
 function pqRetry(id){const it=pqItems.find(x=>x.id===id);if(it){it.status="ready";it.error="";it.result="";}pqRender();}
 function pqToday(){return new Date().toLocaleDateString("sv-SE");}
 async function pqStart(){
+  if(promptCtrl||promptImageCtrl){setStatus("请等当前任务结束");return;}
   if(pqRunning){alert("正在生成中，请稍候");return;}
-  const sel=pqItems.filter(x=>x.checked&&x.status!=="finished");
+  const sel=pqItems.filter(item=>item.checked&&item.status!=="finished").map(item=>({item,request:pqRequest(item)}));
   if(!sel.length){alert("请先勾选要生成的条目");return;}
-  pqRunning=true;const btn=$("btnPqStart");if(btn)btn.disabled=true;
-  for(let i=0;i<sel.length;i++){
-    const it=sel[i];it.status="running";pqRender();
-    const prog=$("pqProgress");if(prog)prog.textContent=`正在生成第 ${i+1}/${sel.length} 条…`;
+  pqRunning=true;pqStopped=false;pqCtrl=new AbortController();
+  $("animaArtist").disabled=true;animaComposeSequence++;
+  const btn=$("btnPqStart");if(btn)btn.disabled=true;
+  try{
+  for(let index=0;index<sel.length;index++){
+    if(pqStopped)break;
+    const {item:it,request}=sel[index];it.status="running";pqRender();
+    const prog=$("pqProgress");if(prog)prog.textContent=`正在生成第 ${index+1}/${sel.length} 条…`;
     try{
-      const sp=promptSizeSpec(it.ratio||"16:9",it.quality||(String(it.size)==="hires"?"2k":"1k"),it.model||"krea2");
-      if(it.model==="anima"||sp.quality!=="1k"){
+      if(request.model!=="krea2"||request.quality!=="1k"){
         /* P450：2K / 4K 走工作台两段链 */
-        const r=await fetch(location.origin+"/api/image/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:it.model||"krea2",text:it.prompt,kind:"free",base_w:sp.w,base_h:sp.h})});
+        const r=await fetch(location.origin+"/api/image/generate",{method:"POST",signal:pqCtrl.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({model:request.model,text:request.text,kind:"free",base_w:request.base_w,base_h:request.base_h,seed:request.seed,...(request.model==="moss"&&request.upscale!==undefined?{upscale:request.upscale}:{}),...(request.model==="anima"&&request.artist?{artist:request.artist}:{})})});
         const text=await r.text();let j={};try{j=JSON.parse(text);}catch(e){}
+        if(pqStopped){it.status="ready";break;}
         if(!r.ok||!j.ok)throw new Error(j.error||text||("请求失败："+r.status));
-        it.status="finished";it.result=location.origin+((j.data&&j.data.url)||"");
+        if(!(j.data&&j.data.url))throw new Error("生图接口没有返回图片");
+        it.status="finished";it.result=location.origin+j.data.url;
         pqRender();continue;
       }
-      const w=sp.w,h=sp.h;
+      const w=request.base_w,h=request.base_h;
       const now=new Date();const clock=[now.getHours(),now.getMinutes(),now.getSeconds()].map(x=>String(x).padStart(2,"0")).join("");
       const archiveName=clock+"_pq_"+Math.floor(Math.random()*99999);
-      const r=await fetch("/api/genimage",{method:"POST",body:JSON.stringify({
-        prompt:it.prompt,w:w,h:h,seed:Math.floor(Math.random()*2000000000),
+      const r=await fetch("/api/genimage",{method:"POST",signal:pqCtrl.signal,body:JSON.stringify({
+        prompt:request.text,w:w,h:h,seed:request.seed,
         archive_dir:"待生产/"+pqToday(),archive_name:archiveName})});
       const text=await r.text();let j={};try{j=JSON.parse(text);}catch(e){}
+      if(pqStopped){it.status="ready";break;}
       if(!r.ok||!j.ok)throw new Error(j.error||text||("请求失败："+r.status));
       it.status="finished";it.result=j.archurl||j.url||"";
     }catch(e){
+      if(pqStopped||(e&&e.name)==="AbortError"){pqStopped=true;it.status="ready";it.error="";break;}
       it.status="failed";it.error=(e&&e.message)||String(e);
     }
     pqRender();
   }
+  }finally{
+  pqCtrl=null;
+  $("animaArtist").disabled=false;
   const prog=$("pqProgress");if(prog)prog.textContent="";
   pqRunning=false;if(btn)btn.disabled=false;
-  setStatus("待生产列表生成完成");
+  pqRender();setStatus(pqStopped?"待生产列表已停止，未完成条目保留":"待生产列表生成完成");
+  }
 }
 
 // ===== 快速创作：不写小说，直接规划并生成一套图片 =====
@@ -30486,7 +30717,7 @@ def build_krea2_prompt(character, resolved_state, image_intent, purpose="chat",
     if purpose == "avatar":
         shot = "正方形头像构图，人物面部清晰居中，简洁背景"
     elif purpose == "sheet":
-        shot = "横版全身三视图，正面、侧面、背面三个全身像并排，三个形象不重叠，同一套服装，简洁纯色背景"
+        shot = "横版全身三视图，正面、侧面、背面三个全身像并排，视图之间保留均匀间距，同一套服装，简洁纯色背景"
     else:
         mode_map = {
             "selfie": "手机自拍视角，人物自然看向手机镜头",

@@ -1,381 +1,381 @@
 {
- "180": {
-  "inputs": {
-   "multiplier": 4,
-   "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"
+  "180": {
+    "inputs": {
+      "multiplier": 4,
+      "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"
+    },
+    "class_type": "ConditioningKrea2Rebalance",
+    "_meta": {
+      "title": "ConditioningKrea2Rebalance"
+    }
   },
-  "class_type": "ConditioningKrea2Rebalance",
-  "_meta": {
-   "title": "Conditioning Krea2 Rebalance"
-  }
- },
- "202": {
-  "inputs": {
-   "add_noise": "enable",
-   "noise_seed": [
-    "268",
-    0
-   ],
-   "steps": 7,
-   "cfg": 1.0,
-   "sampler_name": "euler",
-   "scheduler": "simple",
-   "start_at_step": 0,
-   "end_at_step": 7,
-   "return_with_leftover_noise": "enable",
-   "model": [
-    "352",
-    0
-   ],
-   "positive": [
-    "264",
-    0
-   ],
-   "negative": [
-    "259",
-    0
-   ],
-   "latent_image": [
-    "261",
-    0
-   ]
+  "202": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": [
+        "268",
+        0
+      ],
+      "steps": 7,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": 7,
+      "return_with_leftover_noise": "enable",
+      "model": [
+        "352",
+        0
+      ],
+      "positive": [
+        "264",
+        0
+      ],
+      "negative": [
+        "259",
+        0
+      ],
+      "latent_image": [
+        "261",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSamplerAdvanced"
+    }
   },
-  "class_type": "KSamplerAdvanced",
-  "_meta": {
-   "title": "K采样器（高级）"
-  }
- },
- "203": {
-  "inputs": {
-   "upscale_method": "bislerp",
-   "scale_by": 1.5,
-   "samples": [
-    "202",
-    0
-   ]
+  "203": {
+    "inputs": {
+      "upscale_method": "bislerp",
+      "scale_by": 1.5,
+      "samples": [
+        "202",
+        0
+      ]
+    },
+    "class_type": "LatentUpscaleBy",
+    "_meta": {
+      "title": "LatentUpscaleBy"
+    }
   },
-  "class_type": "LatentUpscaleBy",
-  "_meta": {
-   "title": "缩放Latent（比例）"
-  }
- },
- "204": {
-  "inputs": {
-   "samples": [
-    "202",
-    0
-   ],
-   "vae": [
-    "266",
-    0
-   ]
+  "204": {
+    "inputs": {
+      "samples": [
+        "202",
+        0
+      ],
+      "vae": [
+        "266",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode"
+    }
   },
-  "class_type": "VAEDecode",
-  "_meta": {
-   "title": "VAE解码"
-  }
- },
- "211": {
-  "inputs": {
-   "add_noise": "enable",
-   "noise_seed": [
-    "268",
-    0
-   ],
-   "steps": 10,
-   "cfg": 1.0,
-   "sampler_name": "euler",
-   "scheduler": "simple",
-   "start_at_step": 4,
-   "end_at_step": 999,
-   "return_with_leftover_noise": "disable",
-   "model": [
-    "352",
-    0
-   ],
-   "positive": [
-    "264",
-    0
-   ],
-   "negative": [
-    "259",
-    0
-   ],
-   "latent_image": [
-    "203",
-    0
-   ]
+  "211": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": [
+        "268",
+        0
+      ],
+      "steps": 10,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 4,
+      "end_at_step": 999,
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "352",
+        0
+      ],
+      "positive": [
+        "264",
+        0
+      ],
+      "negative": [
+        "259",
+        0
+      ],
+      "latent_image": [
+        "203",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSamplerAdvanced"
+    }
   },
-  "class_type": "KSamplerAdvanced",
-  "_meta": {
-   "title": "K采样器（高级）"
-  }
- },
- "212": {
-  "inputs": {
-   "samples": [
-    "211",
-    0
-   ],
-   "vae": [
-    "266",
-    0
-   ]
+  "212": {
+    "inputs": {
+      "samples": [
+        "211",
+        0
+      ],
+      "vae": [
+        "266",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode"
+    }
   },
-  "class_type": "VAEDecode",
-  "_meta": {
-   "title": "VAE解码"
-  }
- },
- "253": {
-  "inputs": {
-   "method": "mkl",
-   "strength": 0.5,
-   "multithread": true,
-   "image_target": [
-    "212",
-    0
-   ],
-   "image_ref": [
-    "204",
-    0
-   ]
+  "253": {
+    "inputs": {
+      "method": "mkl",
+      "strength": 0.5,
+      "multithread": true,
+      "image_target": [
+        "212",
+        0
+      ],
+      "image_ref": [
+        "204",
+        0
+      ]
+    },
+    "class_type": "ColorMatchV2",
+    "_meta": {
+      "title": "ColorMatchV2"
+    }
   },
-  "class_type": "ColorMatchV2",
-  "_meta": {
-   "title": "ColorMatchV2"
-  }
- },
- "255": {
-  "inputs": {
-   "text": "马赛克, mosaic, censored, 模糊，低分辨率，低质量图像，扭曲的肢体，诡异的外观，丑陋，噪点，网格感，JPEG压缩条纹，异常的肢体，水印，乱码，意义不明的字符",
-   "clip": [
-    "258",
-    0
-   ]
+  "255": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "258",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
   },
-  "class_type": "CLIPTextEncode",
-  "_meta": {
-   "title": "负面条件"
-  }
- },
- "258": {
-  "inputs": {
-   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
-   "type": "krea2",
-   "device": "default"
+  "258": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "CLIPLoader"
+    }
   },
-  "class_type": "CLIPLoader",
-  "_meta": {
-   "title": "加载CLIP"
-  }
- },
- "259": {
-  "inputs": {
-   "conditioning": [
-    "264",
-    0
-   ]
+  "259": {
+    "inputs": {
+      "conditioning": [
+        "264",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
   },
-  "class_type": "ConditioningZeroOut",
-  "_meta": {
-   "title": "条件零化"
-  }
- },
- "261": {
-  "inputs": {
-   "width": 1920,
-   "height": 1080,
-   "batch_size": 1
+  "261": {
+    "inputs": {
+      "width": 1920,
+      "height": 1080,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "EmptyLatentImage"
+    }
   },
-  "class_type": "EmptyLatentImage",
-  "_meta": {
-   "title": "空Latent图像"
-  }
- },
- "262": {
-  "inputs": {
-   "unet_name": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors",
-   "weight_dtype": "default"
+  "262": {
+    "inputs": {
+      "unet_name": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNETLoader"
+    }
   },
-  "class_type": "UNETLoader",
-  "_meta": {
-   "title": "UNet加载器"
-  }
- },
- "264": {
-  "inputs": {
-   "text": "",
-   "clip": [
-    "258",
-    0
-   ]
+  "264": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "258",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
   },
-  "class_type": "CLIPTextEncode",
-  "_meta": {
-   "title": "CLIP文本编码"
-  }
- },
- "266": {
-  "inputs": {
-   "vae_name": "qwen_image_vae.safetensors"
+  "266": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
   },
-  "class_type": "VAELoader",
-  "_meta": {
-   "title": "加载VAE"
-  }
- },
- "268": {
-  "inputs": {
-   "seed": 6469963314856
-  },
-  "class_type": "Seed (rgthree)",
-  "_meta": {
-   "title": "Seed (rgthree)"
-  },
-  "is_changed": [
-   6469963314856
-  ]
- },
- "271": {
-  "inputs": {
-   "filename_prefix": "Krea2-2ST-20260819220117",
-   "images": [
-    "253",
-    0
-   ]
-  },
-  "class_type": "SaveImage",
-  "_meta": {
-   "title": "保存图像"
-  }
- },
- "348": {
-  "inputs": {
-   "group_mode": true,
-   "default_active": {
-    "__value__": [
-     {
-      "text": "createconcept",
-      "active": true
-     },
-     {
-      "text": "DS-Illu",
-      "active": true
-     }
+  "268": {
+    "inputs": {
+      "seed": 6469963314856
+    },
+    "class_type": "Seed (rgthree)",
+    "_meta": {
+      "title": "Seed (rgthree)"
+    },
+    "is_changed": [
+      6469963314856
     ]
-   },
-   "allow_strength_adjustment": false,
-   "toggle_trigger_words": {
-    "__value__": []
-   },
-   "orinalMessage": "",
-   "trigger_words": [
-    "349",
-    2
-   ]
   },
-  "class_type": "TriggerWord Toggle (LoraManager)",
-  "_meta": {
-   "title": "TriggerWord Toggle (LoraManager)"
-  }
- },
- "349": {
-  "inputs": {
-   "__lm_autocomplete_meta_text": {
-    "version": 1,
-    "textWidgetName": "text"
-   },
-   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-5.00>",
-   "loras": {
-    "__value__": [
-     {
-      "name": "Krea2-滑块-年龄age_krea2_loraholic",
-      "strength": "-5.00",
-      "active": false,
-      "expanded": false,
-      "clipStrength": "-5.00",
-      "selected": false,
-      "locked": false
-     }
-    ]
-   }
+  "271": {
+    "inputs": {
+      "filename_prefix": "Workbench",
+      "images": [
+        "253",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "SaveImage"
+    }
   },
-  "class_type": "Lora Loader (LoraManager)",
-  "_meta": {
-   "title": "Lora Loader (LoraManager)"
-  }
- },
- "350": {
-  "inputs": {
-   "images": [
-    "204",
-    0
-   ]
+  "348": {
+    "inputs": {
+      "group_mode": true,
+      "default_active": {
+        "__value__": [
+          {
+            "text": "createconcept",
+            "active": true
+          },
+          {
+            "text": "DS-Illu",
+            "active": true
+          }
+        ]
+      },
+      "allow_strength_adjustment": false,
+      "toggle_trigger_words": {
+        "__value__": []
+      },
+      "orinalMessage": "",
+      "trigger_words": [
+        "349",
+        2
+      ]
+    },
+    "class_type": "TriggerWord Toggle (LoraManager)",
+    "_meta": {
+      "title": "TriggerWord Toggle (LoraManager)"
+    }
   },
-  "class_type": "PreviewImage",
-  "_meta": {
-   "title": "预览图像"
-  }
- },
- "351": {
-  "inputs": {
-   "group_mode": true,
-   "default_active": {
-    "__value__": [
-     {
-      "text": "createconcept",
-      "active": true
-     },
-     {
-      "text": "DS-Illu",
-      "active": true
-     }
-    ]
-   },
-   "allow_strength_adjustment": false,
-   "toggle_trigger_words": {
-    "__value__": []
-   },
-   "orinalMessage": "",
-   "trigger_words": [
-    "352",
-    2
-   ]
+  "349": {
+    "inputs": {
+      "__lm_autocomplete_meta_text": {
+        "version": 1,
+        "textWidgetName": "text"
+      },
+      "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-5.00>",
+      "loras": {
+        "__value__": [
+          {
+            "name": "Krea2-滑块-年龄age_krea2_loraholic",
+            "strength": "-5.00",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "-5.00",
+            "selected": false,
+            "locked": false
+          }
+        ]
+      }
+    },
+    "class_type": "Lora Loader (LoraManager)",
+    "_meta": {
+      "title": "Lora Loader (LoraManager)"
+    }
   },
-  "class_type": "TriggerWord Toggle (LoraManager)",
-  "_meta": {
-   "title": "TriggerWord Toggle (LoraManager)"
-  }
- },
- "352": {
-  "inputs": {
-   "__lm_autocomplete_meta_text": {
-    "version": 1,
-    "textWidgetName": "text"
-   },
-   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-4.00>",
-   "loras": {
-    "__value__": [
-     {
-      "name": "Krea2-滑块-年龄age_krea2_loraholic",
-      "strength": "-4.00",
-      "active": false,
-      "expanded": false,
-      "clipStrength": "-4.00",
-      "selected": false,
-      "locked": false
-     }
-    ]
-   },
-   "model": [
-    "262",
-    0
-   ]
+  "350": {
+    "inputs": {
+      "images": [
+        "204",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "PreviewImage"
+    }
   },
-  "class_type": "Lora Loader (LoraManager)",
-  "_meta": {
-   "title": "Lora Loader (LoraManager)"
+  "351": {
+    "inputs": {
+      "group_mode": true,
+      "default_active": {
+        "__value__": [
+          {
+            "text": "createconcept",
+            "active": true
+          },
+          {
+            "text": "DS-Illu",
+            "active": true
+          }
+        ]
+      },
+      "allow_strength_adjustment": false,
+      "toggle_trigger_words": {
+        "__value__": []
+      },
+      "orinalMessage": "",
+      "trigger_words": [
+        "352",
+        2
+      ]
+    },
+    "class_type": "TriggerWord Toggle (LoraManager)",
+    "_meta": {
+      "title": "TriggerWord Toggle (LoraManager)"
+    }
+  },
+  "352": {
+    "inputs": {
+      "__lm_autocomplete_meta_text": {
+        "version": 1,
+        "textWidgetName": "text"
+      },
+      "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-4.00>",
+      "loras": {
+        "__value__": [
+          {
+            "name": "Krea2-滑块-年龄age_krea2_loraholic",
+            "strength": "-4.00",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "-4.00",
+            "selected": false,
+            "locked": false
+          }
+        ]
+      },
+      "model": [
+        "262",
+        0
+      ]
+    },
+    "class_type": "Lora Loader (LoraManager)",
+    "_meta": {
+      "title": "Lora Loader (LoraManager)"
+    }
   }
- }
 }

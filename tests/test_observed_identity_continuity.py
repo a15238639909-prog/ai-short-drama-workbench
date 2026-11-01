@@ -158,8 +158,8 @@ class ObservedIdentityContinuityTests(unittest.TestCase):
         self.assertEqual(traces[0]['attempts'][0]['observation_raw'], observation_before)
         self.assertEqual(original_observation, observation_before)
         self.assertFalse(rows[0]['source_fallback'])
-        self.assertIn('原文明确的衣着与发型变化按剧情时序执行', rows[0]['prompt'])
-        self.assertIn('Identity authority (source-and-reference-identity-v1):', rows[0]['prompt'])
+        self.assertIn('沿用对应人设图', rows[0]['prompt'])
+        self.assertNotIn('Identity authority (source-and-reference-identity-v1):', rows[0]['prompt'])
         self.assertNotIn('人物外观完整沿用对应人设图', rows[0]['prompt'])
         self.assertIn('这回稳了。', rows[0]['prompt'])
 

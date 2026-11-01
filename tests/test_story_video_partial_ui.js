@@ -1,0 +1,26 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('web/pages/story_video.js','utf8');
+const fixtures=fs.readFileSync('tests/test_story_video_reference_ui.js','utf8');
+const context=vm.createContext({require,console});
+vm.runInContext(fixtures.slice(0,fixtures.indexOf('async function main()')),context);
+const h=vm.runInContext('harness("text")',context),c=h.context;
+c.document.createElement=vm.runInContext('()=>new Element()',context);
+vm.runInContext(source.slice(source.indexOf('    function renderOutput(output)'),source.indexOf('    function update(payload)')),c);
+const output={generation_completed:false,missing_segments:[2],detail:'已保存第1、3段；第2段待补',
+  manifest_url:'/files/outputs/manifest.json',saved_segments:[{index:1,url:'/files/outputs/one.mp4'},{index:3,url:'/files/outputs/three.mp4'}]};
+c.renderOutput(output);
+assert.equal(h.get('result').hidden,false);
+assert.equal(h.get('result').children[0].textContent,'阶段结果 · 部分待补');
+assert.equal(h.get('result').children[1].children.length,3);
+assert.equal(h.get('result').children[2].textContent,output.detail);
+assert(!h.get('result').children.some(row=>row.src));
+c.task={id:'partial-story',status:'partial',inputs:{input_mode:'text',quality_mode:'automatic',segment_seconds:15}};
+c.sync();
+assert.equal(h.get('resume').hidden,false);
+assert.equal(h.get('start').disabled,true);
+assert.equal(h.get('pause').hidden,true);
+c.renderOutput({...output,url:'/files/outputs/partial.mp4'});
+assert.equal(h.get('result').children[1].src,'/files/outputs/partial.mp4');
+assert.equal(h.get('result').children[2].children[0].textContent,'打开阶段合并');
+console.log('Story partial UI passed: missing slots, saved links without a merged movie, honest partial label, explicit resume and no fake completion. No HTTP/models/media.');

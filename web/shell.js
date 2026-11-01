@@ -25,6 +25,7 @@
       { h: "#prompt", t: "🎨 出图词", d: "提示词生成 / 优化 / 反推，直接出图" },
       { h: "#motion", t: "🕺 动作迁移", d: "参考视频保留动作与运镜，替换人物及可选场景，查看左右对比" },
       { h: "#story-video", t: "🎞️ 故事视频", d: "给一张图或故事方向，本地AI逐段创作、观察并接成完整视频" },
+      { h: "#long-comic", t: "📚 长篇漫画", d: "独立漫画项目：规划全书、逐章生成、编辑单页和整书导出" },
       { h: "#downloads", t: "📥 视频下载", d: "粘贴抖音分享链接，下载到默认目录，一键打开文件夹" },
       { h: "#director", t: "🎥 视频导演台", d: "MiniMax H3 单视频：文/图/首尾帧/全能参考" }
     ]
@@ -366,6 +367,8 @@
     if (button) { button.disabled = true; button.textContent = act === 'cancel' ? '取消中…' : '处理中…'; }
     var request = t.kind === 'story_video'
       ? window.api.post('/api/story-video/action', {id: t.id, action: act})
+      : t.kind === 'long_comic'
+      ? window.api.post('/api/long-comic/project/' + encodeURIComponent(t.project_id || t.id) + '/action', {action: act})
       : window.api.post('/api/tasks/' + t.id + '/' + act);
     return request.then(function () {
       if (!runtimeCurrent(epoch)) return;

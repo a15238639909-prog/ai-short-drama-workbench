@@ -62,7 +62,7 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
         self.prepare = stack.enter_context(patch.object(continuity, 'prepare_handoff',
             side_effect=AssertionError('new policy must not append historical image evidence')))
         self.handoff = stack.enter_context(patch.object(continuity, 'handoff_prompt',
-            side_effect=AssertionError('new policy must not append a tail image slot')))
+            wraps=continuity.handoff_prompt))
         stack.enter_context(patch.object(Path, 'unlink', side_effect=AssertionError('no permanent unlink')))
         stack.enter_context(patch('shutil.rmtree', side_effect=AssertionError('no permanent deletion')))
 
@@ -102,36 +102,53 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
         self.assertLessEqual(numbers, set(range(1, len(images) + 1)))
         continuity.validate_prompt_references(submitted, images)
 
-    def test_a_a_b_b_a_renders_only_entrance_scene_pictures_without_tail_slots(self):
+    def test_a_a_b_b_a_renders_first_scene_use_and_actual_predecessor_tails(self):
         original = [self.row(number)['prompt'] for number in range(1, 6)]
         expected = [('Hall', True), ('Hall', False), ('Courtyard', True),
-                    ('Courtyard', False), ('Hall', True)]
+                    ('Courtyard', False), ('Hall', False)]
         for number, (location, entrance) in enumerate(expected, 1):
             with self.subTest(segment=number):
                 self.render(number)
                 call = self.case.generate.call_args
                 images = [self.paths['Alice']] + ([self.paths[location]] if entrance else [])
+                tail = self.row(number - 1)['end_frame'] if number > 1 else ''
+                if tail:
+                    images.append(tail)
                 self.assertEqual(call.args[0], 'ref2va')
                 self.assertEqual(call.kwargs['images'], images)
                 self.assert_bound(call.args[1], images)
                 request = self.row(number)['render_request']
                 self.assertEqual(request['scene_reference_policy'], policy.VERSION)
                 self.assertEqual(request['scene_image_included'], entrance)
-                self.assertEqual(request['handoff_version'], 'none')
+                self.assertEqual(request['handoff_version'], 'h3-handoff-v2' if tail else 'none')
+                self.assertEqual(request['tail_reference'], tail)
+                self.assertEqual(request['continuity_policy'], 'scene-first-use-tail-v2')
                 self.assertEqual(self.row(number)['prompt'], original[number - 1])
                 if not entrance:
                     self.assertIn('the environment.', call.args[1])
                     self.assertNotIn('environment from <Picture', call.args[1])
-                    self.assertIn('established architecture', call.args[1])
+                    self.assertIn('the environment.', call.args[1])
+                    self.assertIn('places the clock on a table in <Subject 2>', call.args[1])
+                    self.assertNotIn('Reference scope (', call.args[1])
         self.prepare.assert_not_called()
-        self.handoff.assert_not_called()
+        self.assertEqual(self.handoff.call_count, 4)
         self.assertEqual(self.case.generate.call_count, 5)
 
     def test_entry_is_determined_by_plan_even_when_rendered_out_of_order(self):
         for number in (4, 2, 3, 1, 5):
             self.render(number)
             scene_image = self.paths[self.row(number)['scene']]
-            self.assertEqual(scene_image in self.case.generate.call_args.kwargs['images'], number in (1, 3, 5))
+            self.assertEqual(scene_image in self.case.generate.call_args.kwargs['images'], number in (1, 3))
+
+    def test_old_source_owned_marker_cannot_restore_scene_image_on_continuation(self):
+        row = self.row(2)
+        row['plan'] = dict(flow='source-v1', source_shot_policy='source-shots-v1', scene_reference_scope='current-scene-v1')
+        self.render(2)
+        call = self.case.generate.call_args
+        self.assertEqual(call.kwargs['images'], [self.paths['Alice'], self.row(1)['end_frame']])
+        self.assertNotIn(self.paths['Courtyard'], call.kwargs['images'])
+        self.assertNotIn('environment from <Picture', call.args[1])
+        self.assertIn('视频末帧', call.args[1])
 
     def test_unused_missing_set_does_not_block_continuation_but_entry_still_requires_it(self):
         visuals = [dict(status='adopted', owner_id='adult_alice', kind='character', path=self.paths['Alice'])]
@@ -142,7 +159,8 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
                 patch.object(api, 'new_pack', side_effect=_REAL_NEW_PACK), \
                 patch.object(reference_ready, 'assert_references', side_effect=_REAL_ASSERT_REFERENCES):
             self.render(2)
-            self.assertEqual(self.case.generate.call_args.kwargs['images'], [self.paths['Alice']])
+            self.assertEqual(self.case.generate.call_args.kwargs['images'],
+                             [self.paths['Alice'], self.row(1)['end_frame']])
             with self.assertRaisesRegex(reference_ready.MissingReferencesError, 'Hall'):
                 self.render(1)
         self.assertEqual(self.case.generate.call_count, 1)
@@ -171,10 +189,11 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
         self.row(2).update(refs=[dict(n='Hall'), dict(n='Alice')], prompt=original)
         self.render(2)
         call = self.case.generate.call_args
-        self.assertEqual(call.kwargs['images'], [self.paths['Alice']])
+        self.assertEqual(call.kwargs['images'], [self.paths['Alice'], self.row(1)['end_frame']])
         self.assertIn('<Subject 1> is Alice, the character from <Picture 1>.', call.args[1])
         self.assertIn('<Subject 2> is Hall, the environment.', call.args[1])
-        self.assertNotIn('<Picture 2>', call.args[1])
+        self.assertNotIn('environment from <Picture 2>', call.args[1])
+        self.assertIn('<Picture 2>是紧接本段', call.args[1])
         self.assertEqual(self.row(2)['prompt'], original)
         self.assert_bound(call.args[1], call.kwargs['images'])
 
@@ -183,27 +202,53 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
         self.row(3).update(refs=[dict(n='Courtyard'), dict(n='Alice')], prompt=original)
         self.render(3)
         call = self.case.generate.call_args
-        self.assertEqual(call.kwargs['images'], [self.paths['Courtyard'], self.paths['Alice']])
+        self.assertEqual(call.kwargs['images'],
+                         [self.paths['Courtyard'], self.paths['Alice'], self.row(2)['end_frame']])
         self.assertIn('<Subject 1> is Alice, the character from <Picture 2>.', call.args[1])
         self.assertIn('<Subject 2> is Courtyard, the environment from <Picture 1>.', call.args[1])
         self.assert_bound(call.args[1], call.kwargs['images'])
         self.assertEqual(self.row(3)['prompt'], original)
 
-    def test_scene_only_continuation_uses_text_mode_without_unbound_images(self):
+    def test_scene_only_continuation_uses_actual_tail_without_repeating_set_image(self):
         self.row(2).update(chars=[], no_chars=True, prompt=self.prompt('Hall', empty=True))
         self.render(2)
         call = self.case.generate.call_args
-        self.assertEqual(call.args[0], 't2va')
-        self.assertEqual(call.kwargs['images'], [])
+        self.assertEqual(call.args[0], 'ref2va')
+        self.assertEqual(call.kwargs['images'], [self.row(1)['end_frame']])
         self.assertIn('<Subject 1> is Hall, the environment.', call.args[1])
-        self.assertNotIn('<Picture', call.args[1])
-        self.assert_bound(call.args[1], [])
+        self.assertNotIn('environment from <Picture', call.args[1])
+        self.assertIn('<Picture 1>是紧接本段', call.args[1])
+        self.assert_bound(call.args[1], call.kwargs['images'])
+
+    def test_continuation_without_predecessor_video_stops_before_submission(self):
+        self.row(1).update(video=str(self.case.directory / 'not_generated.mp4'), end_frame='')
+        with self.assertRaisesRegex(ValueError, '紧邻上一段'):
+            self.render(2)
+        self.case.generate.assert_not_called()
+        self.assertNotIn('render_request', self.row(2))
+
+    def test_missing_actual_tail_is_extracted_from_immediate_predecessor(self):
+        self.row(1)['end_frame'] = str(self.case.directory / 'missing_tail.png')
+        self.render(2)
+        tail = self.row(1)['end_frame']
+        self.assertTrue(Path(tail).is_file())
+        self.assertEqual(self.case.generate.call_args.kwargs['images'], [self.paths['Alice'], tail])
+        self.assertEqual(self.row(2)['render_request']['tail_reference'], tail)
+        self.assertTrue(any('-sseof' in call.args[0] for call in self.case.process.call_args_list))
+
+    def test_full_reference_budget_cannot_silently_drop_required_tail(self):
+        with patch.object(api, '_render_references', return_value=[self.paths['Alice']] * 9):
+            with self.assertRaisesRegex(ValueError, '实际尾帧保留一个'):
+                self.render(2)
+        self.case.generate.assert_not_called()
+        self.assertNotIn('render_request', self.row(2))
 
     def pending(self, number, *, new_policy=False):
         row = self.row(number)
         request = dict(key='frozen-scene-test-%s' % number, status='pending', requested_seed=None)
         if new_policy:
             request['scene_reference_policy'] = policy.VERSION
+            request['scene_image_included'] = False
         row['render_request'] = request
         request['input_signature'] = api._render_context('TEST', 2, 1, number)[-1]
         images = [self.paths['Alice']]
@@ -237,29 +282,25 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
         self.assertEqual(call.kwargs['recovery_key'], request['key'])
         self.assertEqual(self.row(2)['render_request']['scene_reference_policy'], policy.VERSION)
 
-    def test_unrecognized_custom_scene_binding_preserves_original_pack_and_continues(self):
+    def test_unrecognized_custom_binding_stops_instead_of_restoring_scene_image(self):
         original = ('<Subject 1> is Alice, the character from <Picture 1>.\n'
                     '<Subject 2> follows the colors and framing in <Picture 2>.\n'
                     'Alice examines a repaired clock.')
         self.row(2).update(prompt=original, plan={})
-        self.render(2)
-        call = self.case.generate.call_args
-        self.assertEqual(call.args[1], original)
-        self.assertEqual(call.kwargs['images'], [self.paths['Alice'], self.paths['Hall']])
+        with self.assertRaisesRegex(ValueError, '场景图片绑定无法确认'):
+            self.render(2)
+        self.case.generate.assert_not_called()
         self.assertEqual(self.row(2)['prompt'], original)
-        self.assertTrue(self.row(2)['render_request']['reference_policy_note'])
-        self.assert_bound(call.args[1], call.kwargs['images'])
+        self.assertNotIn('render_request', self.row(2))
 
-    def test_literal_picture_marker_in_dialogue_does_not_get_rewritten_or_stop_generation(self):
+    def test_literal_picture_marker_in_dialogue_is_preserved_and_stops_unsafe_submission(self):
         original = self.prompt().replace('[Shot 1]', '[Shot 1] <Subject 1> (S1) says <d><Picture 2></d>.')
         self.row(2)['prompt'] = original
-        self.render(2)
-        call = self.case.generate.call_args
-        self.assertIn('<d><Picture 2></d>', call.args[1])
-        self.assertEqual(call.kwargs['images'], [self.paths['Alice'], self.paths['Hall']])
+        with self.assertRaisesRegex(ValueError, '场景图片绑定无法确认'):
+            self.render(2)
+        self.case.generate.assert_not_called()
         self.assertEqual(self.row(2)['prompt'], original)
-        self.assertTrue(self.row(2)['render_request']['reference_policy_note'])
-        self.assert_bound(call.args[1], call.kwargs['images'])
+        self.assertNotIn('render_request', self.row(2))
 
     def test_legacy_completed_clip_remains_current_without_regeneration(self):
         row = self.row(2)
@@ -278,7 +319,8 @@ class WorkbenchSceneEntryRenderTests(unittest.TestCase):
                    render_input_signature='old-signature')
         self.assertTrue(_REAL_SCENE_POLICY_ACTIVE(row, fresh=True))
         self.render(2)
-        self.assertEqual(self.case.generate.call_args.kwargs['images'], [self.paths['Alice']])
+        self.assertEqual(self.case.generate.call_args.kwargs['images'],
+                         [self.paths['Alice'], self.row(1)['end_frame']])
         self.assertEqual(self.row(2)['render_request']['scene_reference_policy'], policy.VERSION)
 
 

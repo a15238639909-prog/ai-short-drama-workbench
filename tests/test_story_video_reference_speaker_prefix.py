@@ -43,7 +43,10 @@ class ReferenceSpeakerPrefixTests(unittest.TestCase):
         self.assertEqual(report['original_classifier_report'], original_snapshot)
         self.assertEqual(original_report, original_snapshot)
         self.assertEqual(report['issues'], [])
-        self.assertEqual(original_snapshot['dialogue'][0]['speaker'], '莱恩')
+        # The base ledger now recognizes this explicit prefix correctly too.
+        # Keep the untouched classifier evidence, without requiring its former
+        # bug (stealing the next quote's 莱恩 prefix) to remain present.
+        self.assertEqual(original_snapshot['dialogue'][0]['speaker'], '诺尔')
         self.assertIn('【D1】诺尔：拿这把破剑去救太阳？', contract['numbered_source'])
         self.assertEqual(len(report['speaker_attribution_audit']), 7)
         for audit in report['speaker_attribution_audit']:

@@ -9,6 +9,7 @@
 已提交请求使用原始快照恢复，避免更改输入后重复生成。
 """
 import json
+import copy
 import hashlib
 import os
 import re
@@ -291,8 +292,6 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
     """新旧时间轴共用的出片门禁；网页单段按钮和批量出片必须走同一判断。"""
     from cores import authoring as _au
     critical = list(g.get("critical_problems") or [])
-    if critical:
-        return critical
     source_text = str(g.get("source_text") or "")
     if not source_text:
         slices = ((tl.get("slicing") or {}).get("slices") or [])
@@ -300,10 +299,16 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
             source_text = str(slices[int(seg_no) - 1].get("text") or "")
         except (IndexError, TypeError, ValueError, AttributeError):
             source_text = ""
-    if (g.get("plan") or {}).get("flow") == "source-v1":
+    actual_six_fields = _au.h3_prompt_kind(prompt) == 'six_fields'
+    explicit_legacy = (not actual_six_fields and '<Subject' in prompt and (
+        re.search(r'(?m)^\s*\d+(?:\.\d+)?\s*[—–\-~～]\s*\d+(?:\.\d+)?\s*秒[：:]', prompt)
+        or any(_au.shot_parts(line) for line in prompt.splitlines())))
+    if (actual_six_fields or (g.get("plan") or {}).get("flow") == "source-v1" and not explicit_legacy):
         from cores import director_flow
         return director_flow.prompt_problems(prompt, source_text, g.get("seconds"), g.get("scene"))
-    current_problems = list(g.get("problems") or [])
+    # These lists describe a previous prompt. If current source is available,
+    # recompute the text facts rather than turn historical failures into a gate.
+    current_problems = [] if source_text else list(g.get("problems") or []) + critical
     if source_text:
         episodes = (((st.get("saga") or {}).get("episodes")) or [])
         episode_row = next((x for x in episodes
@@ -318,12 +323,80 @@ def _render_critical_problems(st, tl, g, prompt, ep, seg_no):
             source_text, _ = _au.canonicalize_picture_speakers(source_text, prose, names)      # P455⑥：导演段的说话人来自剧本，不按正文重猜
         try:
             current_problems += _au.h3_problems(
-                prompt, source_text, [{"name": x} for x in names])
+                prompt, source_text, [{"name": x} for x in names], settings=st.get('settings') or {})
         except Exception:
             pass
     return _au.h3_critical_problems(
         prompt, source_text, current_problems,
         {"seconds": g.get("seconds"), "over": g.get("over")}, g.get("scene") or "")
+
+
+def _prepare_render_prompt(sid, ep, scene_no, seg_no, log_fn=None):
+    """One source-bound text repair, shared by batch and single-segment entry.
+
+    Never rewrite a manual edit or any charged request snapshot. This happens
+    before submitting to H3, so repairing text cannot duplicate a video job.
+    """
+    from cores import authoring
+    st, tl = _load(sid, ep)
+    sc, g = _seg_of(tl, int(scene_no or 1), int(seg_no))
+    if not g:
+        raise RuntimeError('找不到第 %s 段' % seg_no)
+    original_input = copy.deepcopy(g)
+    prompt = str(g.get('prompt') or '')
+    critical = _render_critical_problems(st, tl, g, prompt, ep, seg_no) if prompt.strip() else ['本段还没有提示词']
+    request = g.get('render_request') or {}
+    if (not critical or g.get('prompt_edited') or request.get('key')
+            or not (is_new_prompt(prompt) or authoring._pov_spec(st.get('settings') or {})[0] == '第一视角POV')):
+        return st, tl, sc, g, prompt, critical
+    source = str(g.get('source_text') or '')
+    if not source:
+        frozen = ((tl.get('slicing') or {}).get('slices') or [])
+        source = str((frozen[int(seg_no) - 1] or {}).get('text') or '') if int(seg_no) <= len(frozen) else ''
+    if not source.strip():
+        return st, tl, sc, g, prompt, critical
+    if log_fn:
+        log_fn('提交前只修复第%d段提示词，保留其他段和已有视频' % int(seg_no))
+    rows = authoring.make_h3_prompts(sid, ep, start=int(seg_no) - 1, count=1)
+    proposal = next((row for row in rows or [] if int(row.get('n') or 0) == int(seg_no)), None)
+    if not proposal or not str(proposal.get('prompt') or '').strip():
+        return st, tl, sc, g, prompt, critical
+    # Re-read after a slow writer. A concurrent manual edit/submission wins.
+    fresh_st, fresh_tl = _load(sid, ep)
+    fresh_sc, fresh = _seg_of(fresh_tl, int(scene_no or 1), int(seg_no))
+    if (not fresh or fresh.get('prompt_edited') or (fresh.get('render_request') or {}).get('key')
+            or fresh != original_input):
+        return fresh_st, fresh_tl, fresh_sc, fresh, str((fresh or {}).get('prompt') or ''), [
+            '修词期间本段输入或提交记录已变化，已保留当前版本，未覆盖或重复提交']
+    patch = {key: proposal[key] for key in ('prompt', 'source_text', 'chars', 'scene', 'plan',
+        'seconds', 'tail', 'problems', 'director_contract', 'director_compilation',
+        'director_profile', 'source_fallback') if key in proposal}
+    candidate = dict(fresh, **patch)
+    remaining = _render_critical_problems(fresh_st, fresh_tl, candidate, candidate['prompt'], ep, seg_no)
+    if remaining:
+        return st, tl, sc, g, prompt, remaining
+    history = list(fresh.get('prompt_repair_history') or [])
+    commit_input = copy.deepcopy(fresh)
+    history.append(dict(prompt=prompt, problems=critical, repair='source-bound-before-submit-v1'))
+    patch.update(critical_problems=[], prompt_repair_pending='', prompt_repair_history=history[-5:])
+    with _SAVE_LOCK:
+        commit_st, commit_tl = _load(sid, ep)
+        _, commit_row = _seg_of(commit_tl, int(scene_no or 1), int(seg_no))
+        if commit_row != commit_input:
+            return commit_st, commit_tl, fresh_sc, commit_row, str((commit_row or {}).get('prompt') or ''), [
+                '保存修词时本段输入已变化，当前版本已保留，未覆盖或重复提交']
+        commit_row.update(patch)
+        failures = commit_tl.get('prompt_failures')
+        if isinstance(failures, dict):
+            failures.pop(str(seg_no), None)
+            failures.pop(int(seg_no), None)
+        _save(sid, commit_tl, ep)
+    st, tl = _load(sid, ep)
+    sc, g = _seg_of(tl, int(scene_no or 1), int(seg_no))
+    saved_prompt = str((g or {}).get('prompt') or '')
+    if not g or saved_prompt != candidate['prompt']:
+        return st, tl, sc, g, saved_prompt, ['修复后的提示词尚未确认保存，保留原任务待恢复']
+    return st, tl, sc, g, saved_prompt, _render_critical_problems(st, tl, g, saved_prompt, ep, seg_no)
 
 
 def _render_references(sid, g, ep=None, include_scene=True):
@@ -388,16 +461,24 @@ def _scene_picture_slots(sid, g, ep=None):
 
 def _include_scene_reference(sid, g, ep, tl, active):
     from cores import scene_reference_policy as policy
-    if not active or policy.include_scene(sid, g, ep=ep, timeline=tl):
-        return True
-    if is_new_prompt(g.get('prompt')):
-        try:
-            policy.strip_scene_images(str(g.get('prompt') or ''), _scene_picture_slots(sid, g, ep=ep))
-        except ValueError:
-            # Unrecognized custom bindings retain their original evidence.
-            # A transport-policy update must not corrupt dialogue or stop a job.
-            return True
-    return False
+    saved = _snapshot_scene_reference(g)
+    if saved is not None:
+        return saved
+    return not active or policy.include_scene(sid, g, ep=ep, timeline=tl)
+
+
+def _snapshot_scene_reference(g, include_completed=False):
+    """Retain an existing request's reference/signature semantics on recovery."""
+    request = (g or {}).get('render_request') or {}
+    pending = request.get('status') == 'pending'
+    if pending and request.get('key'):
+        from models import h3_client
+        if h3_client.recovery_receipt(request['key']).get('status') in ('cancelled', 'invalid_media'):
+            return None
+    completed = include_completed and g.get('video') and g.get('render_input_signature')
+    if request.get('key') and (pending or completed):
+        return bool(request.get('scene_image_included', True))
+    return None
 
 
 def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, override=None, fresh=False):
@@ -416,7 +497,9 @@ def _render_context(sid, ep, scene_no, seg_no, size_tier=None, hd=False, overrid
     if str(os.environ.get('V41_RELAY') or '').lower() == 'none':
         previous = None
     active = _scene_policy_active(g, fresh=fresh)
-    include_scene = _include_scene_reference(sid, g, ep, tl, active)
+    saved_scene = _snapshot_scene_reference(g, include_completed=not fresh)
+    include_scene = (saved_scene if saved_scene is not None else
+                     _include_scene_reference(sid, g, ep, tl, active))
     refs = (_render_references(sid, g, ep=ep, include_scene=include_scene)
             if is_new_prompt(g.get('prompt')) else director_pack(sid, g, ep=ep, include_scene=include_scene)[2])
     signature_params = dict(params, scene_reference_policy=policy.VERSION) if active else params
@@ -456,6 +539,49 @@ def is_segment_current(sid, ep, scene_no, seg_no, size_tier=None):
         return False
 
 
+def _source_opening_wardrobe_prompt(prompt, segment, slices, index, cards, state, bindings):
+    """Keep the source-owned opening projection at the final send boundary.
+
+    Observed transitions retain priority inside the source planner. A reference
+    baseline with no transition must not undo an earlier explicit source action.
+    Unversioned/manual prompts and frozen requests keep their existing path.
+    """
+    from cores import source_shot_compiler, source_wardrobe_plan, wardrobe_continuity
+    audit = (segment.get('director_compilation') or {}).get('source_shot_audit') or {}
+    if not (0 <= index < len(slices) and audit.get('policy') == source_shot_compiler.VERSION):
+        return prompt, None
+    version = (slices[index].get('director') or {}).get('source_contract_version')
+    if version not in ('episode-source-v1', 'episode-source-v2'):
+        return prompt, None
+    plan = source_wardrobe_plan.build_start_plan(slices, index, cards, observed_state=state)
+    compiled = dict(fields=wardrobe_continuity._fields(prompt), prompt=prompt)
+    result = source_wardrobe_plan.apply_compiled(compiled, plan, bindings)
+    return result['prompt'], source_wardrobe_plan.model_state(plan, bindings)
+
+
+def _source_continuation_scene_prompt(prompt, segment, condition, include_scene):
+    """Replace a generated repeated set inventory with established fixed facts.
+
+    The exact recorded scene-description span is replaced once. Current source
+    actions, photography, dialogue, reference slots and first appearances stay
+    untouched; this does not infer general vehicle or actor locations.
+    """
+    from cores import source_shot_compiler, wardrobe_continuity
+    audit = (segment.get('director_compilation') or {}).get('source_shot_audit') or {}
+    old = audit.get('scene_description')
+    if (include_scene or audit.get('policy') != source_shot_compiler.VERSION
+            or not condition or not isinstance(old, str) or not old.strip()):
+        return prompt
+    fields = wardrobe_continuity._fields(prompt)
+    if fields['detailed_description'].count(old) != 1:
+        return prompt
+    new = source_shot_compiler._basic_plan([], dict(
+        beat=dict(scene=segment.get('scene') or condition.get('place_identity') or ''),
+        scene_facts=dict(scene_condition=condition)))['scene_description']
+    fields['detailed_description'] = fields['detailed_description'].replace(old, new, 1)
+    return '\n\n'.join(key + ':\n' + fields[key] for key in wardrobe_continuity.FIELDS)
+
+
 def render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=None, override=None):
     # Double clicks must not overwrite one another's durable request receipt.
     with _RENDER_LOCKS_GUARD:
@@ -489,7 +615,7 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         reference_ready.assert_references(sid, [g], ep=ep, include_scene=include_scene)
     # 严重问题不能只标红后继续烧视频额度。新提示词会把确定性问题写进
     # critical_problems；旧时间轴也在这里按现有字段补算一次。
-    critical = _render_critical_problems(st, tl, g, prompt, ep, seg_no)
+    st, tl, sc, g, prompt, critical = _prepare_render_prompt(sid, ep, scene_no, seg_no, log_fn)
     if critical:
         _apply(sid, int(scene_no or 1), int(seg_no), {"critical_problems": list(critical)}, ep=ep)
         raise ValueError("第 %s 段提示词待修复：%s" % (seg_no, "；".join(str(x) for x in critical[:3])))
@@ -521,6 +647,8 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         raise ValueError('待恢复的视频请求快照不完整，已保留原任务，不能更换输入后重复提交')
     appearance_frame = ''
     handoff_version = 'none'
+    continuity_frame = ''
+    d = g.get('director_contract') or {}
     reference_binding_audit = None
     if frozen:
         h3p = request['final_prompt']
@@ -532,16 +660,26 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
         imgs = base_refs
         h3p = prompt
         if scene_policy and not include_scene:
-            h3p = policy.strip_scene_images(h3p, _scene_picture_slots(sid, g, ep=ep))
+            try:
+                h3p = policy.strip_scene_images(h3p, _scene_picture_slots(sid, g, ep=ep))
+            except ValueError as error:
+                raise ValueError('第 %s 段场景图片绑定无法确认，已停止提交并保留原提示词；'
+                                 '不能把初始场景图加回续段：%s' % (seg_no, error)) from error
         if not same_pending_request() and any(ref.get('n') for ref in (g.get('refs') or [])):
             from cores import reference_bindings
             h3p, reference_binding_audit = reference_bindings.rebind_prompt(
                 h3p, imgs, new_pack(sid, g, ep=ep, include_scene=include_scene), reference_bindings.adopted_catalog(sid))
-        # 【姿势参考】上一段的最后一帧当第 N 张参考图，只参考姿势/位置/构图
-        # （用户 2026-09-02 提法，实验 V13a：接口几乎无缝，脸没换）。
-        prev = previous['segment'] if previous and not scene_policy else None
+    else:
+        _ok, _names_, imgs, h3p = director_pack(sid, g, ep=ep, include_scene=include_scene)
+    if not frozen:
+        # New main-flow requests carry the actual predecessor's terminal state.
+        # Frozen submissions above retain their exact original image slots.
+        if scene_policy and not include_scene and previous is None:
+            raise ValueError('第 %s 段需要紧邻上一段的有效视频和实际尾帧，'
+                             '请先完成上一段；本段尚未提交' % seg_no)
+        prev = previous['segment'] if previous else None
         pef = str((prev or {}).get("end_frame") or "")
-        if previous and not scene_policy and (not pef or not os.path.isfile(pef)):
+        if previous and (not pef or not os.path.isfile(pef)):
             pef = str(Path(prev['video']).with_suffix('')) + '_handoff_' + uuid.uuid4().hex[:8] + '.png'
             extracted = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-sseof', '-0.1',
                                         '-i', prev['video'], '-frames:v', '1', pef], capture_output=True, timeout=120)
@@ -549,13 +687,18 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
                 raise ValueError('上一段尾帧提取失败，已保留视频，稍后自动重试')
             _apply(sid, previous['scene_no'], previous['segment_no'], {'end_frame': pef}, ep=previous['episode'])
             prev['end_frame'] = pef
-            signature = vc.segment_signature(g, params, previous, base_refs)
+            signature_params = dict(params, scene_reference_policy=policy.VERSION) if scene_policy else params
+            signature = vc.segment_signature(g, signature_params, previous, base_refs)
         if pef and os.path.exists(pef) and len(imgs) >= 9:
+            if scene_policy:
+                raise ValueError('第 %s 段需要为实际尾帧保留一个参考图位置，'
+                                 '请减少本段人物参考图后重试；本段尚未提交' % seg_no)
             # Preserve all actual identity/scene slots. The saved director
             # start-state still carries continuity when a visual relay won't fit.
             g['reference_notes'] = ['参考图已满，本段沿正文和前段文字状态衔接，未追加可选接力帧']
         if pef and os.path.exists(pef) and len(imgs) < 9:
             imgs = imgs + [pef]
+            continuity_frame = pef
             frame_number = len(imgs)
             appearance_number = None
             slices = ((tl.get('slicing') or {}).get('slices') or [])
@@ -567,7 +710,8 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             # A resumed legacy submission must retain its original image slots.
             # Only a written departure-to-arrival transition needs old setting
             # appearance; later shots must not reintroduce the departure room.
-            if (not same_pending_request() and (g.get('plan') or {}).get('flow') == 'source-v1'
+            if (not scene_policy and not same_pending_request()
+                    and (g.get('plan') or {}).get('flow') == 'source-v1'
                     and departure and arrival and departure != arrival and len(imgs) < 9):
                 try:
                     appearance_frame = vc.prepare_handoff(previous)
@@ -581,8 +725,6 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             handoff_version = 'h3-handoff-v3' if appearance_number else 'h3-handoff-v2'
             h3p = vc.handoff_prompt(h3p, frame_number, g, previous, d,
                                     appearance_number=appearance_number)
-    else:
-        _ok, _names_, imgs, h3p = director_pack(sid, g, ep=ep, include_scene=include_scene)
     secs = float(g.get("seconds") or 12)
     if not frozen:
         resuming_legacy = same_pending_request()
@@ -592,6 +734,42 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
             slices = ((tl.get('slicing') or {}).get('slices') or [])
             d = (slices[int(seg_no)-1].get('director') or {}) if len(slices) >= int(seg_no) else {}
             d = d or g.get('director_contract') or {}
+            from cores import wardrobe_continuity as wardrobe
+            if wardrobe.enabled(st) and (g.get('plan') or {}).get('flow') == 'source-v1':
+                from cores import workbench_director_runtime as runtime, asset_core
+                state = runtime.actual_state_for(sid, ep, int(seg_no) - 1).get('wardrobe_state')
+                cards = asset_core.list_assets(sid, 'characters') or []
+                bindings = wardrobe.bindings_from_prompt(h3p, cards)
+                h3p = wardrobe.apply_prompt(h3p, state, bindings)
+                h3p, source_projection = _source_opening_wardrobe_prompt(
+                    h3p, g, slices, int(seg_no) - 1, cards, state, bindings)
+                if source_projection is not None:
+                    request['source_wardrobe_plan'] = source_projection
+                request['wardrobe_policy'] = wardrobe.POLICY
+                request['wardrobe_contract'] = wardrobe.prompt_contract(state, bindings)
+                if (scene_policy and previous and not continuity_frame
+                        and wardrobe.has_observed_changes(request['wardrobe_contract'])):
+                    _, _, preceding = runtime._segment(sid, previous['episode'], previous['segment_no'])
+                    observed = (preceding or {}).get('director_actual_state') or {}
+                    frames = observed.get('evidence_frames') or []
+                    if (observed.get('policy') == wardrobe.POLICY and frames
+                            and not (preceding or {}).get('stale_video')
+                            and observed.get('video_stamp') == vc.media_stamp((preceding or {}).get('video'))):
+                        anchor = Path(observed.get('evidence_directory') or '') / ('actual_frame_%06d.png' % max(frames))
+                        if anchor.is_file() and len(imgs) < 9:
+                            imgs = list(imgs) + [str(anchor)]
+                            h3p = wardrobe.attach_reference(h3p, len(imgs))
+                            request['wardrobe_reference'] = str(anchor)
+                        elif len(imgs) >= 9:
+                            request['wardrobe_reference_note'] = '图片槽位已满，保留人物及场景参考，使用已确认穿戴文字状态承接'
+            if scene_policy and not include_scene:
+                from cores import asset_core, scene_condition
+                scene_cards = asset_core.list_assets(sid, 'scenes') or []
+                card = next((c for c in scene_cards if c.get('name') == g.get('scene')), None)
+                if card:
+                    condition = scene_condition.condition_for_scene(st, asset_core.effective_scene_card(card),
+                        scene_names=[c.get('name') for c in scene_cards if c.get('name')])
+                    h3p = _source_continuation_scene_prompt(h3p, g, condition, include_scene)
             h3p = vc.scope_prompt(h3p, g, d)
         request.update({
             'final_prompt': h3p, 'final_refs': list(imgs),
@@ -599,19 +777,28 @@ def _render_segment(sid, ep, scene_no, seg_no, size_tier=None, hd=False, log_fn=
                                 'ratio': params['ratio'], 'size_tier': params['size_tier'],
                                 'steps': params['steps'], 'seed': seed},
             'reference_scope_version': (vc.REFERENCE_SCOPE_VERSION
-                                        if not resuming_legacy and 'Reference scope (' + vc.REFERENCE_SCOPE_VERSION + '):' in h3p
+                                        if not resuming_legacy and (g.get('plan') or {}).get('flow') == 'source-v1'
                                         else 'legacy'),
             'snapshot_origin': 'legacy_reconstructed' if resuming_legacy else 'before_submission',
             'handoff_version': handoff_version,
             'appearance_frame': appearance_frame,
         })
+        if previous:
+            request['handoff_context'] = vc.handoff_context(g, previous, d)
+        if (g.get('plan') or {}).get('prompt_content_policy') == 'positive-visual-v1' and not resuming_legacy:
+            from cores.image_prompt_content import assert_positive_description
+            # Dialogue belongs to the approved source and can contain negation.
+            visual = re.sub(r'<d>.*?</d>', '', h3p, flags=re.S)
+            assert_positive_description(visual, label='视频画面描述')
+            request['prompt_content_policy'] = 'positive-visual-v1'
         if reference_binding_audit is not None:
             request['reference_binding_audit'] = reference_binding_audit
         if scene_policy:
             request['scene_reference_policy'] = policy.VERSION
             request['scene_image_included'] = include_scene
-            if include_scene and not policy.include_scene(sid, g, ep=ep, timeline=tl):
-                request['reference_policy_note'] = '自定义场景绑定无法安全转换，本次保留原参考包并继续，未改对白或重新写词'
+            if not resuming_legacy:
+                request['continuity_policy'] = 'scene-first-use-tail-v2'
+                request['tail_reference'] = continuity_frame
     resolved = request['resolved_params']
     if not isinstance(resolved, dict) or any(k not in resolved for k in ('mode', 'seconds', 'ratio', 'size_tier', 'steps', 'seed')):
         raise ValueError('待恢复的视频参数快照不完整，已保留原任务，不能更换参数后重复提交')
@@ -865,16 +1052,8 @@ def _on_screen_chars(shots, names):
     return [n for n in names if n in blob]
 
 
-# 逐字固定的尾部（来自用户验证过的 MiniMax 文戏 skill，一字不许改）
-_FIXED_TAIL = """【禁止项】
-
-文字/UI/水印/Logo/角标/可读文字/真实UI
-
-【强制声明】
-
-音轨内容:人物按台词开口说话的说话声,以及这个场景本身的环境音和动作音效;
-整条音轨从头到尾只有这三种声音,没有任何配乐、器乐、旋律、鼓点或歌声;
-画面禁字幕/文字/水印/Logo;禁止可读文字(指画面字幕文字,不含人声台词)"""
+# Model-facing tail describes the requested audio; validation lives in code.
+_FIXED_TAIL = "音轨内容：人物对白、当前场景的环境声与动作同期声。"
 
 
 def _char_brief(card):
@@ -1390,12 +1569,30 @@ def _texture_footer(style, has_dialogue=True):
         kind = str(_e.get("kind") or "photo").strip()
     except Exception:
         pass
+    # These are stock style-note phrases, not source narration or dialogue.
+    # Express their visual meaning positively at the renderer boundary.
+    for before, after in (
+        ('最黑处是提亮过的深灰不是纯黑', '暗部呈提亮的深灰'),
+        ('不是渐变模糊', '边界明确'), ('没有任何羽化', '保留清晰硬边'),
+        ('只有黑、白和网点灰三档，没有彩色', '使用黑、白和网点灰三档'),
+        ('没有线稿，形体完全靠色块和笔触堆出来', '形体完全由色块和笔触塑造'),
+        ('不画单根发丝', '发丝以整体色块概括'), ('不是细描', '以概括笔触表现'),
+        ('而不是用黑色', '保持透明的叠色效果'), ('不画的地方就是白宣纸', '留白处呈现白宣纸'),
+        ('不是纸片', '边缘具有实体厚度'), ('没有任何抗锯齿', '保留原生像素边缘'),
+        ('几乎没有硬阴影和深黑', '光照柔和、暗部明亮'),
+        ('没有瑕疵、痘印、油光、暗沉', '肤质细腻、色泽均匀'),
+        ('没有瑕疵、痘印、油光暗沉', '肤质细腻、色泽均匀'),
+        ('没有杂物、没有污渍、没有斑驳墙面', '背景整洁、墙面平整'),
+        ('不是均匀的瓷面', '具有细微光泽变化'),
+        ('人不是被安排在画面里的，是刚好被拍到', '人物呈现被自然捕捉的瞬间'),
+        ('没有任何调色风格', '保留中性原始色彩'),
+    ):
+        note = note.replace(before, after)
     if kind == "2d":
-        medium = ("整段画面是**绘制出来的二维画面**，不是真人实拍、不是三维渲染；"
-                  "皮肤和材质按上面这种画法处理，不要照片纹理、不要毛孔。")
+        medium = "整段画面为二维绘制，人物、皮肤与环境材质使用所选画风的绘画表现。"
     elif kind == "3d":
-        medium = ("整段画面是**3D 动漫／游戏 CG 动画**（高预算游戏过场渲染），绝不是真人实拍、也不是手绘平面：角色是三维动画角色——"
-                  "动漫化的五官（眼大、鼻小、下巴尖）、瓷面般光滑无毛孔的皮肤、大束造型化头发、干净饱和的材质、轮廓光和柔光晕；参考图里的人物照这种 CG 质感呈现，不要变成真人。")
+        medium = ("整段画面为高预算三维动漫或游戏过场CG，角色具有动漫化五官、光滑皮肤、"
+                  "造型化头发和清晰材质，使用轮廓光与柔和光晕。")
     else:
         medium = ("整段画面是**实拍摄影**质感：自然光学、真实材质纹理、电影级景深，"
                   "暗部保留细节。")
@@ -1534,12 +1731,9 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
     # 2) 参考图：一张一段，写明用途（官方：多视角设定板=同一个人，绝不克隆）
     for i, (n, kind) in enumerate(refs):
         if kind == "scene":
-            out.append("图片%d：%s的场景参考图。只作为这个空间的结构、材质和光线依据；"
-                       "机位、构图按下面的时间块来。" % (i + 1, n))
+            out.append("图片%d：%s的场景参考图，提供空间结构、材质与现场光。" % (i + 1, n))
         else:
-            out.append("图片%d：%s的人设参考图。这是一张多视角人物设定板，"
-                       "图中所有视角都是同一个人；只作为%s的脸、发型、体型和服装依据。"
-                       "画面中%s只出现一个，绝不复制克隆。" % (i + 1, n, n, n))
+            out.append("图片%d：%s的多视角人物设定图，提供同一人物的面容、发型与体型。" % (i + 1, n))
 
     # 3) 原生音频：**台词骨架**——只报句数/顺序/说话人，不引原文。
     # 引原文＋块内内联＝同句两处，H3 随机复读（2026-08-29 用户点名"很影响观感"）；
@@ -1549,13 +1743,8 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
         _mani = "；".join("%s%s%s" % (_CIRCLED[i] if i < len(_CIRCLED) else str(i + 1),
                                       who, "（心声）" if heart else "")
                           for i, (who, heart, _t, _x) in enumerate(cues))
-        lines = ["原生音频：由模型生成下列对白与环境音。对白逐字、按顺序生成，"
-                 "谁的台词谁说，其他人保持闭口并自然反应；"
-                 "第一句在开场 0.15 秒内开口，最后一个字在结尾前约 0.2 秒落下。"
-                 "台词共%d句，顺序与说话人：%s。"
-                 "台词原文只以下方时间轴内的引号台词为准，每一句都必须说出来——"
-                 "说话人背对镜头或不在画面里时照样开口（画外音），一句不许漏；"
-                 "每句台词全片只说一次，绝不重复。" % (len(cues), _mani)]
+        lines = ["原生音频：人物对白与当前场景环境声。对白共%d句，发声顺序与说话人：%s。" %
+                 (len(cues), _mani)]
         spoken = list(dict.fromkeys(w for w, _, _, _ in cues))
         vlines = []
         for n in spoken:
@@ -1565,11 +1754,10 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
                 # 没有人设卡的配角（伙计/路人）：至少给"要区分开"的指令，别让 H3 随缘
                 vlines.append("%s——按这个角色的身份和年龄配音，和其他人的声音明显区分" % n)
         if vlines:
-            lines.append("声线：" + "；".join(vlines) + "。不同角色的声音必须明显不一样。"
-                         "对白要有真人对话的生活语感和情绪起伏，语速自然，绝不念稿。")
+            lines.append("声线：" + "；".join(vlines) + "。对白具有自然语速、生活语感与相应情绪。")
         out.append("\n".join(lines))
     else:
-        out.append("原生音频：本段没有对白，所有人物保持闭口；只生成环境音。")
+        out.append("原生音频：当前场景的环境声与动作同期声。")
 
     # 3.5) 机位锁死段：背景锚是"每段自己换拍摄方向"的解药（2026-08-28 实测：
     # 三段三个轴、背景乱跳；写"身后是什么"比写"机位在哪"对 H3 有效得多）
@@ -1581,8 +1769,7 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
     anchor = re.sub(r"[，；]?\s*[^，；。]*(?:门缝|窗缝)[^，；。]*(?:透入|漏入|洒入|渗入)[^，；。]*", "", anchor)
     anchor = re.sub(r"(?:缓缓|刚刚)?(?:合拢|紧闭|关上|闭合)后的静止状态", "紧闭状态，不透光", anchor)
     if anchor:
-        out.append("机位与画面方向（整段锁死）：%s；"
-                   "拍摄轴不翻面，人物左右关系保持不变，光线明暗与色调与相邻镜头同族。" % anchor)
+        out.append("机位与背景：%s。人物左右关系、现场光与色调沿用当前场景。" % anchor)
 
     # 3.6) 剧情衔接护栏：H3 看到"大厅+中景"会自作主张演一遍走进来的入场戏
     # （2026-08-28 实测：收尾是柜台前特写，下一段开场却拍成两人在大厅里走向镜头）。
@@ -1659,8 +1846,7 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
 
     # 5) 音频契约 + 一致性
     amb = fields.get("环境音", "")
-    out.append("音频：只生成上面列出的对白和环境音（%s）。全程没有配乐、"
-               "没有歌声、没有旁白。" % (amb.rstrip("。") or "这个空间真实的环境声"))
+    out.append("环境音：%s。" % (amb.rstrip("。") or "这个空间真实的环境声"))
     cons = []
     # 衣着以**人设卡原文**为权威——导演每段自己转述会漂
     # （实测同一人三段写出"皮甲/深色护甲/无外套"三个版本）。
@@ -1676,8 +1862,7 @@ def h3_view(body, seconds, refs, vmap, cmap=None, link=None, canon=None, style=N
                 for frag in re.split(r"[；;。]", str(hit[1] or "")):
                     if re.search(r"钥匙|怀表|吊坠|项链|戒指|徽章|挂坠", frag):
                         prop_lines.append("%s%s" % (hit[0], frag.strip("，, ")))
-    cons.append("每个人物的脸、发型、体型、服装全程与其参考图一致；"
-                "同一个人绝不在画面里同时出现两次")
+    cons.append("人物面容、发型与体型沿用各自参考图")
     if prop_lines:
         cons.append("剧情道具全程佩戴：" + "；".join(prop_lines))
     out.append("一致性：%s。" % "。".join(cons))
@@ -1792,9 +1977,7 @@ def director_pack(sid, g, ep=None, include_scene=None):
     refs = [(n, "scene" if n in scn_set else "char") for n in names]
     link = None
     if int(g.get("no") or 1) > 1:
-        link = ("剧情衔接：这一段紧接此前的剧情发生。开场第一帧，人物就已经处于下面"
-                "开场描述的位置和状态，直接继续下一个动作——不重新入场、不重新开门、"
-                "不重复已经发生过的剧情。")
+        link = "开场承接当前已确认的位置与状态，继续本段动作。"
     # 画风决定影像质感块（日漫/3D/写实三套）——不传的话日漫会被渲成真人
     try:
         from cores import project_settings as _ps3
@@ -1829,8 +2012,11 @@ def gen_segment(h, path, d):
     if not g:
         return _RESP({"ok": False, "error": "找不到这一段"}, 400)
     # 页面上的提示词框是可编辑的：用户改完直接点生成，就按改完的这份生成
-    if str(d.get("prompt") or "").strip():
-        g = _apply(sid, no, sno, {"prompt": str(d["prompt"]).strip(), "critical_problems": []})
+    if str(d.get("prompt") or "").strip() and str(d['prompt']).strip() != str(g.get('prompt') or '').strip():
+        import time
+        g = _apply(sid, no, sno, {"prompt": str(d["prompt"]).strip(), "critical_problems": [],
+            'prompt_auto': g.get('prompt_auto') or g.get('prompt') or '',
+            'prompt_edited': True, 'prompt_edited_at': time.time()})
     if not g.get("prompt"):
         try:
             g = _apply(sid, no, sno, {"prompt": _compile_prompt(sid, sc, g)})
@@ -1846,7 +2032,7 @@ def gen_segment(h, path, d):
         except RuntimeError as error:
             return _RESP({"ok": False, "error": str(error)}, 400)
     critical = _render_critical_problems(st, tl, g, str(g.get("prompt") or ""), _ep_of(sid), sno)
-    if critical:
+    if critical and (g.get('prompt_edited') or not is_new_prompt(g.get('prompt'))):
         return _RESP({"ok": False,
                       "error": "第 %s 段提示词未通过出片检查：%s" %
                                (sno, "；".join(str(x) for x in critical[:4]))}, 400)
@@ -1911,11 +2097,7 @@ def gen_segment(h, path, d):
         if prev_ef and os.path.exists(str(prev_ef)) and str(prev_ef) not in imgs and len(imgs) < 9:
             imgs.append(str(prev_ef))
             _h3_prompt = _h3_prompt.rstrip() + (
-                "\n【接上一段】最后一张参考图（第 %d 张）是上一段的最后一帧。"
-                "这一段的**第一帧必须从那一帧接着往下演**：人物在画面里的位置、朝向、"
-                "镜头的景别和角度、光线和背景，全部保持连续；不许重新构图、"
-                "不许让人物重新摆姿势、不许换机位重新开场。"
-                "它只负责接戏——人物长相仍以前面的人物参考图为准。" % len(imgs))
+                "\n图片%d是紧接本段的前一段末帧，提供起镜时的位置、姿态与持物参考。" % len(imgs))
     imgs = [x for x in imgs if x and os.path.exists(x)][:9]
     if not imgs:
         return _RESP({"ok": False,

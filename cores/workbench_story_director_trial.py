@@ -238,8 +238,12 @@ def normalize_observed_silent_entities(plan, cards, actual_state):
 
 
 def _references(references, plan):
-    if not isinstance(references, list) or not references:
+    if not isinstance(references, list):
         raise ValueError('全能参考试验须提供当前实际参考映射')
+    if not references:
+        # A later empty establishing shot has no new scene/character images.
+        # Its actual predecessor frame is appended by the renderer, not here.
+        return []
     people = {key: row for row in plan.get('characters') or []
               for key in (row.get('id'), row.get('name')) if key}
     result = []
@@ -270,16 +274,19 @@ def write_request(plan, beat, actual_state, references, *, seconds=None,
     adapter never upgrades a planned beginning/ending into an observation.
     """
     refs = _references(references, plan)
+    if not refs and beat.get('cast'):
+        raise ValueError('当前出镜人物缺少实际参考图，不能按无图空镜写词')
     scene = _text(scene_name or beat.get('scene') or beat.get('scene_hint'))
     if not scene:
         raise ValueError('主流程试验须提供当前场景名称')
     seconds = beat.get('seconds') if seconds is None else seconds
     has_scene = any(row['role'] == 'scene_anchor' for row in refs)
     system, payload, schema = director.write_request(plan, beat, actual_state, seconds,
-        mode='ref2va', visual_style=visual_style,
+        mode='ref2va' if refs else 't2va', visual_style=visual_style,
         references=refs, flow_optimization=True,
         reference_visual_policy=director.REFERENCE_VISUAL_POLICY,
         scene_reference_provided=has_scene)
+    payload.setdefault('canonical_references', [])
     payload.update(user_brief=_text(user_brief),
         workbench_trial=dict(version=VERSION, flow=WORKBENCH_FLOW, scene=scene,
             references=copy.deepcopy(refs), no_extra_frame=True))
@@ -389,19 +396,35 @@ def compile_reply(raw, payload):
     if adjustments:
         result.setdefault('automatic_adjustments', []).extend(adjustments)
     refs = payload['canonical_references']
-    fields = copy.deepcopy(result['fields'])
+    if not refs and payload.get('mode') == 't2va':
+        # Preserve the production compiler's finished timing/dialogue text when
+        # adapting its three-field no-image output to the main six-field form.
+        headers = list(re.finditer(r'(?m)^(' + '|'.join(director.CONTENT_FIELDS) + r'):[ \t]*',
+                                   result['prompt']))
+        if [match[1] for match in headers] != list(director.CONTENT_FIELDS):
+            raise ValueError('无图空镜的已编译三字段不完整')
+        content = {match[1]: result['prompt'][match.end():
+                   headers[index + 1].start() if index + 1 < len(headers) else len(result['prompt'])].strip()
+                   for index, match in enumerate(headers)}
+        fields = dict(subject_definitions='', summary=result['brief'].strip(),
+            retention_analysis='<Subject 1>：本段描述中的地点与环境。',
+            detailed_description=content['integrated_multimodal_description'],
+            overall_soundscape=content['overall_soundscape'],
+            non_diegetic_music=content['non_diegetic_music'])
+    else:
+        fields = copy.deepcopy(result['fields'])
     definitions = []
     for ref in refs:
         name = director._label(ref.get('name') or ref.get('character_id'))
         if ref['role'] == 'character':
             definitions.append('<Subject %d> is %s, the character from <Picture %d>. '
-                '人物外观完整沿用对应人设图；当前姿势、表情、持物和位置服从故事及实际状态。' %
+                '面容、发型与体型沿用对应人设图。' %
                 (ref['subject'], name, ref['picture']))
     scene_ref = next((row for row in refs if row['role'] == 'scene_anchor'), None)
     scene_subject = len([row for row in refs if row['role'] == 'character']) + 1
     scene_name = director._label(trial['scene'])
     definitions.append('<Subject %d> is %s, the environment%s. '
-        '环境参考只约束当前地点的固定结构及现场美术；可移动物件、人物及动作服从当前故事状态。' %
+        '本镜头的空间结构、陈设与现场美术。' %
         (scene_subject, scene_name,
          (' from <Picture %d>' % scene_ref['picture']) if scene_ref else ''))
     fields['subject_definitions'] = '\n'.join(definitions)

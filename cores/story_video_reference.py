@@ -20,10 +20,15 @@ from . import story_video_characters as characters, story_video_media as media
 from . import story_video_asr as asr, story_video_quality as quality, runtime_reset
 from . import story_video_continuation as continuation
 from . import story_video_flow as flow
+from . import wardrobe_continuity as wardrobe
 from models import story_video_client as client, qwen_client, h3_client, gpu_manager
 
 VERSION = 'reference-story-runtime-v1'
 EMPTY_OR_LENGTH = '本地故事模型回复为空或被截断，已保留原始回复'
+
+
+class _TextVisionBudgetExceeded(RuntimeError):
+    """A hard call boundary, distinct from a failed local model service."""
 
 
 def _read(path):
@@ -104,6 +109,68 @@ def _plan_usable_schema(schema):
     return result
 
 
+def _normalize_reference_observer(plan, cards, source_contract, directory):
+    """Keep an unreferenced first-person narrator out of portrait/voice bindings.
+
+    The user does not require the first-person observer to speak. Retain its
+    original lines as evidence instead of assigning them to a pictured actor.
+    This is deliberately not a fallback for arbitrary unknown characters.
+    Raw replies, source prose, source contracts and stage-cache receipts stay
+    untouched; consumers use the separately recorded effective plan.
+    """
+    if not isinstance(plan, dict) or not isinstance(plan.get('characters'), list):
+        return plan
+    _, aliases = characters._identity_index(cards)
+    rows = plan['characters']
+    if not all(isinstance(row, dict) for row in rows):
+        return plan
+    ids = [row.get('id') for row in rows]
+    if not all(isinstance(identity, str) for identity in ids) or len(ids) != len(set(ids)):
+        return plan
+    props = {row.get('id') for row in plan.get('props', []) if isinstance(row, dict)}
+    verified_speakers = {row.get('speaker_id') for row in source_contract.get('dialogue', [])}
+    observers = []
+    for row in rows:
+        if row['id'] in aliases or row.get('name') != '我' or '我' in aliases:
+            continue
+        description = str(row.get('role', '')) + ' ' + str(row.get('appearance', ''))
+        if (row['id'] in props or row['id'] in verified_speakers or '我' in verified_speakers
+                or sum(other.get('name') == '我' for other in rows) != 1
+                or not re.search(r'第一人称|主观视角|镜头视角|画外|叙述者|观察视角', description)
+                or re.search(r'正脸出镜|全身出镜|面对镜头|第三人称|镜中(?:的我|出现)', description)):
+            continue
+        observers.append(copy.deepcopy(row))
+    if not observers:
+        return plan
+    effective = copy.deepcopy(plan)
+    observer_ids = {row['id'] for row in observers}
+    observer_aliases = observer_ids | {'我'}
+    effective['characters'] = [row for row in effective['characters'] if row['id'] not in observer_ids]
+    if not effective['characters']:
+        return plan
+    unbound_dialogue = []
+    for beat in effective.get('beats', []):
+        beat['cast'] = [identity for identity in beat['cast'] if identity not in observer_ids]
+        retained = []
+        for index, line in enumerate(beat['dialogue'], 1):
+            if line.get('speaker') in observer_aliases:
+                unbound_dialogue.append(dict(beat_index=beat['index'], line_index=index,
+                                            dialogue=copy.deepcopy(line)))
+            else:
+                retained.append(line)
+        beat['dialogue'] = retained
+    directory = Path(directory)
+    audit = dict(
+        rule='unreferenced-first-person-observer-v1', quality_gate=False,
+        reason='第一人称观察者只作为叙述视角，不绑定人物图或音色；未绑定原话留档，不转交其他人物发声',
+        original_plan_sha256=_signature(plan), effective_plan_sha256=_signature(effective),
+        observers=observers, unbound_dialogue=unbound_dialogue)
+    _save(directory / 'identity_normalizations' / (audit['effective_plan_sha256'] + '.json'), audit)
+    _save(directory / 'identity_normalization.json', audit)
+    _save(directory / 'effective_plan.json', effective)
+    return effective
+
+
 def _validate_usable_reference_plan(plan, payload, cards):
     """Require executable structure and actual reference identities, not prose fidelity."""
     normalized, aliases = characters._identity_index(cards)
@@ -152,6 +219,15 @@ def _plan_source_audit(plan, payload, contract, cards, directory):
     if unresolved:
         issues.append(dict(code='source_evidence_unavailable', reason='部分正文发声来源尚未确定，保留原文与未知记录',
                            details=copy.deepcopy(unresolved)))
+    identity_record = Path(directory) / 'identity_normalizations' / (_signature(plan) + '.json')
+    if identity_record.exists():
+        identity_audit = _read(identity_record)
+        if identity_audit.get('effective_plan_sha256') == _signature(plan):
+            _save(Path(directory) / 'identity_normalization.json', identity_audit)
+            _save(Path(directory) / 'effective_plan.json', plan)
+            issues.append(dict(code='first_person_observer_unbound', reason=identity_audit['reason'],
+                details=dict(record_path=str(identity_record),
+                             unbound_dialogue_count=len(identity_audit['unbound_dialogue']))))
     _, aliases = characters._identity_index(cards)
     return dict(status='warning' if issues else 'verified', quality_gate=False, issues=issues,
         expected=[[row['speaker_id'], row['text']] for row in contract.get('dialogue', [])],
@@ -162,12 +238,16 @@ def _plan_source_audit(plan, payload, contract, cards, directory):
 
 
 def _request_plan(session, request, directory, source_contract, cards):
-    """Repair twice, then adopt a usable real draft with explicit quality warnings."""
+    """Try one repair, then adopt a usable real draft with explicit quality warnings."""
     directory = Path(directory)
     candidates = []
 
     def usable(plan, payload):
         core.validate_schema(plan, _plan_usable_schema(request[2]))
+        effective = _normalize_reference_observer(plan, cards, source_contract, directory)
+        if effective is not plan:
+            plan.clear()
+            plan.update(effective)
         _validate_usable_reference_plan(plan, payload, cards)
 
     def validate(plan, payload):
@@ -226,6 +306,86 @@ def _request_plan(session, request, directory, source_contract, cards):
     return plan
 
 
+def _source_director_fallback(payload):
+    """Compatibility entry point for the shared source-owned conversion."""
+    return continuation.source_director_fallback(payload)
+
+
+def _request_reference_director(session, request, directory, cards, refs, validator, candidates):
+    """Bounded repair, then a source-owned fallback instead of a format stop.
+
+    Preserve strict compilation and speaker bindings. Existing failed replies
+    and fallback checkpoints are recovered without another text-model call.
+    Service errors, cancellation, game guards and changed evidence still raise.
+    """
+    directory = Path(directory)
+    binding = dict(system=request[0], payload=request[1], schema=request[2], images=[])
+    target = directory / 'binding.json'
+    if target.exists() and _read(target) != binding:
+        raise RuntimeError('模型请求或证据变化，未复用旧回复：' + str(directory))
+    session.guard()
+    marker = directory / 'source_fallback.json'
+
+    def fallback(error):
+        session.guard()
+        if session.failure or not continuation.is_optional_error(error):
+            raise error
+        if marker.exists():
+            report = _read(marker)
+            if (report.get('request_sha256') != _signature(binding)
+                    or report.get('candidate_sha256') != _signature(report.get('candidate'))):
+                raise RuntimeError('导演保底缓存或输入发生变化，已有视频保留')
+            candidate = copy.deepcopy(report['candidate'])
+        else:
+            candidate = _source_director_fallback(request[1])
+            report = dict(status='warning', quality_gate=False, reason=str(error),
+                policy='saved-beat-director-fallback-v1', request_sha256=_signature(binding),
+                candidate_sha256=_signature(candidate), candidate=copy.deepcopy(candidate),
+                raw_response_paths=[str(path) for path in sorted(directory.glob('call_*/*/response.json'))])
+        core.validate_schema(candidate, request[2])
+        characters.bind_delivery(candidate, dict(request[1], speech_budget_policy='advisory'),
+                                 cards, refs, compiler=prompts.compile_written)
+        _save(target, binding)
+        _save(marker, report)
+        return candidate, True, report
+
+    requests = list(directory.glob('call_*/*/request.json'))
+    latest = max(requests, key=lambda path: path.stat().st_mtime_ns) if requests else None
+    complete = (latest is None or latest.with_name('response.json').exists()
+                and not latest.with_name('error.json').exists())
+    if marker.exists() and complete:
+        return fallback(RuntimeError('本地模型格式修复仍未通过：复用已保存的本段传输保底'))
+    exhausted = sorted(directory.glob('call_2_*/contract_error.json'),
+                       key=lambda path: path.stat().st_mtime_ns)
+    if target.exists() and exhausted and complete and latest is not None:
+        for path in sorted(directory.glob('call_*/*/response.json'),
+                           key=lambda path: path.stat().st_mtime_ns, reverse=True):
+            try:
+                response = _read(path)
+                if response.get('meta', {}).get('finish_reason') == 'length':
+                    continue
+                text = re.sub(r'^```(?:json)?\s*|\s*```$', '', str(response.get('text', '')).strip())
+                candidate = json.loads(text)
+                core.validate_schema(candidate, request[2])
+                validator(candidate, request[1])
+                return candidate, False, None
+            except (ValueError, KeyError, TypeError):
+                continue
+        if candidates:
+            return candidates[-1], True, None
+        return fallback(RuntimeError('本地模型格式修复仍未通过：' +
+                                     str(_read(exhausted[-1]).get('error', '导演格式不可用'))))
+    try:
+        return session.ask(request, directory, validator=validator), False, None
+    except RuntimeError as error:
+        if not continuation.is_optional_error(error) or session.failure:
+            raise
+        session.guard()
+        if candidates:
+            return candidates[-1], True, None
+        return fallback(error)
+
+
 def _freeze_assets(inputs, folder, manifest):
     records = manifest.setdefault('reference_assets', [])
     cards = characters.normalize_cards(inputs['character_cards'])
@@ -262,7 +422,7 @@ def _latest_failed_quality_response(folder):
         return None
     latest = max(requests, key=lambda path: path.stat().st_mtime_ns)
     response = latest.with_name('response.json')
-    if not response.exists():
+    if not response.exists() or latest.with_name('error.json').exists():
         return None  # A newer network/service failure must never be swallowed.
     data = _read(response)
     if data.get('meta', {}).get('finish_reason') == 'length' or not str(data.get('text') or '').strip():
@@ -289,6 +449,8 @@ class _Session:
     def stage(self, label, index=0):
         self.guard()
         self.stage_name = label
+        if label.startswith('第'):
+            index = len(self.manifest.get('segments') or [])
         self.handle.step(label, index, self.inputs['segment_count'], str(self.folder))
         self.manifest.setdefault('logs', []).append(dict(time=time.strftime('%H:%M:%S'), message=label))
         self.checkpoint()
@@ -307,7 +469,7 @@ class _Session:
                 self.guard()
                 count = self.manifest['actual_model_calls']
                 if count >= self.manifest['reference_policy']['max_text_vision_calls']:
-                    raise RuntimeError('已达到本次本地文本/视觉调用预算，全部结果保留')
+                    raise _TextVisionBudgetExceeded('已达到本次本地文本/视觉调用预算，全部结果保留')
                 number = count + 1
                 trace = self.folder / 'actual_calls' / ('%03d' % number)
                 _save(trace / 'request.json', dict(stage=self.stage_name, endpoint=qwen_client.QWEN_URL,
@@ -318,6 +480,8 @@ class _Session:
                 text, meta = result if isinstance(result, tuple) else (result, {})
                 _save(trace / 'response.json', dict(text=text, meta=meta))
                 return result
+            except _TextVisionBudgetExceeded:
+                raise
             except Exception as error:
                 self.failure = error
                 if 'trace' in locals():
@@ -364,15 +528,30 @@ class _Session:
         return core.request_json(request, folder, images=images, validator=validator)
 
     def review(self, request, folder, images=None, validator=None):
+        self.guard()
+        if self.failure:
+            raise self.failure
         folder = Path(folder)
+        images = [dict(path=str(path), sha256=_sha(path)) for path in (images or [])]
         identity = _signature(dict(request=request,
-            images=[dict(path=str(path), sha256=_sha(path)) for path in (images or [])]))
+            images=images))
+        binding = dict(system=request[0], payload=request[1], schema=request[2], images=images)
+        target = folder / 'binding.json'
+        same = target.exists() and _read(target) == binding
+        if target.exists() and not same:
+            raise RuntimeError('模型请求或证据变化，未复用旧回复：' + str(folder))
+        requests = list(folder.glob('call_*/*/request.json'))
+        latest = max(requests, key=lambda path: path.stat().st_mtime_ns) if requests else None
+        complete = (latest is None or latest.with_name('response.json').exists()
+                    and not latest.with_name('error.json').exists())
         marker = folder / 'unavailable.json'
         if marker.exists():
             result = _read(marker)
-            if result.get('request_sha256') != identity:
+            if result.get('request_sha256') != identity or result.get('status') != 'unavailable':
                 raise RuntimeError('不可用质量记录的输入变化')
-            return result
+            if (core._model_cache_current(folder, marker)
+                    and not (folder / 'accepted.json').exists()):
+                return result
 
         def unavailable(reason, evidence=None):
             value = dict(status='unavailable', reason=reason, request_sha256=identity,
@@ -380,30 +559,50 @@ class _Session:
             _save(marker, value)
             return value
 
-        binding = dict(system=request[0], payload=request[1], schema=request[2],
-                       images=[dict(path=str(path), sha256=_sha(path)) for path in (images or [])])
-        same = (folder / 'binding.json').exists() and _read(folder / 'binding.json') == binding
         if same and not (folder / 'accepted.json').exists():
-            errors = sorted(folder.glob('call_2_*/contract_error.json'))
+            errors = sorted(folder.glob('call_2_*/contract_error.json'),
+                            key=lambda path: path.stat().st_mtime_ns)
             if errors:
                 error = RuntimeError('本地模型格式修复仍未通过：' + str(_read(errors[-1]).get('error', '')))
                 if not continuation.is_optional_error(error):
                     raise error
-                return unavailable('既有同请求的质量记录格式修复已耗尽', dict(error_path=str(errors[-1])))
+                if complete and latest:
+                    return unavailable('既有同请求的质量记录格式修复已耗尽', dict(error_path=str(errors[-1])))
             evidence = _latest_failed_quality_response(folder)
             if evidence:
                 return unavailable('既有同请求的可选质量报告为空或截断，原答保留', evidence)
+        # This report is optional. Exhausting a hard call limit must not mark a
+        # healthy service as failed after the video has already been produced.
+        # Cached accepted reports still pass through ask for normal validation.
+        limit = self.manifest.get('reference_policy', {}).get('max_text_vision_calls')
+        if (limit is not None and self.manifest.get('actual_model_calls', 0) >= limit
+                and not (folder / 'accepted.json').exists()):
+            return unavailable('本次本地文本/视觉调用预算已用完，可选质量报告保持未知')
         try:
-            return self.ask(request, folder, images, validator)
-        except RuntimeError as error:
-            if not continuation.is_optional_error(error):
+            return self.ask(request, folder, [image['path'] for image in images], validator)
+        except _TextVisionBudgetExceeded as error:
+            if self.failure:
+                raise self.failure
+            return unavailable(str(error))
+        except Exception as error:
+            if not continuation.is_optional_evidence_error(error):
                 raise
+            # The model wrapper records real transport errors. Only clear the
+            # exact optional request's failure; a previous required failure is
+            # never forgiven by a later quality check.
+            current, recovered, visited = error, False, set()
+            while current is not None and id(current) not in visited:
+                visited.add(id(current))
+                recovered = recovered or self.failure is current
+                current = current.__cause__ or current.__context__
+            if self.failure is not None:
+                if not recovered:
+                    raise self.failure
+                self.failure = None
             if str(error) == EMPTY_OR_LENGTH:
                 evidence = _latest_failed_quality_response(folder)
-                if evidence:
-                    return unavailable(str(error), evidence)
-                raise
-            return unavailable(str(error))
+                return unavailable(str(error), evidence or dict(error_type=type(error).__name__))
+            return unavailable(str(error), dict(error_type=type(error).__name__))
 
     def writer(self, system, user, mt=9000, temperature=.75, _tries=1, reasoning=False, **options):
         """Preserve formal UW settings; one bounded technical length retry."""
@@ -499,10 +698,13 @@ def _generate_once(session, work, written, refs, geometry, index, take, signatur
 
 def _reference_visual_options(inputs):
     # New tasks opt in at validation. Existing tasks keep exact cached requests.
-    if inputs.get('reference_visual_policy') != prompts.REFERENCE_VISUAL_POLICY:
-        return {}
-    return dict(reference_visual_policy=prompts.REFERENCE_VISUAL_POLICY,
-                scene_reference_provided=bool(inputs.get('initial_scene')))
+    options = {}
+    if inputs.get('reference_visual_policy') == prompts.REFERENCE_VISUAL_POLICY:
+        options.update(reference_visual_policy=prompts.REFERENCE_VISUAL_POLICY,
+                       scene_reference_provided=bool(inputs.get('initial_scene')))
+    if wardrobe.enabled(inputs):
+        options['wardrobe_policy'] = wardrobe.POLICY
+    return options
 
 
 def _story(session, cards, material):
@@ -522,7 +724,8 @@ def _story(session, cards, material):
                 extra_requirements=characters.shortfilm_addendum(inputs['segment_count'], inputs['segment_seconds'])
                     + '\n作品风格：' + inputs['style'])
             if _reference_visual_options(inputs):
-                settings['extra_requirements'] += '\n' + prompts.reference_visual_rule(bool(inputs.get('initial_scene')))
+                settings['extra_requirements'] += '\n' + prompts.reference_visual_rule(
+                    bool(inputs.get('initial_scene')), wardrobe_policy=inputs.get('wardrobe_policy'))
             planned = session.cached('author_plan', settings,
                 lambda: uw.plan(inputs['story_direction'], copy.deepcopy(settings), n_eps=1, model=session.writer))
             if planned.get('n') != 1 or not planned.get('design'):
@@ -594,6 +797,8 @@ def run_job(tid):
                 **{key: ref[key] for key in ('character_id', 'subject') if key in ref})
                 for index, ref in enumerate(initial_refs, 1)],
                 canonical_characters=[dict(id=card['id'], name=card['name']) for card in cards])
+            if wardrobe.enabled(inputs):
+                observed = wardrobe.observation_request(observed, cards, transition_evidence=False)
             material = session.cached('reference_observation', dict(request=observed,
                 images=[dict(path=ref['path'], sha256=_sha(ref['path'])) for ref in initial_refs]),
                 lambda: session.review(observed, folder / 'reference_observation' / 'model',
@@ -605,6 +810,8 @@ def run_job(tid):
                 material = prompts.sanitize_reference_observation(material, observed[1]['image_role_bindings'])
                 _save(folder / 'reference_observation' / 'effective.json', material)
             manifest['opening_observation'] = material
+            if wardrobe.enabled(inputs) and 'initial_wardrobe_state' not in manifest:
+                manifest['initial_wardrobe_state'] = wardrobe.initial_state(cards, material)
             source = _story(session, cards, material)
             manifest['source_story'] = source
             author_cards = characters.authoring_characters(cards)
@@ -620,6 +827,7 @@ def run_job(tid):
                 '逐句发声严格沿用source_contract.dialogue及其顺序。', plan_req[1], plan_req[2])
             plan = session.cached('planning', dict(request=plan_req),
                 lambda: _request_plan(session, plan_req, folder / 'planning' / 'model', contract, cards))
+            plan = _normalize_reference_observer(plan, cards, contract, folder / 'planning' / 'model')
             core.validate_schema(plan, _plan_usable_schema(plan_req[2]))
             _validate_usable_reference_plan(plan, plan_req[1], cards)
             source_audit = _plan_source_audit(plan, plan_req[1], contract, cards, folder / 'planning' / 'model')
@@ -641,164 +849,238 @@ def run_job(tid):
             if manifest.get('approved') and manifest.get('approved_plan_signature') != core.plan_signature(plan):
                 raise RuntimeError('已确认故事版本变化，未继续生成')
             for beat in plan['beats']:
-                index = beat['index']
-                existing = next((row for row in manifest['segments'] if row['index'] == index), None)
-                if existing:
-                    for key in ('raw', 'clip', 'anchor'):
-                        if _sha(existing[key + '_path']) != existing[key + '_sha256']:
-                            raise RuntimeError('已完成参考视频或续接末帧变化，未重拍')
-                    continue
-                previous = manifest['segments'][-1] if manifest['segments'] else None
-                state = previous['observation'] if previous else material
-                refs = characters.references_for_segment(cards, scene=scene,
-                    previous_frame=previous['anchor_path'] if previous else None)
-                take = int(manifest.get('takes', {}).get(str(index), 1))
-                work = folder / 'segments' / ('%02d_take_%d' % (index, take))
-                write_req = prompts.write_request(plan, beat, state, seconds, mode='ref2va',
-                    visual_style=inputs['style'], references=refs,
-                    **({'flow_optimization': True} if optimized else {}), **_reference_visual_options(inputs))
-                write_req[1].update(user_brief=brief, character_personalities=author_cards)
-                write_req = (write_req[0] + '\n姓名性格按character_personalities；delivery只写当句表演，'
-                    '不另编音色，固定音色由程序最终绑定。', write_req[1], write_req[2])
-                def advisory_compiler(candidate, payload):
-                    return prompts.compile_written(candidate, dict(payload, speech_budget_policy='advisory'))
+                try:
+                    index = beat['index']
+                    existing = next((row for row in manifest['segments'] if row['index'] == index), None)
+                    if existing:
+                        for key in ('raw', 'clip', 'anchor'):
+                            if _sha(existing[key + '_path']) != existing[key + '_sha256']:
+                                raise RuntimeError('已完成参考视频或续接末帧变化，未重拍')
+                        retained_work = folder / 'segments' / ('%02d_take_%d' % (index, existing.get('take', 1)))
+                        if (retained_work / 'continuation_input.json').exists():
+                            prior = [row for row in manifest['segments'] if row['index'] < index]
+                            prior = max(prior, key=lambda row: row['index']) if prior else None
+                            _, _, retained_context = continuation.freeze_segment_context(retained_work,
+                                manifest, plan, index, prior['anchor_path'] if prior else None,
+                                prior['observation'] if prior else material, _save)
+                            if retained_context:
+                                _warning(manifest, '第%d段 continuity_input' % index,
+                                    dict(status='warning', quality_gate=False),
+                                    '前段补齐后保留本段既有原片及原续接输入，未自动重拍；请预览衔接')
+                        continue
+                    earlier = [row for row in manifest['segments'] if row['index'] < index]
+                    previous = max(earlier, key=lambda row: row['index']) if earlier else None
+                    state = previous['observation'] if previous else material
+                    take = int(manifest.get('takes', {}).get(str(index), 1))
+                    work = folder / 'segments' / ('%02d_take_%d' % (index, take))
+                    previous_frame, state, retained_context = continuation.freeze_segment_context(
+                        work, manifest, plan, index, previous['anchor_path'] if previous else None, state, _save)
+                    if retained_context:
+                        _warning(manifest, '第%d段 continuity_input' % index,
+                            dict(status='warning', quality_gate=False),
+                            '保留本段最初的真实续接输入以恢复同一任务，未自动重拍；请预览前后衔接')
+                        previous = next((row for row in earlier if row['anchor_path'] == previous_frame), None)
+                    refs = characters.references_for_segment(cards, scene=scene, previous_frame=previous_frame)
+                    wardrobe_options = {}
+                    if wardrobe.enabled(inputs):
+                        wardrobe_options['wardrobe_state'] = copy.deepcopy(
+                            previous['wardrobe_state'] if previous else manifest['initial_wardrobe_state'])
+                    take = int(manifest.get('takes', {}).get(str(index), 1))
+                    work = folder / 'segments' / ('%02d_take_%d' % (index, take))
+                    write_req = prompts.write_request(plan, beat, state, seconds, mode='ref2va',
+                        visual_style=inputs['style'], references=refs,
+                        **({'flow_optimization': True} if optimized else {}), **_reference_visual_options(inputs),
+                        **wardrobe_options)
+                    write_req[1].update(user_brief=brief, character_personalities=author_cards)
+                    write_req = (write_req[0] + '\n姓名性格按character_personalities；delivery只写当句表演，'
+                        '不另编音色，固定音色由程序最终绑定。', write_req[1], write_req[2])
+                    def advisory_compiler(candidate, payload):
+                        return prompts.compile_written(candidate, dict(payload, speech_budget_policy='advisory'))
 
-                def validate_director(candidate, payload):
-                    # A usable draft must still compile with exact dialogue,
-                    # reference/voice binding and real numeric time bounds.
-                    characters.bind_delivery(candidate, payload, cards, refs, compiler=advisory_compiler)
-                    budget_candidates.append(copy.deepcopy(candidate))
-                    prompts.validate_written(candidate, payload)
-                    # Binding is part of a usable director response, rather
-                    # than a later failure which could discard the first draft.
-                    characters.bind_delivery(candidate, payload, cards, refs, compiler=prompts.compile_written)
-                draft = written = storyboard = None
-                for revision in range(2):
-                    session.stage('第%d/%d段：本地%s中文导演分镜' % (index, count, '修订' if revision else '编写'), index - 1)
-                    request = write_req if revision == 0 else prompts.revision_request(draft, write_req[1], storyboard)
-                    budget_candidates, budget_advisory = [], False
-                    try:
-                        candidate = (session.ask if not revision else session.review)(request,
-                            work / ('writing' if not revision else 'writing_revision_1'), validator=validate_director)
-                    except RuntimeError as error:
-                        if (not continuation.is_optional_error(error) or session.failure
-                                or not budget_candidates):
-                            raise
-                        session.guard()
-                        candidate, budget_advisory = budget_candidates[-1], True
-                    if candidate.get('status') == 'unavailable':
-                        _save(work / 'writing_revision_warning.json', candidate)
-                        _warning(manifest, '第%d段 writing_revision' % index, candidate,
-                            '导演修订格式不可用，保留已验证有效的原提示词')
-                        break
-                    draft = candidate
-                    written = characters.bind_delivery(draft, request[1], cards, refs,
-                        compiler=advisory_compiler if budget_advisory else prompts.compile_written)
-                    dialogue_adjustments = [item for item in written.get('automatic_adjustments', [])
-                        if str(item.get('kind', '')).startswith('dialogue_text_')]
-                    if dialogue_adjustments:
-                        ambiguous = any(item.get('kind') == 'dialogue_text_overlap_warning'
-                                        for item in dialogue_adjustments)
-                        report = dict(status='warning' if ambiguous else 'normalized',
-                                      quality_gate=False, adjustments=dialogue_adjustments)
-                        _save(work / 'dialogue_text_adjustments.json', report)
-                        if ambiguous:
-                            _warning(manifest, '第%d段 dialogue_text' % index, report,
-                                '对白与普通描述文字重合，保留原对白和动作并记录提醒继续')
-                    budget_notes = [row for row in written.get('automatic_adjustments', [])
-                                    if row.get('kind') == 'speech_budget_warning']
-                    if budget_notes:
-                        report = dict(status='warning', quality_gate=False, issues=budget_notes)
-                        _save(work / 'speech_budget_warning.json', report)
-                        _warning(manifest, '第%d段 speech_budget' % index, report)
-                    story_req = prompts.storyboard_request(brief, inputs['style'], plan, beat, written, state, seconds)
-                    session.stage('第%d/%d段：记录本地分镜预审' % (index, count), index - 1)
-                    storyboard = session.review(story_req, work / ('storyboard_%d' % revision),
-                                                 validator=prompts.validate_storyboard)
-                    if storyboard.get('status') == 'unavailable' or storyboard.get('passed') is True or revision:
-                        break
-                if storyboard.get('status') == 'unavailable' or storyboard.get('passed') is False:
-                    _warning(manifest, '第%d段 storyboard' % index, storyboard)
-                _save(work / 'director_raw.json', draft)
-                _save(work / 'director.json', written)
-                _save(work / 'storyboard.json', storyboard)
-                binding = dict(source_sha256=manifest['source_sha256'], plan_sha256=core.plan_signature(plan),
-                    actual_state_sha256=_signature(state), director_sha256=_signature(written),
-                    references=[dict(ref, sha256=_sha(ref['path'])) for ref in refs],
-                    geometry=manifest['geometry'], seed=manifest['seeds'][index - 1], steps=10,
-                    seconds=seconds, frames=client._frames(seconds))
-                binding.update(_reference_sampling_options(inputs))
-                if (work / 'inputs.json').exists() and _read(work / 'inputs.json') != binding:
-                    raise RuntimeError('参考视频生成输入变化，原片保留')
-                _save(work / 'inputs.json', binding)
-                session.stage('第%d/%d段：H3本地全能参考生成' % (index, count), index - 1)
-                raw = _generate_once(session, work, written, refs, manifest['geometry'], index, take, _signature(binding))
-                adopted = media.adopt(raw, work / 'adopted', end_seconds=seconds)
-                samples = media.sample_frames(adopted['clip_path'], work / 'samples', seconds=seconds)
-                session.stage('第%d/%d段：本地观察实际画面与末帧' % (index, count), index - 1)
-                observe_req = prompts.observe_request('segment', state, beat)
-                observe_req[1].update(sample_timestamps=[sample['time_seconds'] for sample in samples],
-                                      clip_duration_seconds=seconds, retention_policy='full_duration')
-                shown = flow.compact_samples(samples, adopted) if optimized else samples
-                if optimized:
-                    observe_req = flow.compact_request(observe_req, shown)
-                observation = session.review(observe_req, work / 'observation', [sample['path'] for sample in shown])
-                if observation.get('status') == 'unavailable':
-                    _warning(manifest, '第%d段 observation' % index, observation)
-                    observation = continuation.unknown_observation(observation, last_known=state)
-                if optimized:
-                    observation, endpoint = flow.observation_pair(observation)
-                    _save(work / 'endpoint' / 'derived.json', endpoint)
-                else:
-                    end_req = prompts.observe_request('opening', observation, beat)
-                    end_req[1]['stage_detail'] = '实际完整采用视频的精确最后一帧，不筛选露脸帧，不冒充已完成剧情'
-                    endpoint = session.review(end_req, work / 'endpoint', [adopted['anchor_path']])
-                if endpoint.get('status') == 'unavailable':
-                    _warning(manifest, '第%d段 endpoint' % index, endpoint)
-                    endpoint = continuation.unknown_observation(endpoint, last_known=state)
-                if flow.audio_enabled(inputs):
-                    session.stage('第%d/%d段：本地ASR记录台词' % (index, count), index - 1)
-                    audio = asr.review(adopted['clip_path'], written['dialogue'], work / 'asr')
-                    continuation.assert_audio_source_usable(audio)
-                    if audio.get('status') != 'passed':
-                        _warning(manifest, '第%d段 asr' % index, audio)
-                else:
-                    audio = flow.disabled_audio()
-                    _save(work / 'asr' / 'review.json', audio)
-                visual = dict(status='unavailable', reason='没有有效事件契约，未认定通过', quality_gate=False)
-                if storyboard.get('status') != 'unavailable' and storyboard.get('event_contract'):
-                    records = [dict(sample, id='frame_%06d' % sample['frame_index']) for sample in samples]
-                    visual_req = quality.segment_acceptance_request(storyboard['event_contract'], written,
-                        records, endpoint, state, seconds, audio_review=audio)
-                    visual = session.review(visual_req, work / 'visual_acceptance',
-                        [sample['path'] for sample in samples], validator=quality.validate_acceptance)
-                _save(work / 'visual_review.json', visual)
-                if visual.get('status') == 'unavailable' or visual.get('passed') is False:
-                    _warning(manifest, '第%d段 visual' % index, visual)
-                endpoint['actions'] = observation['actions']
-                uncertain = endpoint.get('status') == 'unavailable' or observation.get('status') == 'unavailable'
-                endpoint['completed'] = [] if uncertain else [event['explanation']
-                    for event in visual.get('events', []) if event['status'] == 'observed']
-                if uncertain or visual.get('status') == 'unavailable':
-                    endpoint['beat_status'] = 'unknown'
-                else:
-                    endpoint['beat_status'] = ('achieved' if visual.get('passed') else
-                        'partial' if endpoint['completed'] else 'not_observed')
-                endpoint['continuity_risks'] = list(dict.fromkeys(observation['continuity_risks'] + endpoint['continuity_risks']))
-                row = dict(adopted, index=index, raw_sha256=_sha(raw), observation=endpoint,
-                    sequence_observation=observation, prompt_path=str(work / 'director.json'),
-                    model_mode='ref2va', take=take, retention_policy='full_duration',
-                    input_signature=_signature(binding), storyboard=storyboard, visual_review=visual,
-                    asr=audio, quality_gate=False,
-                    quality_status='warning' if any(item['stage'].startswith('第%d段 ' % index)
-                        for item in manifest.get('continuation_warnings', [])) else 'recorded')
-                manifest['segments'].append(row)
-                manifest['segments'].sort(key=lambda item: item['index'])
-                manifest['quality_summary'] = _summary(manifest)
-                session.checkpoint()
+                    def validate_director(candidate, payload):
+                        # A usable draft must still compile with exact dialogue,
+                        # reference/voice binding and real numeric time bounds.
+                        characters.bind_delivery(candidate, payload, cards, refs, compiler=advisory_compiler)
+                        budget_candidates.append(copy.deepcopy(candidate))
+                        prompts.validate_written(candidate, payload)
+                        # Binding is part of a usable director response, rather
+                        # than a later failure which could discard the first draft.
+                        characters.bind_delivery(candidate, payload, cards, refs, compiler=prompts.compile_written)
+                    draft = written = storyboard = None
+                    for revision in range(2):
+                        session.stage('第%d/%d段：本地%s中文导演分镜' % (index, count, '修订' if revision else '编写'), index - 1)
+                        request = write_req if revision == 0 else prompts.revision_request(draft, write_req[1], storyboard)
+                        budget_candidates, budget_advisory = [], False
+                        try:
+                            if revision:
+                                candidate = session.review(request, work / 'writing_revision_1',
+                                                           validator=validate_director)
+                            else:
+                                candidate, budget_advisory, fallback_report = _request_reference_director(
+                                    session, request, work / 'writing', cards, refs,
+                                    validate_director, budget_candidates)
+                                if fallback_report:
+                                    _save(work / 'writing_fallback_warning.json', fallback_report)
+                                    _warning(manifest, '第%d段 writing_fallback' % index, fallback_report,
+                                        '导演格式修复仍不可用，沿用已保存的本段动作与固定原话继续；原回复已保留')
+                        except RuntimeError as error:
+                            if (not continuation.is_optional_error(error) or session.failure
+                                    or not budget_candidates):
+                                raise
+                            session.guard()
+                            candidate, budget_advisory = budget_candidates[-1], True
+                        if candidate.get('status') == 'unavailable':
+                            _save(work / 'writing_revision_warning.json', candidate)
+                            _warning(manifest, '第%d段 writing_revision' % index, candidate,
+                                '导演修订格式不可用，保留已验证有效的原提示词')
+                            break
+                        draft = candidate
+                        written = characters.bind_delivery(draft, request[1], cards, refs,
+                            compiler=advisory_compiler if budget_advisory else prompts.compile_written)
+                        dialogue_adjustments = [item for item in written.get('automatic_adjustments', [])
+                            if str(item.get('kind', '')).startswith('dialogue_text_')]
+                        if dialogue_adjustments:
+                            ambiguous = any(item.get('kind') == 'dialogue_text_overlap_warning'
+                                            for item in dialogue_adjustments)
+                            report = dict(status='warning' if ambiguous else 'normalized',
+                                          quality_gate=False, adjustments=dialogue_adjustments)
+                            _save(work / 'dialogue_text_adjustments.json', report)
+                            if ambiguous:
+                                _warning(manifest, '第%d段 dialogue_text' % index, report,
+                                    '对白与普通描述文字重合，保留原对白和动作并记录提醒继续')
+                        budget_notes = [row for row in written.get('automatic_adjustments', [])
+                                        if row.get('kind') == 'speech_budget_warning']
+                        if budget_notes:
+                            report = dict(status='warning', quality_gate=False, issues=budget_notes)
+                            _save(work / 'speech_budget_warning.json', report)
+                            _warning(manifest, '第%d段 speech_budget' % index, report)
+                        story_req = prompts.storyboard_request(brief, inputs['style'], plan, beat, written, state, seconds)
+                        session.stage('第%d/%d段：记录本地分镜预审' % (index, count), index - 1)
+                        storyboard = session.review(story_req, work / ('storyboard_%d' % revision),
+                                                     validator=prompts.validate_storyboard)
+                        if storyboard.get('status') == 'unavailable' or storyboard.get('passed') is True or revision:
+                            break
+                    if storyboard.get('status') == 'unavailable' or storyboard.get('passed') is False:
+                        _warning(manifest, '第%d段 storyboard' % index, storyboard)
+                    _save(work / 'director_raw.json', draft)
+                    _save(work / 'director.json', written)
+                    _save(work / 'storyboard.json', storyboard)
+                    binding = dict(source_sha256=manifest['source_sha256'], plan_sha256=core.plan_signature(plan),
+                        actual_state_sha256=_signature(state), director_sha256=_signature(written),
+                        references=[dict(ref, sha256=_sha(ref['path'])) for ref in refs],
+                        geometry=manifest['geometry'], seed=manifest['seeds'][index - 1], steps=10,
+                        seconds=seconds, frames=client._frames(seconds))
+                    binding.update(_reference_sampling_options(inputs))
+                    if (work / 'inputs.json').exists() and _read(work / 'inputs.json') != binding:
+                        raise RuntimeError('参考视频生成输入变化，原片保留')
+                    _save(work / 'inputs.json', binding)
+                    session.stage('第%d/%d段：H3本地全能参考生成' % (index, count), index - 1)
+                    raw = _generate_once(session, work, written, refs, manifest['geometry'], index, take, _signature(binding))
+                    adopted = media.adopt(raw, work / 'adopted', end_seconds=seconds)
+                    samples = media.sample_frames(adopted['clip_path'], work / 'samples', seconds=seconds)
+                    session.stage('第%d/%d段：本地观察实际画面与末帧' % (index, count), index - 1)
+                    observe_req = prompts.observe_request('segment', state, beat)
+                    observe_req[1].update(sample_timestamps=[sample['time_seconds'] for sample in samples],
+                                          clip_duration_seconds=seconds, retention_policy='full_duration')
+                    shown = flow.compact_samples(samples, adopted) if optimized else samples
+                    if wardrobe.enabled(inputs):
+                        indices = {sample.get('frame_index', sample.get('time_seconds')) for sample in shown}
+                        indices.discard(None)
+                        observe_req = wardrobe.observation_request(observe_req, cards,
+                            transition_evidence=len(indices) >= 2, frame_bindings=shown)
+                    if optimized:
+                        observe_req = flow.compact_request(observe_req, shown)
+                    observation = session.review(observe_req, work / 'observation', [sample['path'] for sample in shown])
+                    if observation.get('status') == 'unavailable':
+                        _warning(manifest, '第%d段 observation' % index, observation)
+                        observation = continuation.unknown_observation(observation, last_known=state)
+                    if optimized:
+                        observation, endpoint = flow.observation_pair(observation)
+                        _save(work / 'endpoint' / 'derived.json', endpoint)
+                    else:
+                        end_req = prompts.observe_request('opening', observation, beat)
+                        end_req[1]['stage_detail'] = '实际完整采用视频的精确最后一帧，不筛选露脸帧，不冒充已完成剧情'
+                        if wardrobe.enabled(inputs):
+                            end_req = wardrobe.observation_request(end_req, cards, transition_evidence=False)
+                        endpoint = session.review(end_req, work / 'endpoint', [adopted['anchor_path']])
+                    if endpoint.get('status') == 'unavailable':
+                        _warning(manifest, '第%d段 endpoint' % index, endpoint)
+                        endpoint = continuation.unknown_observation(endpoint, last_known=state)
+                    if flow.audio_enabled(inputs):
+                        session.stage('第%d/%d段：本地ASR记录台词' % (index, count), index - 1)
+                        audio = asr.review(adopted['clip_path'], written['dialogue'], work / 'asr')
+                        audio = continuation.usable_clip_audio_evidence(audio, adopted['clip_path'])
+                        if audio.get('status') != 'passed':
+                            _warning(manifest, '第%d段 asr' % index, audio)
+                    else:
+                        audio = flow.disabled_audio()
+                        _save(work / 'asr' / 'review.json', audio)
+                    visual = dict(status='unavailable', reason='没有有效事件契约，未认定通过', quality_gate=False)
+                    if storyboard.get('status') != 'unavailable' and storyboard.get('event_contract'):
+                        records = [dict(sample, id='frame_%06d' % sample['frame_index']) for sample in samples]
+                        visual_req = quality.segment_acceptance_request(storyboard['event_contract'], written,
+                            records, endpoint, state, seconds, audio_review=audio)
+                        visual = session.review(visual_req, work / 'visual_acceptance',
+                            [sample['path'] for sample in samples], validator=quality.validate_acceptance)
+                    _save(work / 'visual_review.json', visual)
+                    if visual.get('status') == 'unavailable' or visual.get('passed') is False:
+                        _warning(manifest, '第%d段 visual' % index, visual)
+                    endpoint['actions'] = observation['actions']
+                    uncertain = endpoint.get('status') == 'unavailable' or observation.get('status') == 'unavailable'
+                    endpoint['completed'] = [] if uncertain else [event['explanation']
+                        for event in visual.get('events', []) if event['status'] == 'observed']
+                    if uncertain or visual.get('status') == 'unavailable':
+                        endpoint['beat_status'] = 'unknown'
+                    else:
+                        endpoint['beat_status'] = ('achieved' if visual.get('passed') else
+                            'partial' if endpoint['completed'] else 'not_observed')
+                    endpoint['continuity_risks'] = list(dict.fromkeys(observation['continuity_risks'] + endpoint['continuity_risks']))
+                    row = dict(adopted, index=index, raw_sha256=_sha(raw), observation=endpoint,
+                        sequence_observation=observation, prompt_path=str(work / 'director.json'),
+                        model_mode='ref2va', take=take, retention_policy='full_duration',
+                        input_signature=_signature(binding), storyboard=storyboard, visual_review=visual,
+                        asr=audio, quality_gate=False,
+                        quality_status='warning' if any(item['stage'].startswith('第%d段 ' % index)
+                            for item in manifest.get('continuation_warnings', [])) else 'recorded')
+                    if wardrobe.enabled(inputs):
+                        row['wardrobe_state'] = wardrobe.advance(wardrobe_options['wardrobe_state'],
+                            characters=cards, endpoint=endpoint, sequence=observation, segment=index,
+                            evidence_frames=tuple(sample['frame_index'] for sample in shown
+                                if type(sample.get('frame_index')) is int))
+                    manifest.setdefault('segment_failures', {}).pop(str(index), None)
+                    manifest['segments'].append(row)
+                    manifest['segments'].sort(key=lambda item: item['index'])
+                    manifest['quality_summary'] = _summary(manifest)
+                    session.checkpoint()
+                except Exception as error:
+                    session.guard()
+                    index = beat['index']
+                    failed_work = folder / 'segments' / ('%02d_take_%d' %
+                        (index, int(manifest.get('takes', {}).get(str(index), 1))))
+                    continuation.record_segment_failure(manifest, index, error,
+                        session.stage_name, _save, failed_work)
+                    # This slot is now recorded as pending; its required writer
+                    # failure must not poison independent later slots.
+                    session.failure = None
+                    _warning(manifest, '第%d段 pending' % index,
+                        dict(status='unavailable', reason=str(error), quality_gate=False),
+                        '本段待补，保留原提交任务，不自动重投，继续后续段')
+                    session.checkpoint()
+                    continue
+            if len(manifest['segments']) != count:
+                session.stage('拼接已保存参考片段，缺段保留待补', len(manifest['segments']))
+                return continuation.partial_output(manifest, plan, folder, count,
+                    media.join, _save, core._url)
             session.stage('拼接参考故事与完整音画解码检查', count)
             movie = 'movie_revision_%d' % len(manifest['history']) if manifest.get('history') else 'movie'
-            output = media.join(manifest['segments'], folder / movie)
+            try:
+                output = media.join(manifest['segments'], folder / movie)
+            except Exception as error:
+                from .runtime_core import item_failure_requires_stop
+                if item_failure_requires_stop(error):
+                    raise
+                return continuation.partial_output(manifest, plan, folder, count,
+                    lambda rows, path: (_ for _ in ()).throw(error), _save, core._url)
             output.update(title=plan['title'], segments=len(manifest['segments']), local_ai_only=True,
                 manifest_url=core._url(manifest_path), quality_gate=False,
                 audio_review=('本地ASR记录；未人工审听或验证口型' if flow.audio_enabled(inputs)

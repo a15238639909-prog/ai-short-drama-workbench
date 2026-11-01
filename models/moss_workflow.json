@@ -1,0 +1,181 @@
+{
+  "120": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": [
+        "132",
+        0
+      ],
+      "steps": 16,
+      "cfg": 3.0,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": 12,
+      "return_with_leftover_noise": "enable",
+      "model": [
+        "158",
+        0
+      ],
+      "positive": [
+        "129",
+        0
+      ],
+      "negative": [
+        "130",
+        0
+      ],
+      "latent_image": [
+        "126",
+        0
+      ]
+    }
+  },
+  "121": {
+    "class_type": "LatentUpscaleBy",
+    "inputs": {
+      "upscale_method": "bicubic",
+      "scale_by": 1.2,
+      "samples": [
+        "120",
+        0
+      ]
+    }
+  },
+  "122": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 666,
+      "steps": 25,
+      "cfg": 3.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 9,
+      "end_at_step": 25,
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "158",
+        0
+      ],
+      "positive": [
+        "129",
+        0
+      ],
+      "negative": [
+        "130",
+        0
+      ],
+      "latent_image": [
+        "121",
+        0
+      ]
+    }
+  },
+  "126": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": [
+        "127",
+        0
+      ],
+      "height": [
+        "127",
+        1
+      ],
+      "batch_size": 1
+    }
+  },
+  "127": {
+    "class_type": "ResolutionSelector",
+    "inputs": {
+      "aspect_ratio": "9:16 (Portrait Widescreen)",
+      "megapixels": 1.0,
+      "multiple": 16
+    }
+  },
+  "128": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "129": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "133",
+        0
+      ]
+    }
+  },
+  "130": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "133",
+        0
+      ]
+    }
+  },
+  "132": {
+    "class_type": "Seed (rgthree)",
+    "inputs": {
+      "seed": 0
+    }
+  },
+  "133": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3.5_9b_int8_convrot.safetensors",
+      "type": "moss_image",
+      "device": "default"
+    }
+  },
+  "134": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "Moss_image\\Moss-dirtyMoss_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "138": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "122",
+        0
+      ],
+      "vae": [
+        "128",
+        0
+      ]
+    }
+  },
+  "141": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Workbench",
+      "images": [
+        "138",
+        0
+      ]
+    }
+  },
+  "158": {
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "inputs": {
+      "double_layers": "",
+      "single_layers": "22",
+      "start_percent": 0.0,
+      "end_percent": 0.5,
+      "model": [
+        "134",
+        0
+      ]
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 ## 1. 接入边界
 
-本项目是模型服务的客户端和流程编排器，不包含完整的模型运行环境。当前实现针对特定 llama.cpp、ComfyUI / Krea2、Anima 和 MiniMax H3 工作流；协议相似不等于可以直接替换模型。
+本项目是模型服务的客户端和流程编排器，不包含完整的模型运行环境。当前实现针对特定 llama.cpp、ComfyUI / Krea2、MOSS、Anima、MiniMax H3及可选Qwen Image 2.1编辑工作流；协议相似不等于可以直接替换模型。
 
 本说明用于配置本项目，**不要求修改 Codex 的 `model_provider` 或把 AI 工具自身改成本地推理**。接入前先读实际源码和本机配置；未检查到的内容写“未验证”，缺少的内容写“缺失”，不要生成看似可用的假路径。
 
@@ -43,7 +43,7 @@ python -m venv .venv
 | `mmproj_gguf` | `V41_MMPROJ_GGUF` | 匹配该模型的多模态投影文件；当前自动启动检查也要求它存在 |
 | `llama_log` | `V41_LLAMA_LOG` | 标准输出日志路径；文件尚未生成不等于模型缺失 |
 | `llama_err_log` | `V41_LLAMA_ERR_LOG` | 错误日志路径；不要将包含私人输入的日志公开 |
-| `comfy_dir` | `V41_COMFY_DIR` | Krea / Anima 使用的 ComfyUI 便携环境根目录 |
+| `comfy_dir` | `V41_COMFY_DIR` | Krea / MOSS / Anima 使用的 ComfyUI 便携环境根目录；可选Qwen编辑复用该实例 |
 | `comfy_output` | `V41_COMFY_OUTPUT` | 对应 ComfyUI 的实际输出目录，不要填另一个实例的输出目录 |
 | `h3_root` | `V41_H3_ROOT` | H3 专用便携环境根目录 |
 | `legacy_root` | `V41_LEGACY_ROOT` | 可选旧工具目录；留空使用包内 `_legacy_8848`，不要求另开一个 8848 服务 |
@@ -73,6 +73,8 @@ python -m venv .venv
 | Krea 文生图 | `models/krea_client.py`；`http://127.0.0.1:8188` | `GET /system_stats`、`GET /queue` | `POST /prompt` 提交图，再查 `GET /history/{prompt_id}` |
 | Krea 图片编辑 | `models/krea_edit_client.py`；共用 Krea 服务 | 同上 | 同上，但使用专用编辑图和节点 |
 | Anima | `models/anima_client.py`；共用 Krea 服务 | 同上 | 同上，但使用 Anima 图 |
+| MOSS | `models/moss_client.py`；共用8188服务 | 同上 | 同上，图为 `models/moss_workflow.json` |
+| 漫画局部编辑（可选） | `models/qwen_image21_client.py`；只连已运行的本机8188 | 同上 | 同上，专用Qwen Image 2.1编辑图及图像输入 |
 | H3 视频 | `models/h3_client.py`；`http://127.0.0.1:8190` | `GET /system_stats`、`GET /queue` | 同样使用 ComfyUI 图协议，不是通用视频 API |
 
 健康接口成功只证明该地址有服务响应；还应核对返回结构、实际模型、工作流节点和资源条件。可以读取 ComfyUI `GET /object_info` 检查节点定义，但不要把全部返回内容复制到公共报告。
@@ -97,6 +99,28 @@ python -m venv .venv
 - 文生图入口不接参考图；参考图编辑是另一个入口。当前文生图负面条件接 `ConditioningZeroOut`，不要承诺负面提示词一定生效。
 - Anima 使用 `models/anima_workflow.json`，文件名包含 `anima_baseV10.safetensors`、`qwen_3_06b_base.safetensors`、`qwen_image_vae.safetensors`。其提示词要求英文词或标签，中文会被拒绝；自动写英文提示词还依赖文字模型。
 - 图片编辑的 `build_graph` 也会复制输入文件，不属于只读探测函数。
+
+### MOSS与主流程生图
+
+- 读取 `models/moss_workflow.json`、`models/moss_client.py`、`models/moss_prompt.py` 与 `cores/main_images.py`。MOSS复用8188 ComfyUI，正常图片与漫画整页使用相同的生图客户端；不是新的云端API。
+- 本版图文件使用 `Moss_image/Moss-dirtyMoss_int8_convrot.safetensors`、`qwen3.5_9b_int8_convrot.safetensors`、`flux2-vae.safetensors`。模型文件名、加载器和自定义节点应逐项对照实际图；相同模型家族的另一种量化或节点实现不能直接当成已兼容。
+- 主流程人物与场景模型分别保存。MOSS的2倍与4K档由底图和双阶段放大参数共同决定；当前实际PNG尺寸记录在结果中。旧项目缺省字段、任务快照与已采用图片按兼容规则保留。
+- MOSS写词需要本地Qwen。普通画面返回中文描述，人设多视图、漫画与文字排版需求可使用布局规划；布局坐标与生成画布绑定，切换尺寸后应重新规划或按程序转换。
+- 出图词的混合待生产列表在页面内存中，各项入队时冻结模型、画布及种子。它不等于磁盘持久队列，刷新页面会丢失尚未生成的列表。
+
+### Anima名字库
+
+- 包内 `data/anima_names/20261026/characters.sqlite3` 是公开作品/人物名称与触发词库；具体来源和字段范围见 [ANIMA_CATALOG_SOURCE.md](ANIMA_CATALOG_SOURCE.md)。它不含角色外貌、图片或用户项目。
+- `cores/anima_names.py` 以只读SQLite连接查询。英文名字或标签用于精确候选，中文只能匹配已整理别名；不能宣称覆盖任意中文人物名。重名需要补充作品，缺库或不完整记录会明确报错。
+- 人物名命中不等于模型能精确还原人物；提示词身份检查与最终图片还原度是两项验收。
+
+### 可选Qwen Image 2.1漫画局部编辑
+
+- 这项功能只在用户明确提交漫画修图时调用，不是MOSS整页生成的前置依赖。接入文件为 `models/qwen_image21_client.py`、`cores/long_comic_edit.py` 和 `api/long_comic_api.py`。
+- 本版客户端使用 `Qwen21-rayQwen21_v1_int8_convrot.safetensors`、`qwen3vl_8b_int8_convrot.safetensors`、`qwen_image_2.1_vae_bf16.safetensors`。需要 `QwenImage21Cache`、`TextEncodeQwenImage21` 等工作流节点，以及对应ComfyUI量化支持。
+- 编辑连接地址复用 `models/krea_client.py`，但额外限制为已运行的本机8188服务。客户端不会为修图自动启动服务、停止其他服务或清空队列；服务缺席、排队或状态未知时应保留输入并报告。
+- 用户上传的人物参考与人物ID绑定。框选坐标对应原图像素，程序扩展上下文后编辑并向内羽化贴回；框外原图像素保留。候选不自动采用，需检查人物、画风、动作与接缝。
+- 接口或构图函数可能复制输入、写候选或实际提交任务，不能拿来做只读健康检查。只读阶段仍先检查端口、`/queue`、`/system_stats`、模型文件及 `/object_info`。
 
 ### H3 工作流的实际依赖
 

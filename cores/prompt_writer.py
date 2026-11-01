@@ -462,7 +462,9 @@ def write(kind, one_line, settings, extra_rules="", temperature=0.7):
     ins = _fill(f.read_text(encoding="utf-8"), settings, kind=kind)
     if extra_rules:
         ins += "\n\n## 这一次的额外要求\n" + str(extra_rules).strip()
-    return _call(ins, str(one_line or "").strip(), temperature=temperature)
+    from .image_prompt_content import POSITIVE_OUTPUT_RULE, image_prompt_content
+    raw = _call(ins + POSITIVE_OUTPUT_RULE, str(one_line or "").strip(), temperature=temperature)
+    return image_prompt_content(raw, normalize=True)
 
 
 def write_many(jobs, settings, on_step=None):

@@ -23,6 +23,7 @@ def story_path(sid):
     return store.DATA / "stories" / (sid + ".json")
 
 def create_story(one_line, title="", mode="short"):
+    from .wardrobe_continuity import POLICY
     # 【编号必须避开所有已存在的项目】原来是「文件数＋1」——只要删过项目，
     # 文件数就比最大编号小，新建出来的 ID 会撞上已有项目并**直接把它覆盖**
     # （2026-08-29 实测：移走 062/063 后新建，连续三次都算出 064，
@@ -53,6 +54,11 @@ def create_story(one_line, title="", mode="short"):
     except Exception:
         pass
     story.setdefault("settings", {}).update(story_mode="single", one_line=one_line)
+    # New stories use the validated Moss asset path. Missing fields in existing
+    # projects still fall back to Krea2 through project_settings.defaults().
+    story["settings"].setdefault("image_model", "moss")
+    story["settings"].setdefault("image_quality", "2x")
+    story["wardrobe_policy"] = POLICY
     store.save_json(story_path(sid), story)
     return story
 

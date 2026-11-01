@@ -23,7 +23,7 @@ def _pjob(key):
 def r_035(h, path, d):
     """直接后台出图，带可查进度。"""
     import threading
-    from cores import asset_core
+    from cores import asset_core, main_images
     sid = str(d.get("story_id") or "")
     kind = str(d.get("kind") or "")
     oid = str(d.get("owner_id") or "")
@@ -40,15 +40,18 @@ def r_035(h, path, d):
     j = _pjob(key)
     if j.get("running"):
         return _RESP({"ok": False, "error": "这一张已经在生成了"}, 400)
+    ps = project_settings.get(story_core.get_story(sid) or {}) or {}
+    image_options = main_images.snapshot(ps)
+    explicit_prompt = str(d.get("prompt") or "")
     j.update(running=True, step="排队", err="", done=None)
 
     def _run():
         try:
-            ps = project_settings.get(story_core.get_story(sid) or {}) or {}
             style = str(ps.get("style") or "电影级剧照")
 
             _card = asset_core.get_asset(sid, "scenes" if "scene" in kind else "characters", oid) or {}
-            _override = str(d.get("prompt") or _card.get("prompt_override") or "").strip() or None
+            _override = (explicit_prompt if explicit_prompt.strip() else
+                         main_images.cached_prompt(_card, ps, field="prompt_override")) or None
             if "scene" in kind:
                 j["step"] = "画场景图"
                 v = asset_core.generate_scene_master(sid, oid, style_profile=style,
@@ -69,7 +72,11 @@ def r_035(h, path, d):
         finally:
             j["running"] = False
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    def _frozen_run():
+        with main_images.frozen(image_options):
+            _run()
+
+    threading.Thread(target=runtime_reset.worker(_frozen_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True, "key": key}})
 
 
@@ -80,9 +87,9 @@ def asset_prompt(h, path, d):
     用户要求：能看见提示词、能直接改、改完点出图看效果。
     改过的会存在卡上（prompt_override），下次出图默认沿用；
     人物默认稿只来自 Qwen；显式 generate=true 才在缺稿时生成文字。
-    reset=true 只清除手动覆盖，不运行模型。场景入口沿用现有逻辑。
+    reset=true 只清除手动覆盖，不运行模型。Moss 人物和场景共用正式出图写词入口。
     """
-    from cores import asset_core, quality_core, project_settings
+    from cores import asset_core, main_images, quality_core, project_settings
     sid = str(d.get("story_id") or "")
     oid = str(d.get("owner_id") or "")
     kind = str(d.get("kind") or "")
@@ -97,22 +104,26 @@ def asset_prompt(h, path, d):
         return _RESP({"ok": False, "error": "找不到这张卡"}, 404)
     if d.get("reset"):
         card.pop("prompt_override", None)
+        for suffix in ("model", "base_w", "base_h", "upscale"):
+            card.pop("prompt_override_" + suffix, None)
         asset_core.save_asset(sid, "scenes" if is_scene else "characters", card)
     c = dict(card)
     c["_project"] = ps
-    manual = str(card.get("prompt_override") or "").strip()
-    default = (quality_core.compile_scene_prompt(c, style=style) if is_scene
-               else str(card.get("image_prompt") or "").strip())
-    if not is_scene and not manual and not default and d.get("generate") and not d.get("reset"):
-        if _pjob(sid + ":" + oid).get("running"):
-            return _RESP({"ok": False, "error": "这一张正在生成，请完成后再查看提示词"}, 409)
-        if not _CHAR_PROMPT_LOCK.acquire(blocking=False):
-            return _RESP({"ok": False, "error": "正在整理人物提示词，请稍后再试"}, 409)
-        try:
-            from cores import authoring
-            default = authoring.write_char_sheet(sid, card, ps)
-        finally:
-            _CHAR_PROMPT_LOCK.release()
+    with main_images.frozen(main_images.snapshot(ps)):
+        manual = main_images.cached_prompt(card, ps, field="prompt_override")
+        default = main_images.cached_prompt(card, ps)
+        if is_scene and main_images.current(ps, kind='scene')["model"] == "krea2":
+            default = quality_core.compile_scene_prompt(c, style=style)
+        if not manual and not default and d.get("generate") and not d.get("reset"):
+            if _pjob(sid + ":" + oid).get("running"):
+                return _RESP({"ok": False, "error": "这一张正在生成，请完成后再查看提示词"}, 409)
+            if not _CHAR_PROMPT_LOCK.acquire(blocking=False):
+                return _RESP({"ok": False, "error": "正在整理图片提示词，请稍后再试"}, 409)
+            try:
+                writer = main_images.write_scene if is_scene else main_images.write_character
+                default = writer(sid, card, ps)
+            finally:
+                _CHAR_PROMPT_LOCK.release()
     return _RESP({"ok": True, "data": {
         "prompt": manual or default,
         "default_prompt": default,
@@ -123,14 +134,16 @@ def asset_prompt(h, path, d):
 @post("/api/asset/prompt/save")
 def asset_prompt_save(h, path, d):
     """把用户改过的提示词存到卡上。"""
-    from cores import asset_core
+    from cores import asset_core, main_images
     sid = str(d.get("story_id") or "")
     oid = str(d.get("owner_id") or "")
     is_scene = "scene" in str(d.get("kind") or "")
     card = asset_core.get_asset(sid, "scenes" if is_scene else "characters", oid)
     if not card:
         return _RESP({"ok": False, "error": "找不到这张卡"}, 404)
-    card["prompt_override"] = str(d.get("prompt") or "").strip()
+    ps = project_settings.get(story_core.get_story(sid) or {}) or {}
+    card = main_images.bind_prompt(card, str(d.get("prompt") or ""), ps,
+                                  field="prompt_override")
     card["edited_by_user"] = True
     asset_core.save_asset(sid, "scenes" if is_scene else "characters", card)
     return _RESP({"ok": True, "data": {"saved": True}})

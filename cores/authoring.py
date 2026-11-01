@@ -4188,15 +4188,46 @@ def parse_design(text):
 
 
 def _design_fields(d):
-    return {"space": d["space"], "contract_text": d["space"], "layout": d["layout"],
+    fields = {"space": d["space"], "contract_text": d["space"], "layout": d["layout"],
             "light": d["light"], "landmarks": d["landmarks"], "furniture": d["traces"],
             "fixtures": d.get("fixtures") or "",
             "depth": d["depth"], "intent": d["intent"], "states": d["states"],
             "plays": d["plays"], "design": d["design"], "merged_from": d["merged"],
             "designed": time.time()}
+    # These are alternate outputs of the earlier extractor. Once a full design
+    # is accepted, they must not silently add its former location or lighting.
+    if d.get('space'):
+        for key in ("ground", "walls", "door", "window", "materials", "regions",
+                    "fixed_landmarks", "base_light_color", "location_map", "main_light",
+                    "time", "weather", "interior", "time_of_day", "scale", "scale_class"):
+            fields[key] = ""
+    else:
+        # A partial pasted design is a patch, not evidence that omitted fields
+        # were intentionally removed.
+        fields = {key: value for key, value in fields.items() if value not in ('', None)}
+    fields['design_fact_snapshot'] = {key: value for key, value in fields.items()
+                                     if key not in ('design', 'designed', 'merged_from', 'plays', 'states')}
+    return fields
 
 
-def apply_design(sid, ep, text):
+def _apply_scene_design_fields(card, fields):
+    """Automatic design refresh preserves individual user edits."""
+    prior = card.get('design_fact_snapshot')
+    protected = {}
+    if card.get('edited_by_user'):
+        for key in fields['design_fact_snapshot']:
+            if key in card and (not isinstance(prior, dict) or card[key] != prior.get(key)):
+                protected[key] = card[key]
+    card.update(fields)
+    card.update(protected)
+    if 'space' in protected:
+        card['contract_text'] = card['space']
+    elif 'contract_text' in protected:
+        card['space'] = card['contract_text']
+    return card
+
+
+def apply_design(sid, ep, text, *, scene_conditions=None):
     """把设计稿落到场景卡：同名卡就地更新（保留图和 id）；被归并的碎片卡——
     没图且用户没改过的删掉，有图或改过的留着并标 merged_into。返回这一话的景卡列表。"""
     from . import asset_core, story_core
@@ -4209,6 +4240,17 @@ def apply_design(sid, ep, text):
                if v.get("status") == "adopted"}
     used, out = set(), []
     _design_card = {}                       # 设计稿【景】名 → 实际落到的卡名（P316b：归并删卡后要把绑定改到这个名字上）
+    def _keep_condition(card, design):
+        # Only this request's pre-design source decisions may become metadata.
+        # In particular, the generated design is never evidence for aging a scene.
+        if scene_conditions is None:
+            return
+        keys = [str(card.get("name") or "").strip(), design["name"]] + list(design.get("merged") or [])
+        condition = next((scene_conditions[key] for key in keys if key and key in scene_conditions),
+                         scene_conditions.get(""))
+        if isinstance(condition, dict):
+            from copy import deepcopy
+            card["scene_condition"] = deepcopy(condition)
     # P419：归并只许并同类地点——【归并自】里和主景不同类的（海上 vs 沙滩）拆出来单独建卡
     from . import oral_story as _os_
     try:
@@ -4233,6 +4275,7 @@ def apply_design(sid, ep, text):
             _c["user_made"] = True                                          # 不再被归并删掉、不触发重做设计稿
             _c["episode"] = int(ep or 1)
             _c["updated"] = time.time()
+            _keep_condition(_c, {"name": _nm, "merged": _als})
             asset_core.save_asset(sid, "scenes", _c)
             used.add(_c["scene_id"])
             out.append(_c)
@@ -4249,7 +4292,7 @@ def apply_design(sid, ep, text):
         _fresh = card is None
         if _fresh:
             card = asset_core.create_scene(sid, dict(f, name=d["name"]))
-        card.update(f)
+        _apply_scene_design_fields(card, f)
         if _fresh:
             card["name"] = d["name"]
         else:
@@ -4267,6 +4310,7 @@ def apply_design(sid, ep, text):
         if not card.get("episode"):
             card["episode"] = int(ep or 1)
         card["updated"] = time.time()
+        _keep_condition(card, d)
         asset_core.save_asset(sid, "scenes", card)
         used.add(card["scene_id"])
         out.append(card)
@@ -4370,7 +4414,9 @@ def _write_place_space(name, pics, others, other_spaces=None):
         indoor = bool(_INDOOR_NAME.search(nm)) and not outdoor
     head = "室外，" if outdoor else ("室内，" if indoor else "")
     sysm = ("你是美术指导。只按剧本写下面这个地方的空间描述：一段话，必须以「室内，」或「室外，」开头，依次写远景、中景、前景，"
-            "固有陈设（三到五件）、光线方向和颜色、材质。不写人物、不写动作、不写台词、不写别的地方。只输出这一段。")
+            "主空间完整边界、必要固有设施的具体数量及各自位置、光线方向和颜色、维护良好的材质。"
+            "按电影剧集实景布景安排活动区域与主通道，缺省陈设数量按场所用途和尺度确定，原文给定数量优先。"
+            "不写人物、不写动作、不写台词、不写别的地方。只输出这一段。")
     if head:
         sysm += "这个地方是%s，第一个词就写「%s」，写的是%s。" % ("室外" if outdoor else "室内", head.strip("，"), "天、地、树、路这类室外的东西" if outdoor else "屋里的墙、门窗、陈设")
     src = _place_paragraphs(nm, pics)
@@ -4469,7 +4515,7 @@ def apply_design_block(sid, card, block):
 def design_scenes(sid, ep=1, force=False):
     """美术指导：这一话的碎片场景卡 → 归并成景 + 设计稿（一次 Qwen，最多三轮定向修）。
     卡都已有设计稿且不 force 就直接返回。"""
-    from . import asset_core, story_core
+    from . import asset_core, story_core, scene_condition
     cards = ensure_scenes(sid, ep)
     if not force and cards and all(str(c.get("design") or "").strip() for c in cards):
         return cards
@@ -4483,25 +4529,48 @@ def design_scenes(sid, ep=1, force=False):
     chars = [str(c.get("name") or "") for c in (asset_core.list_assets(sid, "characters") or []) if c.get("name")]
     # 只设计还没设计稿的景（P131）：已定的景告诉美术指导，不重做、不重复
     todo = cards if force else [c for c in cards if not str(c.get("design") or "").strip()]
-    names = [str(c.get("name") or "") for c in todo if c.get("name")]
+    names = [str(c.get("name") or "").strip() for c in todo if c.get("name")]
     done_names = [str(c.get("name") or "") for c in cards if c not in todo and c.get("name")]
+    # Freeze user/source decisions before asking Qwen to create a design.  The
+    # empty-name entry supplies the same source-only baseline for any new title.
+    all_names = [str(c.get("name") or "") for c in cards if c.get("name")]
+    conditions = {str(c.get("name") or "").strip(): scene_condition.condition_for_scene(
+        st, c, scene_names=all_names) for c in todo}
+    conditions.setdefault("", scene_condition.condition_for_scene(st, {"name": ""}, scene_names=all_names))
+    condition_lines = ["- %s：%s" % (name, scene_condition.positive_condition(conditions[name]))
+                       for name in names]
+    condition_block = ("【逐景已定状态（按原始需求或手动事实，优先于自动剧本和美术发挥）】\n"
+                       + "\n".join(condition_lines)
+                       + "\n每景按本行逐项设计；未指定的项目沿用本行正向基线。气氛、年代、材质和画风不改变场景状态。"
+                         "各景状态不同就分别设计；【一句话空间】、【光】和【状态】与本行一致。"
+                         "后台状态依据不作为画面中的文字。")
     ins = _ins("场景设计稿_指令词.txt")
-    user = ("【一句话故事】%s\n【世界】%s　【画风】%s\n【人物】%s\n【现有场景名单】%s%s\n\n【第 %d 话剧本】\n%s" % (
+    user = ("【一句话故事】%s\n【世界】%s　【画风】%s\n【人物】%s\n【现有场景名单】%s%s\n\n%s\n\n【第 %d 话剧本】\n%s" % (
         st.get("one_line") or "", settings.get("world_type") or "", settings.get("style") or "",
         "、".join(chars) or "（无）", "、".join(names) or "（无）",
-        ("\n【已经设计好的景（不要再设计，戏区已定）】" + "、".join(done_names)) if done_names else "", int(ep or 1), pics[:9000]))
-    out, probs = "", []
+        ("\n【已经设计好的景（不要再设计，戏区已定）】" + "、".join(done_names)) if done_names else "", condition_block, int(ep or 1), pics[:9000]))
+    out, probs, condition_problems = "", [], []
     for k in range(3):
         out = _q(ins, user, mt=3500, temperature=0.5)
         probs = design_problems(out, names)
+        condition_problems = []
+        for design in parse_design(out):
+            covered = [design["name"]] + list(design.get("merged") or [])
+            baselines = {scene_condition.positive_condition(conditions[name])
+                         for name in covered if name and name in conditions}
+            if len(baselines) > 1:
+                condition_problems.append("「%s」归并了状态不同的景，按逐景已定状态分别设计" % design["name"])
+        probs += condition_problems
         _dbg("场景设计稿", {"轮": k + 1, "字": len(out), "景": out.count("【景】"), "问题": probs[:3]})
         if not probs:
             break
         user += "\n\n★★【上一版不合格，只改下面这些，其它原样保留】" + "；".join(probs)
     if not _design_blocks(out):
         raise RuntimeError("美术指导没给出设计稿")
+    if condition_problems:
+        raise RuntimeError("美术指导仍把状态不同的景归并：" + "；".join(condition_problems))
     _update_ep(sid, ep, scene_design=out)
-    return apply_design(sid, ep, out)
+    return apply_design(sid, ep, out, scene_conditions=conditions)
 
 _STATE_RE = re.compile(r"脱下|脱掉|脱去|换上|穿上|披上|裹着|睡袍|睡衣|内衣|浴巾|赤裸|全裸|裸着|裸体"
                        r"|洗澡|沐浴|入浴|泡在|起床|更衣|解开.{0,6}(衣|裙|扣|带)|衣衫不整|没穿")
@@ -4652,6 +4721,28 @@ def h3_char_order(characters, settings=None):
         cam = owner(chars, settings)
         return [c for c in chars if c["name"] != cam] + [c for c in chars if c["name"] == cam], cam
     return chars, ""
+
+
+def h3_prompt_char_order(shots, characters, settings=None):
+    """原文发声全部保留；无人物卡的声音只占 Subject，不占图片或资产。"""
+    # Rebuild transient voices on recursive builder calls so moving the POV
+    # owner never changes the Subject numbers already emitted by the header.
+    chars, cam = h3_char_order([c for c in characters or [] if not c.get('_h3_voice_only')], settings)
+    from . import camera_view
+    mode = _pov_spec(settings)[0]
+    if mode != "第一视角POV":
+        return chars, cam
+    if mode == "第一视角POV":
+        cam = camera_view.owner(characters, settings)
+    # Names may be unknown source labels or an explicitly off-screen voice.
+    # Never drop their words, guess a visible actor, or persist a fake card.
+    for speaker, quote in _pic_parts_dialogue(shots):
+        speaker = re.sub(r"（[^）]*）", "", str(speaker or "")).strip()
+        if speaker and str(quote or "").strip() and not any(c["name"] == speaker for c in chars):
+            chars.append(dict(name=speaker, _h3_voice_only=True,
+                voice_h3_en="Neutral voice, natural timbre, medium pitch and pace, clear articulation.",
+                voice_h3_age=""))
+    return chars, cam
 
 
 _H3_BIND_POV = ("<Subject%d>%s是这段的拍摄者——镜头就是%s的眼睛，观众看到的就是%s看到的；"
@@ -6084,6 +6175,9 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
     from . import seam_v2 as _sv2
     from . import camera_view
     mode, _ = _pov_spec(settings)
+    chars, _ = h3_prompt_char_order(shots, chars, settings)
+    _offscreen = ({camera_owner or camera_view.owner(chars, settings)} if mode == "第一视角POV" else set())
+    _offscreen.update(c['name'] for c in chars if c.get('_h3_voice_only'))
     _has_director = bool(isinstance(settings, dict) and (settings.get("_beat") or {}).get("director"))
     if mode in camera_view.MODES and not _has_director:
         # Subject numbering is already reference-sorted; owner comes from original cards.
@@ -6181,7 +6275,11 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
             ins += ("\n\n【这一段怎么拍——用户写的，优先级最高，照办】\n" + _dir[:600] +
                     "\n里面写了的景别、角度、机位在哪、运动方式、谁在画面哪边、台词在第几秒，原样体现在【机位】行和时间块里；"
                     "写了的动作替代【这一拍】里的动作，没写到的仍按【这一拍】。")
-    ins += _h3_pov_rules(settings, chars[0]["name"] if chars else "")
+    ins += _h3_pov_rules(settings, camera_owner or camera_view.owner(chars, settings)
+                         if mode in camera_view.MODES else (chars[0]["name"] if chars else ""))
+    if _offscreen:
+        ins += ("\n【画外拍摄者】%s的原文台词保留为画外声音；不写其嘴唇开合、脸或身体入画。"
+                % "、".join(_offscreen))
     # 台词行原文（按人物编号拼好）
     say_lines = []
     for w, q in _pic_parts_dialogue(shots):
@@ -6218,9 +6316,19 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
                (plan_block(plan) if (plan and not os.environ.get("V41_TL_NOPLAN") and not _sv2.on()) else ""), str(shots or ""), "\n".join(say_lines) if say_lines else "无"))
     # 深度思考只在整话分镜表做一次。逐段已经拿到目的/动作/站位，再开思考会
     # 每段先耗尽推理额度、随后退回普通生成，既慢也没有把思考结果用进成品。
-    body = str(_q(ins, user, mt=(3200 if _deep_director else 2400),
-                  temperature=(0.55 if _deep_director else 0.6),
-                  reasoning=False) or "").strip()
+    _writer_warnings = []
+    try:
+        body = str(_q(ins, user, mt=(3200 if _deep_director else 2400),
+                      temperature=(0.55 if _deep_director else 0.6),
+                      reasoning=False) or "").strip()
+    except (RuntimeError, OSError) as error:
+        from .runtime_core import item_failure_requires_stop
+        if mode != '第一视角POV' or not _dd or item_failure_requires_stop(error):
+            raise
+        # The accepted skeleton already contains actions, timing and exact
+        # words. assemble below can use it without guessing another story.
+        body = ''
+        _writer_warnings.append('视点写词服务不可用，保留已确认的本段骨架和原话：' + str(error))
     body = _tl_norm_heads(body)                                     # P408：小数块头归整数
     if isinstance(settings, dict) and settings.get("_beat"):
         body = _tl_ensure_block(body, seconds)                      # P409：一个块都没写 → 机位行描述做成一块
@@ -6233,7 +6341,8 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
             _i = idx.get(_nm_) or next((v for k_, v in idx.items() if re.sub(r"（[^）]*）", "", k_) == _nm_), None)
             if _i:
                 _by_d[_x] = "%s说：<Subject %d> (S%d) says:<d>[Chinese]%s</d>" % (re.sub(r"（[^）]*）", "", _nm_), _i, _i, str(_q_).strip().strip("“”「」\""))
-        body = _ds.assemble(body, _dd, chars, _by_d, scene_space=scene_space)
+        body = _ds.assemble(body, _dd, chars, _by_d, scene_space=scene_space,
+                            offscreen_speakers=_offscreen)
         say_lines = [v for _k_, v in sorted(_by_d.items())]
     body = _tl_clean(_tl_fix_dialogue(body, say_lines))
     body = strip_alien_garments_text(body, shots)
@@ -6361,7 +6470,7 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
     # P322④/P324④：守卫重写（含上面两次）把画面稿/场景卡里没有的地点词带进来 → 回退原块；放在所有重写之后
     body = _tl_revert_foreign_places(body, _orig_blocks, _loc_corpus)
     body = strip_alien_garments_text(body, shots)             # 所有模型修补之后再守一次
-    _h3_timeline_body.last_problems = (list(_v2_problems) if _sv2.on() else list(getattr(_tl_inherit_staging, "last_problems", []) or [])) + _tl_position_problems(body, [c["name"] for c in chars], _layout)
+    _h3_timeline_body.last_problems = (list(_v2_problems) if _sv2.on() else list(getattr(_tl_inherit_staging, "last_problems", []) or [])) + _tl_position_problems(body, [c["name"] for c in chars], _layout) + _writer_warnings
     # 【放在所有注入之后】上面每一道修复都可能把秒数改乱、把台词重复写一遍。
     body = split_say_lines(body)                                   # P393：台词行单独成行（夹在段落里 H3 念不清）
     body = dedup_say_lines(body)
@@ -6423,12 +6532,15 @@ def _h3_timeline_body(shots, chars, settings=None, prev_state="", seconds=None, 
             body = "\n".join(_rest)
         if _dd:
             from . import director_shots as _ds2
-            body = _ds2.assemble(body, _dd, chars, _by_d, scene_space=scene_space)   # P439b：朝向/姿势守卫让模型重写过块 → 机位/块头/台词/左右/结尾再钉一次
+            body = _ds2.assemble(body, _dd, chars, _by_d, scene_space=scene_space,
+                                 offscreen_speakers=_offscreen)   # P439b：朝向/姿势守卫让模型重写过块 → 机位/块头/台词/左右/结尾再钉一次
             if mode == "第一视角POV":
                 body = _pov_scrub(body, camera_owner or camera_view.owner(chars, settings))   # P461b
             body = _ds2.final_tidy(body)                                      # P439：口型只留一个
         body = beat_tidy(body)                                                # P407：残句
     body = tl_fill_gaps(body, seconds)
+    for voice in _offscreen:
+        body = body.replace(voice + '嘴唇开合。', '')
     _, _, tail = _tl_blocks(body)
     tail_state = re.sub(r"^\s*这一段结束时[：:]\s*", "", tail).strip()[:400] if tail else ""
     _h3_timeline_body.last_tail = tail_state
@@ -7444,7 +7556,7 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
     from . import camera_view
     _view_mode, _ = _pov_spec(settings)
     _camera_owner = camera_view.owner(characters, settings) if _view_mode in camera_view.MODES else ""
-    chars, _cam = h3_char_order(characters, settings)   # 第一视角：主角排最后、不带图
+    chars, _cam = h3_prompt_char_order(shots, characters, settings)   # 原文开口的画外拍摄者无需人物卡或图片
     # 【谁说话才写谁的音色】没人说话的段落却列着全部角色的音色，
     # 后面又跟一句"本段没有人说话"——自相矛盾（2026-09-01 用户指出）。
     # 人物绑定（长相）每段都要，音色只给这一段真开口的人。
@@ -7461,7 +7573,9 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
         st_line = ""
         _ward = settings.setdefault("_wardrobe", {}) if isinstance(settings, dict) else {}
         _wrow = (settings or {}).get("_wardrobe_row") if isinstance(settings, dict) else None
-        if isinstance(_wrow, dict) and c["name"] in _wrow:
+        if c.get("_h3_voice_only"):
+            pass
+        elif isinstance(_wrow, dict) and c["name"] in _wrow:
             # P329：确定性追踪——开始时/本段内/结束时；人设图永远穿衣，洗澡/脱衣/换衣由这里进提示词
             from . import wardrobe as _wd
             st_line = _wd.state_line(_wrow, c["name"])
@@ -7477,7 +7591,10 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
         elif _ward.get(c["name"]):
             # P318b：本段画面稿没写换衣 → 沿上一段结束时的衣着（原来这里退回人设卡的衣服，第 1 段湿透长袍、第 2 段红丝绒）
             st_line = "沿上一段结束时的样子：%s；本段全程如此" % _ward[c["name"]]
-        if c["name"] == _cam:
+        if c.get('_h3_voice_only') and c['name'] != _cam:
+            head.append('<Subject%d>%s是本段原文的声音标签；身份未核定，保留原话和顺序，'
+                        '不代表新增出镜人物，也不据此指定任何可见人物开口。' % (i, c['name']))
+        elif c["name"] == _cam:
             head.append(_H3_BIND_POV % (i, c["name"], c["name"], c["name"], c["name"], c["name"]))
         elif st_line:
             head.append(_H3_BIND_STATE % (i, c["name"], i, st_line))
@@ -7503,7 +7620,7 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
             _h = str(_h or "").strip()
             if _h and _h not in _extras and _h not in [c["name"] for c in chars]:
                 _extras.append(_h)
-        head.append(chars_lock_line([c for c in chars if c["name"] != _cam], _extras, (settings or {}).get("_extras_scene")))
+        head.append(chars_lock_line([c for c in chars if c["name"] != _cam and not c.get('_h3_voice_only')], _extras, (settings or {}).get("_extras_scene")))
         # 场景 Subject 会被当成角色（2026-09-05 项目102 段4：「敌对机甲（S3）」，
         # 而 S3 是场景板，H3 直接把那张板画成了开场空镜）。这里说清编号只到人物为止。
         head.append("Subject 编号只到 S%d 为止，这些是人；再往后的 Subject 是**地方**（场景参考板），"
@@ -7512,7 +7629,7 @@ def h3_prompt(shots, characters, scene_name, settings=None, instruction=None,
     n_sc = len(chars) + 1
     # A POV operator has a Subject identity but no image slot. Scene Subject
     # numbers therefore cannot double as Picture numbers in that mode.
-    first_scene_picture = sum(c['name'] != _cam for c in chars) + 1
+    first_scene_picture = sum(c['name'] != _cam and not c.get('_h3_voice_only') for c in chars) + 1
     # 场景可以是多个（一个地点拆成内部/门口/墙边），每个有图的场景绑一个 Subject，
     # 顺序和参考包（segment_api.new_pack：人物图 + 场景图按卡的顺序）一致——
     # 原来只绑第一个，参考包里第 4、5 张图没人认领（项目97 查出）。
@@ -8118,6 +8235,14 @@ def camera_view_owner_name(chars, settings):
         return ""
 
 
+def h3_prompt_kind(prompt):
+    """Detect actual transport rather than depend on old timeline metadata."""
+    from . import director_flow
+    fields = '|'.join(re.escape(field) for field in director_flow.FIELDS)
+    return ('six_fields' if re.search(r'(?im)^\s*(?:' + fields + r')\s*:', str(prompt or ''))
+            else 'legacy')
+
+
 def h3_problems(prompt, shots, chars, settings=None):
     """H3 提示词的验收。返回问题清单，空＝过。
 
@@ -8127,7 +8252,16 @@ def h3_problems(prompt, shots, chars, settings=None):
       · Subject 编号和说话人对不对得上（错了就串角色）
     """
     txt = str(prompt or "")
-    chars, _ = h3_char_order(chars, settings)
+    if h3_prompt_kind(txt) == 'six_fields':
+        from . import director_flow
+        probs, source = director_flow._prompt_speaker_problems(txt, str(shots or ''))
+        actual = re.findall(r'<d>\[Chinese\]\s*(.*?)</d>', txt, re.S)
+        if actual != [line for _, line in source]:
+            probs.append('视频提示词对白与当前分段原话或顺序不一致')
+        if any(field + ':' not in txt for field in director_flow.FIELDS):
+            probs.append('视频提示词六字段不完整')
+        return probs
+    chars, _ = h3_prompt_char_order(shots, chars, settings)
     idx = {c["name"]: i for i, c in enumerate(chars or [], 1)}
     said = {re.sub(r"[^\u4e00-\u9fa5]", "", q)
             for _, q in _pic_parts_dialogue(shots)}
@@ -8162,26 +8296,36 @@ def h3_problems(prompt, shots, chars, settings=None):
     # 正文里那是两句不同的话（后一句是"两枚银币太便宜了"）。
     # 原来只查"这句在不在正文里"，重复用查不出来（2026-09-01）。
     seen = {}
+    seen_counts = {}
+    source_rows = [(re.sub(r'（[^）]*）', '', str(w)).strip(), str(q).strip().strip('“”「」"'))
+                   for w, q in _pic_parts_dialogue(shots)]
+    source_counts = {}
+    for _, quote in source_rows:
+        key = re.sub(r'[^\u4e00-\u9fa5]', '', quote)
+        source_counts[key] = source_counts.get(key, 0) + 1
     for m in _H3_SAY.finditer(txt):
         nq = re.sub(r"[^\u4e00-\u9fa5]", "", m.group(3))
         if not nq:
             continue
-        if nq in seen:
+        if seen_counts.get(nq, 0) >= source_counts.get(nq, 1):
             probs.append("台词「%s」说了两遍（S%s 和 S%s）——"
                          "同一句只能有一个人说一次"
                          % (m.group(3)[:16], seen[nq], m.group(2)))
         else:
             seen[nq] = m.group(2)
+        seen_counts[nq] = seen_counts.get(nq, 0) + 1
     # 【说话人要跟画面稿一致】画面稿里那句是谁说的，镜头行就得是谁
-    who_of = {re.sub(r"[^\u4e00-\u9fa5]", "", q): w
-              for w, q in _pic_parts_dialogue(shots)}
     num = idx
-    for m in _H3_SAY.finditer(txt):
-        nq = re.sub(r"[^\u4e00-\u9fa5]", "", m.group(3))
-        want = num.get(who_of.get(nq, ""))
+    actual_lines = list(_H3_SAY.finditer(txt))
+    if len(actual_lines) != len(source_rows) and (actual_lines or source_rows):
+        probs.append('本段台词漏句或重复：原文%d句，提示词%d句' % (len(source_rows), len(actual_lines)))
+    for m, (speaker, quote) in zip(actual_lines, source_rows):
+        if m.group(3).strip() != quote:
+            probs.append('台词「%s」与画面稿原字或顺序不一致' % m.group(3)[:20])
+        want = num.get(speaker)
         if want and int(m.group(1)) != want:
             probs.append("台词「%s」画面稿里是 %s（S%d）说的，这里写成了 S%s"
-                         % (m.group(3)[:14], who_of.get(nq), want, m.group(1)))
+                         % (m.group(3)[:14], speaker, want, m.group(1)))
     # 正文里出现了没绑参考图的人 / 角色的自我分身 —— 这两样 H3 只能瞎编一张脸
     # （2026-09-05 项目102 段1：编出「对手林野（另一分身）」当敌人）。
     # P47 写了这个检测却只挂在体检脚本上，出片链路一直没查——补上。
@@ -8193,7 +8337,8 @@ def h3_problems(prompt, shots, chars, settings=None):
                 _own = camera_view_owner_name(chars, settings)
         except Exception:
             _own = ""
-        probs += unbound_name_problems(txt, [c.get("name") for c in (chars or []) if c.get("name") != _own])   # P456③：拍摄者本来就不绑图
+        probs += unbound_name_problems(txt, [c.get("name") for c in (chars or [])
+            if c.get("name") != _own and not c.get('_h3_voice_only')])
     except Exception:
         pass
     # 反向那一半：绑定名在正文里一次没出现（正文改叫别的名字了）——P244。
@@ -8209,6 +8354,9 @@ def h3_problems(prompt, shots, chars, settings=None):
 def h3_critical_problems(prompt, shots="", problems=None, slice_info=None, scene=""):
     """真正会毁掉成片的问题。命中时保留提示词供人工看，但禁止直接送去出片。"""
     src, txt = str(shots or ""), str(prompt or "")
+    if h3_prompt_kind(txt) == 'six_fields':
+        from . import director_flow
+        return director_flow.prompt_problems(txt, src, (slice_info or {}).get('seconds') or 15, scene)
     out = []
     info = slice_info or {}
     try:
@@ -8220,7 +8368,7 @@ def h3_critical_problems(prompt, shots="", problems=None, slice_info=None, scene
     if alien:
         out.append("提示词编了画面稿没有的衣着/脱衣：%s" % "、".join(alien))
     hard_words = ("台词行格式不对", "一句都没有", "画面稿里查无原话",
-                  "画面稿里是", "的编号应是", "没绑参考图的人")
+                  "画面稿里是", "的编号应是", "没绑参考图的人", "原字或顺序不一致", "台词漏句或重复")
     for p in problems or []:
         if any(w in str(p) for w in hard_words) and str(p) not in out:
             out.append(str(p))
@@ -9967,17 +10115,18 @@ def design_characters(prose, settings):
     _p = str(prose or "").strip()
     if len(_p) > 6000:
         _p = _p[:6000] + "\n（后略）"
-    _brief = str((settings or {}).get("one_line") or "").strip()
+    _brief = str((settings or {}).get("initial_story_input") or (settings or {}).get("one_line") or "").strip()
     from .character_facts import check_source_scale
     check_source_scale(_brief or _p, settings)
     umsg = ("【用户原始人物设定】\n" + (_brief or "未另指定")
             + "\n用户明确写出的姓名、性别和年龄是固定事实，按原样传入对应人物卡；正文省略年龄时仍沿用原始设定。"
+            + "\n人物卡的服装基线是用户明确的初始衣着或人物首次出场衣着。后续脱衣、换装、包裹物及后段破损由剧情状态链承接；服装设计补齐初始设定中尚未指定的部分。"
             + "\n\n第一话故事正文：\n\n" + _p + "\n\n为里面的主要人物各设计一份人物设定。")
     _state_src = _p + " " + str((settings or {}).get("episode_notes") or "") + " " + str((settings or {}).get("one_line") or "")
     if re.search(r"衣[物服裳].{0,8}(撕|破|烂|湿|少|剩|刮走|扯)|不蔽体|衣衫不整|衣不蔽体|只剩一半|破布", _state_src):
-        # P415：故事里衣服已经被撕破/刮走 → 服装写此刻的状态，不设计完好的日常装（项目221：正文写破碎不堪，卡上仍是风衣西裤）
-        umsg += ("\n\n【服装按故事此刻的状态写】正文里这些人的衣服已经被撕破、湿透、只剩一半：「具体服装」就写破碎、湿贴、残缺后的样子"
-                 "（哪件撕到哪里、露出什么、用什么布条裹着），不要设计完好的日常装或成套的时装；「服装款式」标签挑最接近残破前原装的那个。")
+        # P415 remains an opening-state rule. Later damage cannot move back in time.
+        umsg += ("\n\n【首次出场的服装状态】人物首次出场就已经破损、湿透或残缺的衣物，具体服装保留当时的可见状态和对应部位。"
+                 "剧情后段才发生的撕破、浸湿或穿脱按正文时序交给状态链；初始人设采用变化前的衣着。")
     # 同一份正文，Qwen 有时返回合法数组、有时返回带解释的散文或被截断的半截 JSON
     # （2026-08-29 实测：同输入重跑就好了）。一次失败就断掉整条链不合理，重试三次，
     # 温度逐次降低（越低越容易吐规规矩矩的 JSON）。
@@ -9986,8 +10135,9 @@ def design_characters(prose, settings):
         raw = _q(sys, umsg, mt=7000, temperature=temp)
         got = _parse_char_json(raw)
         if got:
-            from .character_facts import lock_ages, check_design_scale
+            from .character_facts import lock_ages, lock_initial_clothing, check_design_scale
             got = lock_ages(_trim_cast(got, _p), _brief)
+            got = lock_initial_clothing(got, _brief, _p)
             check_design_scale(got, settings)
             return got
         last = raw
@@ -10500,6 +10650,9 @@ def _create_cards(sid, chars_data):
     _st0 = _stc.get_story(sid) or {}
     _brief = " ".join([str((_st0.get("settings") or {}).get("one_line") or "")] +
                       [str(e.get("brief") or "") for e in ((_st0.get("saga") or {}).get("episodes") or []) if isinstance(e, dict)])
+    _identity_source = _brief + "\n" + "\n".join(
+        str(e.get("prose") or "") for e in ((_st0.get("saga") or {}).get("episodes") or []) if isinstance(e, dict))
+    chars_data = _os_.merge_explicit_character_aliases(chars_data, _identity_source)
     _nm_fix = _os_.fix_names_from_brief(_brief, [str(c.get("name") or "") for c in (chars_data or []) if isinstance(c, dict)])
     for c in chars_data or []:
         if isinstance(c, dict) and _nm_fix.get(str(c.get("name") or "")):
@@ -10551,7 +10704,8 @@ def _create_cards(sid, chars_data):
             _hints = [strip_state_look(x) for x in _hints if strip_state_look(x).strip()]
             if _hints:
                 break
-        _clothing, _required = _os_.fixed_outfit_description(_hints, c.get("clothing") or "")
+        _clothing, _required = ((c.get("clothing") or "", False) if c.get("_initial_clothing_locked")
+                                else _os_.fixed_outfit_description(_hints, c.get("clothing") or ""))
         if _required:
             c["clothing"] = _clothing
             c["clothing_requirement"] = "自定义"
@@ -10576,6 +10730,8 @@ def _create_cards(sid, chars_data):
         cid = card["character_id"] if isinstance(card, dict) else card
         if c.get("aliases") and isinstance(card, dict):
             card["aliases"] = list(c["aliases"])
+            if c.get("alias_evidence"):
+                card["alias_evidence"] = dict(c["alias_evidence"])
             asset_core.save_asset(sid, "characters", card)
         cards.append(asset_core.get_asset(sid, "characters", cid))
     try:
@@ -11722,11 +11878,13 @@ def _gen_char_images(sid, cards, settings, on_step=None):
 
     import os
     import shutil
-    from . import asset_core, group_entities
+    from . import asset_core, group_entities, main_images, quality_core
     cards = group_entities.reference_cards(cards, asset_core.list_assets(sid, "characters") or [])
     individual_ids = {c.get("character_id") for c in cards if not group_entities.is_group(c)}
     from models import krea_client
-    krea_dir = str(Path(__file__).resolve().parent.parent / "outputs" / "krea")
+    image_options = main_images.current(settings)
+    krea_dir = str(Path(__file__).resolve().parent.parent / "outputs" /
+                   ("moss" if image_options['model'] == 'moss' else "krea"))
     os.makedirs(krea_dir, exist_ok=True)
 
     # P352：出图前先把发型设计好（没有分线/层次/编发/束法这些设计词的人才做；一次 Qwen 做全组）
@@ -11774,8 +11932,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
             try:
                 # 一张卡未通过校验只影响该角色；原有年龄/内容校验照常执行。
                 assert_allowed(cards=[c], settings=settings, media="image_prompt")
-                manual = str(c.get("prompt_override") or "").strip()
-                sheet = manual or write_char_sheet(sid, c, settings)
+                manual = main_images.cached_prompt(c, settings, 'prompt_override')
+                sheet = manual or main_images.write_character(sid, c, settings)
                 break
             except Exception as ex:
                 sheet = None
@@ -11791,7 +11949,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
         if on_step:
             on_step("出人设图：" + str(name))
         try:
-            res = krea_client.generate(sheet)
+            res = (main_images.generate(sheet, settings) if image_options['model'] == 'moss'
+                   else krea_client.generate(sheet))
             # 【文件名必须带项目号】原来是 CHAR_<人名>.png，只有人名。
             # 两个项目里都有「艾拉」时，后出的把先出的物理覆盖掉，没有任何报错——
             # 实测修理店的 32 岁精灵店主被异世界项目的 6 岁小公主顶替，
@@ -11811,6 +11970,14 @@ def _gen_char_images(sid, cards, settings, on_step=None):
             v = asset_core.add_approved_visual(
                 sid, "character_master", c["character_id"], version, dst,
                 style_profile=str((settings or {}).get("style") or "电影级写实"), prompt=sheet)
+            if image_options['model'] == 'moss':
+                v = main_images.record_visual(sid, v, res, settings)
+                quality_core.build_manifest(
+                    output_id=v['visual_id'], story_id=sid, production_type='character_master',
+                    style_profile_name=str((settings or {}).get('style') or '电影级写实'),
+                    model='moss', model_mode='txt2img', prompt=sheet,
+                    parameters=dict(main_images.generation_parameters(res, settings),
+                                    character_contract_version=c.get('version', 1)), output_path=dst)
             asset_core.adopt(sid, v["visual_id"])
         except Exception as ex:
             failed.append("%s(出图:%s)" % (name, str(ex)[:40]))
@@ -11819,7 +11986,8 @@ def _gen_char_images(sid, cards, settings, on_step=None):
             from . import gen_history
             gen_history.record("character", dst, prompt=sheet, source="人设",
                                story_id=sid, extra={"name": name,
-                               "owner_kind": "character", "owner_id": c["character_id"]})
+                               "owner_kind": "character", "owner_id": c["character_id"],
+                               **main_images.generation_parameters(res, settings)})
         except Exception:
             pass
     return {"ok": len(jobs) - len([f for f in failed if "出图" in f]), "failed": failed}
@@ -13778,7 +13946,12 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
     pics = str((e or {}).get("pictures") or "")
     if not pics.strip():
         raise RuntimeError("第%d话还没有剧本" % ep)
-    settings = dict((story_core.get_story(sid) or {}).get("settings") or {})
+    project = story_core.get_story(sid) or {}
+    settings = dict(project.get("settings") or {})
+    settings.pop('wardrobe_policy', None)
+    if project.get('wardrobe_policy'):
+        from . import wardrobe_continuity
+        settings['wardrobe_policy'] = wardrobe_continuity.validate_policy(project['wardrobe_policy'])
     try:
         _tl = str(((e or {}).get("elements") or {}).get("时间与光线") or "").strip()
         if _tl:
@@ -13831,6 +14004,9 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
         return []
     end = len(slices) if count is None else min(len(slices), start + max(0, int(count)))
     from . import director_flow, camera_view
+    # Subjective cameras retain their dedicated eye/selfie constraints. Their
+    # legacy compiler must preserve source voices too; routing them to an
+    # external-camera writer would silently change the selected viewpoint.
     if director_flow.active(slices) and _pov_spec(settings)[0] not in camera_view.MODES:
         # One authoritative director/writer route. Do not run legacy scene,
         # wardrobe, pose-inheritance or rewrite passes on its output.
@@ -13848,6 +14024,16 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
                 card['name']: _paths[str(card.get('character_id') or card.get('scene_id') or '')]
                 for card in _ordered_chars + _scs_all
                 if str(card.get('character_id') or card.get('scene_id') or '') in _paths}
+            settings['_director_scene_facts'] = {}
+            from .scene_condition import condition_for_scene
+            _scene_names = [card['name'] for card in _scs_all]
+            for _scene_card in _scs_all:
+                _scene_view = _ac.effective_scene_card(_scene_card)
+                settings['_director_scene_facts'][_scene_card['name']] = {
+                    key: _scene_view[key] for key in ('name', 'era', 'space', 'light', 'palette',
+                        'materials', 'layout', 'weather', 'atmosphere') if _scene_view.get(key)}
+                settings['_director_scene_facts'][_scene_card['name']]['scene_condition'] = condition_for_scene(
+                    project, _scene_view, scene_names=_scene_names)
             for _card in _ordered_chars:
                 _card['_has_image'] = _card.get('name') in settings['_director_reference_paths']
             settings['_director_user_brief'] = '\n'.join(str(value) for value in (
@@ -14247,11 +14433,8 @@ def make_h3_prompts(sid, ep=1, per_seg=None, on_step=None, start=0, count=None,
                           plan=_plan.get(k + 1))
             _dbg("按最终提示词补绑参考图", {"段": k + 1,
                                             "补上": [str(c.get("name")) for c in _extra]})
-        _sexes = {card_sex(c) for c in _present if card_sex(c)}
-        if _sexes == {"男"}:
-            p = p.replace("她", "他")                                          # P373：在场全是男，模型写的「她」是笔误
-        elif _sexes == {"女"}:
-            p = p.replace("他", "她")
+        # A visible cast's gender does not determine every pronoun, quoted
+        # word or role name (e.g. 吉他手). Preserve the writer's source words.
         bad = h3_problems(p, chunk, _present, settings)
         bad = list(bad or []) + list(getattr(_h3_timeline_body, "last_problems", []) or [])     # P324⑥：越轴没改成的记进段问题
         # P225 自检：提示词里出现了人物表上、却没绑参考图的人 → 记下来。
@@ -14651,6 +14834,7 @@ def build_timeline(sid, ep, prompts, replace=False):
     「生成下面 N 段」都走这里，别再各建一套。
     """
     from . import saga_core as _sc, asset_core as _ac
+    import copy
     ep = int(ep or 1)
     old = _sc.ep_timeline(sid, ep) or {"scenes": []}
     scname = ""
@@ -14691,16 +14875,17 @@ def build_timeline(sid, ep, prompts, replace=False):
             g["prompt_edited"] = True
             g["prompt_edited_at"] = _prev.get("prompt_edited_at")
             g["prompt_auto"] = _newp
-            g["problems"] = p.get("problems") or []
-            g["critical_problems"] = p.get("critical_problems") or []
-            g["source_text"] = p.get("source_text") or ""
-            g["over"] = bool(p.get("over"))
-            for _k in ("tail", "scene", "chars", "plan", "seconds", "relay", "done_all", "source_contract", "director_contract"):
-                if p.get(_k):
-                    g[_k] = p[_k]
-            if p.get("beat_index") is not None:
-                g["beat"] = str(p.get("beat") or "")
-                g["beat_index"] = int(p.get("beat_index"))
+            # These fields describe the active manual text, not the unaccepted
+            # automatic suggestion. Mixing them changes its actual image pack.
+            for _k in ("problems", "critical_problems", "source_text", "over", "tail", "scene",
+                       "chars", "plan", "seconds", "relay", "done_all", "wardrobe",
+                       "source_contract", "director_contract", "director_compilation",
+                       "director_profile", "source_fallback", "beat", "beat_index",
+                       "shot", "cut", "establish", "direction", "seam"):
+                if _k in _prev:
+                    g[_k] = copy.deepcopy(_prev[_k])
+                else:
+                    g.pop(_k, None)
             g.setdefault("video", "")
             g.setdefault("shot_ids", [])
             _kept_edited.append(n)
@@ -14709,6 +14894,7 @@ def build_timeline(sid, ep, prompts, replace=False):
                 (_newp.strip() != str(_prev.get("prompt") or "").strip() or
                  (p.get("seconds") is not None and p.get("seconds") != _prev.get("seconds")))):
             g["stale_video"] = True
+        _prompt_changed = _newp.strip() != str(_prev.get("prompt") or "").strip()
         g["prompt"] = _newp
         g["problems"] = p.get("problems") or []
         g["critical_problems"] = p.get("critical_problems") or []
@@ -14716,14 +14902,19 @@ def build_timeline(sid, ep, prompts, replace=False):
         for _key in ("source_contract", "director_contract"):
             if p.get(_key) is not None:
                 g[_key] = p[_key]
+        for _key in ("director_compilation", "director_profile", "source_fallback"):
+            if _key in p:
+                g[_key] = copy.deepcopy(p[_key])
+            elif _prompt_changed:
+                g.pop(_key, None)
         g.pop("prompt_repair_pending", None)
         g["over"] = bool(p.get("over"))
         if p.get("tail"):
             g["tail"] = p["tail"]
         if p.get("scene"):
             g["scene"] = p["scene"]
-        if p.get("chars"):
-            g["chars"] = p["chars"]
+        if "chars" in p:
+            g["chars"] = list(p.get("chars") or [])
         if p.get("plan"):
             g["plan"] = p["plan"]
         if p.get("wardrobe") is not None:
@@ -14800,8 +14991,11 @@ def next_prompts(sid, ep, upto, on_step=None):
     segs = sorted([g for sc0 in (tl.get("scenes") or []) for g in (sc0.get("segments") or [])],
                   key=lambda g: int(g.get("no") or 0))
     # 非空不等于正确：旧对白识别故障留下的提示词也必须回源修复。
-    # 只检查连续导演格式；旧格式保留原入口规则，用户手改内容保留并明确提示。
+    # 缓存与出片共用真实校验；POV旧正文不能因分镜元数据被误作六字段。
     from . import director_flow as _flow
+    from . import story_core as _story_core
+    from api import segment_api as _segment_api
+    _project = _story_core.get_story(sid) or {}
     frozen_rows = (tl.get("slicing") or {}).get("slices") or []
     retry_prompt, changed = set(), False
     for g in segs:
@@ -14810,14 +15004,18 @@ def next_prompts(sid, ep, upto, on_step=None):
             continue
         source_row = frozen_rows[no - 1] if no <= len(frozen_rows) else {}
         flow = (source_row.get("director") or {}).get("flow") or (g.get("plan") or {}).get("flow")
-        if flow != _flow.VERSION:
+        if (flow != _flow.VERSION and h3_prompt_kind(g['prompt']) != 'six_fields'
+                and _pov_spec(_project.get('settings') or {})[0] != '第一视角POV'):
             continue
         source = str(source_row.get("text") or g.get("source_text") or "")
         if not source.strip():
             continue
         try:
-            problems = _flow.prompt_problems(g["prompt"], source,
-                source_row.get("seconds") or g.get("seconds"), source_row.get("scene_hint") or g.get("scene"))
+            check_row = dict(g, source_text=source,
+                seconds=source_row.get('seconds') or g.get('seconds'),
+                scene=source_row.get('scene_hint') or g.get('scene'))
+            problems = _segment_api._render_critical_problems(
+                _project, tl, check_row, g['prompt'], ep, no)
         except (ValueError, KeyError, TypeError) as error:
             problems = [str(error)]
         if not problems:
@@ -14828,12 +15026,15 @@ def next_prompts(sid, ep, upto, on_step=None):
                 changed = True
             continue
         message = "第%d段提示词需按原文修复：%s" % (no, "；".join(problems))
-        if g.get("prompt_edited"):
+        pending = g.get('render_request') or {}
+        if pending.get('key'):
+            message += '；已有提交编号，保留原请求快照，不自动改写或重投'
+        elif g.get("prompt_edited"):
             message += "；已保留你手动修改的提示词，自动建议不会覆盖它"
         else:
             retry_prompt.add(no)
         g["prompt_repair_pending"] = message
-        if str(g.get("video") or "").strip():
+        if not pending.get('key') and str(g.get("video") or "").strip():
             g["stale_video"] = True
         tl.setdefault("prompt_failures", {})[str(no)] = message
         changed = True

@@ -414,6 +414,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/tasks/active":
                 active = [t for t in runtime_core.list_tasks(200)
                           if t.get("status") in ("running", "queued", "waiting_user")]
+                from cores import long_comic_core
+                active.extend(long_comic_core.active_tasks())
                 return _json_resp(self, {"ok": True, "data": {"active": active}})
             if path == "/api/gpu":
                 u = runtime_core.gpu_usage()

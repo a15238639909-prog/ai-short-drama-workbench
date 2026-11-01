@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """一话的段合成一条成片（P342）：outputs/成片_<项目>_第N话.mp4。ffmpeg，不碰模型。"""
-import json, os, re, subprocess, uuid
+import json, math, os, re, subprocess, uuid
 from pathlib import Path
 
 
@@ -56,9 +56,18 @@ def list_films(sid):
     return out
 
 
-def merge_episode(sid, ep, dst=None, segs=None):
-    """合成。返回成片路径；一段都没有返回 ""。失败抛 RuntimeError。segs 给了就只合这几段（文件名带段号）。"""
-    vids = episode_videos(sid, ep, segs=segs)
+def merge_episode(sid, ep, dst=None, segs=None, *, skip_invalid=False, report=None):
+    """Merge accepted clips; opt-in batch recovery retains and reports bad inputs.
+
+    Strict manual callers keep their existing contract. A recovering batch can
+    export the usable clips without labelling a film with skipped inputs complete.
+    """
+    if report is not None:
+        report.update(skipped=[], merged_segments=[], partial=False, output='')
+    from . import episode_edit
+    edit_plan = episode_edit.render_plan(sid, ep, segs=segs)
+    vids = ([(item['segment_no'], item['path']) for item in edit_plan]
+            if edit_plan is not None else episode_videos(sid, ep, segs=segs))
     if not vids:
         return ""
     title = film_title(sid)
@@ -71,27 +80,57 @@ def merge_episode(sid, ep, dst=None, segs=None):
     # Encode separately: a failed retry must never overwrite an accepted film.
     pending = target.parent / ("合成中_" + uuid.uuid4().hex + ".mp4")
     args = ["ffmpeg", "-loglevel", "error", "-nostdin"]
-    media = []
-    for _, v in vids:
-        probed = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
-                                 "-of", "json", str(v)], capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=60)
+    media, usable, skipped, trims = [], [], [], []
+    from .video_continuity import validate_video
+    for source_index, (no, v) in enumerate(vids):
         try:
-            info = json.loads(probed.stdout)
-            video = next(s for s in info.get("streams", []) if s.get("codec_type") == "video")
-            duration = float(video.get("duration") or info["format"]["duration"])
-            if probed.returncode or duration <= 0:
+            if skip_invalid or edit_plan is not None:
+                # Decode each source before combining: a broken middle clip
+                # must not make all the usable clips unexportable.
+                info = validate_video(v)
+                duration, has_audio = float(info['duration']), bool(info['audio'])
+            else:
+                probed = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
+                                         "-of", "json", str(v)], capture_output=True, text=True,
+                                        encoding="utf-8", errors="replace", timeout=60)
+                info = json.loads(probed.stdout)
+                video = next(s for s in info.get("streams", []) if s.get("codec_type") == "video")
+                duration = float(video.get("duration") or info["format"]["duration"])
+                has_audio = any(s.get("codec_type") == "audio" for s in info["streams"])
+                if probed.returncode:
+                    raise ValueError()
+            if not math.isfinite(duration) or duration <= 0:
                 raise ValueError()
-            media.append((duration, any(s.get("codec_type") == "audio" for s in info["streams"])))
-        except (ValueError, KeyError, StopIteration, TypeError):
-            raise RuntimeError("合成输入视频无效，已有成片保留：" + str(v)) from None
+        except (ValueError, KeyError, StopIteration, TypeError, subprocess.TimeoutExpired) as error:
+            if not skip_invalid or edit_plan is not None:
+                raise RuntimeError("合成输入视频无效，已有成片保留：" + str(v)) from None
+            skipped.append(dict(segment_no=no, path=str(v), error=str(error) or '视频无有效画面或时长'))
+            if report is not None:
+                report.update(skipped=list(skipped), partial=True)
+            continue
+        start, end = 0.0, duration
+        if edit_plan is not None:
+            start, end = edit_plan[source_index]['in'], edit_plan[source_index]['out']
+            if end > duration + .001:
+                raise ValueError('源视频时长已改变，请重新选择剪辑区间')
+        trims.append((start, end))
+        media.append((end - start, has_audio))
+        usable.append((no, v))
         args += ["-i", v]
+    if not usable:
+        return ''
+    vids = usable
+    if skipped:
+        target = target.with_name(target.stem + '_部分' + target.suffix)
+    if report is not None:
+        report.update(merged_segments=[no for no, _ in vids], partial=bool(skipped))
     parts, maps = [], ""
     W, H = _target_size(sid, ep)
     for i in range(len(vids)):
-        parts.append("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,setpts=PTS-STARTPTS[v%d]" % (i, W, H, W, H, i))
+        start, end = trims[i]
+        parts.append("[%d:v]setpts=PTS-STARTPTS,trim=start=%.6f:end=%.6f,setpts=PTS-STARTPTS,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v%d]" % (i, start, end, W, H, W, H, i))
         duration, has_audio = media[i]
-        source = ("[%d:a]aresample=48000,aformat=channel_layouts=stereo,apad" % i
+        source = ("[%d:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,apad,atrim=start=%.6f:end=%.6f,asetpts=PTS-STARTPTS" % (i, start, end)
                   if has_audio else "anullsrc=r=48000:cl=stereo")
         parts.append(source + ",atrim=duration=%.6f,asetpts=PTS-STARTPTS[a%d]" % (duration, i))
         maps += "[v%d][a%d]" % (i, i)
@@ -101,11 +140,14 @@ def merge_episode(sid, ep, dst=None, segs=None):
     r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
     if r.returncode != 0:
         raise RuntimeError("ffmpeg 合并失败：%s" % (r.stderr or "")[-300:])
-    from .video_continuity import validate_video
     validate_video(str(pending), sum(seconds for seconds, _ in media))
+    if edit_plan is not None:
+        episode_edit.verify_plan(sid, ep, edit_plan)
     if target.exists():
         target = target.with_name(target.stem + "__" + uuid.uuid4().hex[:8] + target.suffix)
     if target.parent != pending.parent:
         raise RuntimeError("合成目标目录改变，已保留待合成文件")
     pending.rename(target)
+    if report is not None:
+        report['output'] = str(target)
     return str(target)

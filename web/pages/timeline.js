@@ -35,37 +35,64 @@ window.Pages = window.Pages || {};
   var promptDirty = false, lastSave = { ok: true, at: 0, err: "" }, savingNow = null;
   function id(x) { return document.getElementById(x); }
   function fmtClock(ts) { var d = new Date(ts); function p(n) { return (n < 10 ? "0" : "") + n; } return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); }
-  function savePrompt(sc, segIdx, pt, ps) {
+  function savePrompt(sc, segIdx, pt, ps, target) {
     var g = segsOf(sc)[segIdx];
     if (!g || g.no == null) return Promise.resolve(true);
-    if (pt.value === (g.prompt || "")) { promptDirty = false; return Promise.resolve(true); }
-    var val = pt.value;
+    target = target || { sid: (ST || {}).storyId || "", ep: EP, no: g.no, value: pt.value };
+    if (savingNow) return savingNow.then(function () { return savePrompt(sc, segIdx, pt, ps, target); });
+    var val = target.value;
+    function currentEditor() {
+      var selected = segsOf(scene())[seg];
+      return target.sid === ((ST || {}).storyId || "") && target.ep === EP &&
+        selected && String(selected.no) === String(target.no) && id("pText") === pt;
+    }
+    if (val === (g.prompt || "")) {
+      if (currentEditor()) promptDirty = pt.value !== val;
+      return Promise.resolve(true);
+    }
     var box = function () { return id("pSave") || ps; };      /* 页面可能已重画，状态框每次现取 */
-    if (box()) box().innerHTML = '<span class="note-gray" style="margin:0">保存中…</span>';
-    savingNow = window.api.post("/api/timeline/" + ((ST || {}).storyId || "") + "/segment-save", { no: g.no, prompt: val, ep: EP }).then(function (r) {
-      g.prompt = val; g.prompt_edited = true; promptDirty = false;
-      lastSave = { ok: true, at: Date.now(), err: "" };
-      if (box()) box().innerHTML = '<span class="stat-green">已保存 ' + fmtClock(lastSave.at) + '（你改过这一段，剧本重写时不会覆盖）</span>';
+    if (currentEditor() && box()) box().innerHTML = '<span class="note-gray" style="margin:0">保存中…</span>';
+    var request = window.api.post("/api/timeline/" + target.sid + "/segment-save", { no: target.no, prompt: val, ep: target.ep }).then(function (r) {
+      g.prompt = val; g.prompt_edited = true;
+      if (currentEditor()) {
+        promptDirty = pt.value !== val;
+        lastSave = { ok: true, at: Date.now(), err: "" };
+        if (box()) box().innerHTML = promptDirty ? '<span class="note-gray">有新改动，等待保存</span>' : '<span class="stat-green">已保存 ' + fmtClock(lastSave.at) + '（你改过这一段，剧本重写时不会覆盖）</span>';
+      }
       return true;
     }).catch(function (e) {
-      lastSave = { ok: false, at: Date.now(), err: e.message || "保存失败" };
-      if (box()) box().innerHTML = '<span style="color:var(--red)">保存失败：' + esc(lastSave.err) + ' <button class="btn small" id="pRetry">重试</button></span>';
-      var rb = id("pRetry"); if (rb) rb.onclick = function () { savePrompt(sc, segIdx, pt, ps); };
+      if (currentEditor()) {
+        promptDirty = true;
+        lastSave = { ok: false, at: Date.now(), err: e.message || "保存失败" };
+        if (box()) box().innerHTML = '<span style="color:var(--red)">保存失败：' + esc(lastSave.err) + ' <button class="btn small" id="pRetry">重试</button></span>';
+        var rb = id("pRetry"); if (rb) rb.onclick = function () { savePrompt(sc, segIdx, pt, ps); };
+      }
       return false;
-    }).then(function (okv) { savingNow = null; return okv; });
-    return savingNow;
+    }).then(function (okv) { if (savingNow === request) savingNow = null; return okv; });
+    savingNow = request;
+    return request;
   }
   /* 生成前：把还没存的改动存好；存失败就拦下。返回 Promise<bool>；失败时 reject 让调用方停 */
   function flushPromptSave() {
     var pt = id("pText"), ps = id("pSave");
-    var p = savingNow || Promise.resolve(true);
-    return p.then(function () {
-      if (pt && promptDirty) { var sc = scene(); if (sc) return savePrompt(sc, seg, pt, ps); }
-      return lastSave.ok;
-    }).then(function (okv) {
-      if (!okv || !lastSave.ok) { window.UI.toast("有一段提示词没保存成功，先点「重试」保存，再生成", "err"); throw new Error("提示词没保存成功：" + (lastSave.err || "")); }
+    var sid = (ST || {}).storyId || "", episode = EP, selected = segsOf(scene())[seg];
+    var number = selected && selected.no;
+    function failed() {
+      window.UI.toast("有一段提示词没保存成功，先点「重试」保存，再生成", "err");
+      throw new Error("提示词没保存成功：" + (lastSave.err || ""));
+    }
+    function settle() {
+      var sc = scene(), g = segsOf(sc)[seg];
+      if (sid !== ((ST || {}).storyId || "") || episode !== EP ||
+          (g && g.no) !== number || id("pText") !== pt) throw new Error("已切换项目或分段，请在当前段重新生成");
+      if (savingNow) return savingNow.then(settle);
+      if (pt && g && (promptDirty || pt.value !== (g.prompt || ""))) {
+        return savePrompt(sc, seg, pt, ps).then(function (ok) { if (!ok) return failed(); return settle(); });
+      }
+      if (!lastSave.ok) return failed();
       return true;
-    });
+    }
+    return Promise.resolve().then(settle);
   }
   function flushPromptSaveSync() {
     if (promptDirty || !lastSave.ok) { window.UI.toast("这一段提示词还没保存成功，先点到输入框外让它保存（或点重试）", "err"); return false; }
@@ -223,6 +250,7 @@ window.Pages = window.Pages || {};
       '<button class="btn primary" id="bGenN" title="从第一个没视频的段起往后出这几段（提示词已有就直接出，没有先写）">' +
       '🎬 生成</button></span>' +
       '</span>' +
+      '<button class="btn" id="bEpisodeEdit">剪辑本话</button>' +
       '<span class="tbar-z"><button class="btn small" id="zOut">－</button>' +
       '<button class="btn small" id="zIn">＋</button></span></div></div>';
   }
@@ -436,6 +464,8 @@ window.Pages = window.Pages || {};
     var st = ST || {};
     var id = function (x) { return document.getElementById(x); };
     var sc = scene();
+    var editButton = id('bEpisodeEdit');
+    if (editButton) editButton.onclick = function () { window.EpisodeEdit.open(st.storyId, EP); };
     /* 「当前是第几话」是系统的第一公民：从 #timeline?ep=N 读，所有请求都带上，
        分镜页不许自己猜——猜错就会覆盖别的话的分镜。 */
     var api = function (p, b) {
@@ -583,7 +613,7 @@ window.Pages = window.Pages || {};
         var g = segsOf(sc)[i]; if (!g || !g.video) return;
         g.adopted = true;
         btn.disabled = true; btn.textContent = "✓ 已采用";
-        api("/save-scene", { scene_no: cur, segments: sc.segments })
+        api("/save-scene", { scene_no: cur, segment_patch: { no: g.no, adopted: true } })
           .then(function () { UI.toast("第 " + g.no + " 段视频已采用"); render(main); })
           .catch(function (err) { g.adopted = false; btn.disabled = false; btn.textContent = "采用"; UI.toast(err.message, "err"); });
       };
@@ -617,7 +647,7 @@ window.Pages = window.Pages || {};
     if (b) b.onclick = function () {
       var t = id("pDirect");
       return window.UIActions.progress.wrap("按口述写提示词",
-        api("/segment-prompt", { scene_no: cur, seg_no: seg + 1, ep: EP, direction: t ? t.value : "" })
+        api("/segment-prompt", { scene_no: cur, seg_no: (segsOf(sc)[seg] || {}).no, ep: EP, direction: t ? t.value : "" })
           .then(function () { return reload(main); }));
     };
 
@@ -631,7 +661,8 @@ window.Pages = window.Pages || {};
         var nm = y.getAttribute("data-ref");
         g.refs.push({ k: y.getAttribute("data-kind"), n: nm, p: "" });
       });
-      api("/save-scene", { scene_no: cur, segments: sc.segments });
+      api("/save-scene", { scene_no: cur, segment_patch: { no: g.no, refs: g.refs } })
+        .catch(function (err) { UI.toast("参考选择保存失败：" + err.message, "err"); });
     };
     [].forEach.call(document.querySelectorAll("[data-ref]"), function (c) {
       c.onchange = function () {
@@ -649,7 +680,8 @@ window.Pages = window.Pages || {};
         g.ref_hide = (g.ref_hide || []).filter(function (n) { return n !== nm; });
         g.ref_hide.push(nm);
         g.refs = (g.refs || []).filter(function (r) { return r.n !== nm; });
-        api("/save-scene", { scene_no: cur, segments: sc.segments });
+        api("/save-scene", { scene_no: cur, segment_patch: { no: g.no, refs: g.refs, ref_hide: g.ref_hide } })
+          .catch(function (err) { UI.toast("参考选择保存失败：" + err.message, "err"); });
         render(main);
       };
     });
@@ -662,7 +694,8 @@ window.Pages = window.Pages || {};
       g.ref_hide = (g.ref_hide || []).filter(function (n) { return n !== nm; });
       g.refs = g.refs || [];
       if (!g.refs.some(function (r) { return r.n === nm; })) g.refs.push({ k: k, n: nm, p: "" });
-      api("/save-scene", { scene_no: cur, segments: sc.segments });
+      api("/save-scene", { scene_no: cur, segment_patch: { no: g.no, refs: g.refs, ref_hide: g.ref_hide } })
+        .catch(function (err) { UI.toast("参考选择保存失败：" + err.message, "err"); });
       render(main);
     };
 
@@ -682,15 +715,34 @@ window.Pages = window.Pages || {};
 
   function genSeg(main, force) {
     var st = ST || {};
+    var g = segsOf(scene())[seg];
+    if (!g || g.no == null) return Promise.reject(new Error("找不到当前段，请刷新后重试"));
+    var number = g.no, sid = st.storyId, episode = EP, sceneNo = cur;
     /* 提示词框是可编辑的：生成时把框里现在的文本带上，
        用户改过什么就按什么生成，不用先点保存 */
     var t = document.getElementById("pText");
     /* P353 bug 修：卡片上的「生成这一段」切段后没重画，框里还是上一段的词——只有框属于这一段时才带 */
-    var mine = t && String(t.getAttribute("data-seg") || "") === String(seg + 1);
-    return window.UIActions.progress.wrap("生成第" + (seg + 1) + "段视频",
-      window.api.post("/api/timeline/" + st.storyId + "/generate-segment",
-                      { scene_no: cur, seg_no: seg + 1, force: !!force,
-                        prompt: mine ? t.value : "" })
+    var mine = t && String(t.getAttribute("data-seg") || "") === String(number);
+    function currentTarget() {
+      var selected = segsOf(scene())[seg];
+      return ((ST || {}).storyId || "") === (sid || "") && EP === episode &&
+        cur === sceneNo && selected && String(selected.no) === String(number);
+    }
+    function waitForSaves() {
+      if (!currentTarget()) throw new Error("已切换项目或分段，请在当前段重新生成");
+      return savingNow ? savingNow.then(waitForSaves) : Promise.resolve();
+    }
+    // A blur save can still be writing an older draft. Finish it and persist
+    // the editor's latest words before the video request freezes its input.
+    // A card click with an old editor must never save that editor into the new row.
+    var ready = mine ? flushPromptSave() : Promise.resolve().then(waitForSaves);
+    return window.UIActions.progress.wrap("生成第" + number + "段视频",
+      ready.then(waitForSaves).then(function () {
+        if (!currentTarget()) throw new Error("已切换项目或分段，请在当前段重新生成");
+        return window.api.post("/api/timeline/" + sid + "/generate-segment",
+                      { scene_no: sceneNo, seg_no: number, ep: episode, force: !!force,
+                        prompt: mine ? t.value : "" });
+      })
         .then(function () { return reload(main); }));
   }
 

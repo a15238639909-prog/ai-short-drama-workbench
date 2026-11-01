@@ -59,7 +59,7 @@ class AnimaReleaseTests(unittest.TestCase):
 
     def test_independent_workflow(self):
         workflow=anima.build_workflow('stone bridge, blue sky',1024,1024,seed=42)
-        self.assertEqual(workflow['11']['inputs']['text'],'stone bridge, blue sky')
+        self.assertEqual(workflow['11']['inputs']['text'],anima.FIXED_PREFIX+', stone bridge, blue sky')
         self.assertEqual(workflow['63']['inputs']['seed'],42)
         self.assertEqual(workflow['28']['inputs']['width'],1024)
         with self.assertRaises(ValueError):

@@ -122,6 +122,40 @@ class WorkbenchStoryDirectorTrialTests(unittest.TestCase):
         video_continuity.validate_prompt_references(final, ['a.png', 'b.png'])
         self.assertNotIn('真实最后一帧', final)
 
+    def test_empty_scene_request_compiles_without_inventing_reference_images_or_people(self):
+        source = [dict(seconds=15, scene_hint='云上庭院', chars=[], no_chars=True,
+                       text='窗帘轻轻摆动，窗外树影落到地面。')]
+        plan = trial.build_plan(source, [])
+        before = copy.deepcopy(plan)
+        _, payload, _ = trial.write_request(plan, plan['beats'][0], {}, [])
+        self.assertEqual(payload['mode'], 't2va')
+        self.assertEqual(payload['canonical_references'], [])
+        self.assertEqual(payload['workbench_trial']['references'], [])
+        reply = raw(payload)
+        reply.update(brief='窗帘随风摆动。', expected_end_state='树影落在地面。',
+            integrated_multimodal_description=(
+                '[Shot 1] 全景呈现安静庭院，前五秒窗帘随风轻轻摆动。\n\n'
+                '[Shot 2] At 00:05.000, 中景呈现窗外枝叶，树影缓慢移向地面。\n\n'
+                '[Shot 3] At 00:10.000, 近景呈现地面光斑，最后五秒光斑轻微晃动。'))
+        compiled = trial.compile_reply(reply, payload)
+        self.assertEqual(plan, before)
+        self.assertIn('<Subject 1> is 云上庭院, the environment.', compiled['prompt'])
+        self.assertIn('[Shot 3] At 00:10.000', compiled['prompt'])
+        self.assertNotIn('<Picture', compiled['prompt'])
+        self.assertNotIn('the character', compiled['prompt'])
+        self.assertEqual(list(compiled['fields']), list(trial.director.FIELDS))
+        video_continuity.validate_prompt_references(compiled['prompt'], [])
+
+    def test_missing_reference_mapping_is_not_treated_as_an_empty_scene(self):
+        source = [dict(seconds=15, scene_hint='云上庭院', chars=[],
+                       text='窗帘轻轻摆动，树影落到地面。')]
+        plan = trial.build_plan(source, [])
+        with self.assertRaisesRegex(ValueError, '实际参考映射'):
+            trial.write_request(plan, plan['beats'][0], {}, None)
+        visible_plan = trial.build_plan(slices(), cards())
+        with self.assertRaisesRegex(ValueError, '出镜人物缺少实际参考图'):
+            trial.write_request(visible_plan, visible_plan['beats'][0], {}, [])
+
     def test_compiled_scene_definition_can_use_existing_scene_strip_policy(self):
         _, payload, _ = request()
         result = trial.compile_reply(raw(payload), payload)

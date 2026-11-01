@@ -23,6 +23,7 @@ QUALITY_POLICY_VERSION = 3
 ASPECT_RATIOS = ('16:9', '9:16', '1:1', '4:5', '3:4')
 _ADMISSION = threading.RLock()
 _CHILDREN = {}
+_NEW_REFERENCE_WARDROBE = object()
 
 
 def _prompt_builder(inputs):
@@ -203,8 +204,23 @@ def _busy():
             raise RuntimeError('本地生成器仍有任务，请等它结束')
 
 
-def start(inputs):
+def _reference_wardrobe_policy(inputs):
+    from .wardrobe_continuity import validate_policy
+    try:
+        return validate_policy(inputs.get('wardrobe_policy'))
+    except ValueError as error:
+        raise ValueError('故事视频衣着连续性版本未知，原任务保留，未自动切换规则') from error
+
+
+def start(inputs, *, wardrobe_policy=_NEW_REFERENCE_WARDROBE):
     data = validate_inputs(inputs)
+    if data.get('input_mode') == 'reference':
+        from .wardrobe_continuity import POLICY, validate_policy
+        _reference_wardrobe_policy(inputs)
+        policy = POLICY if wardrobe_policy is _NEW_REFERENCE_WARDROBE else validate_policy(wardrobe_policy)
+        data.pop('wardrobe_policy', None)
+        if policy:
+            data['wardrobe_policy'] = policy
     with _ADMISSION:
         _busy()
         cap = capabilities()
@@ -221,10 +237,24 @@ def _folder(task):
 
 
 def _load(path, default=None):
+    if Path(path).name == 'manifest.json':
+        for attempt in range(4):
+            try:
+                value = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+                if not isinstance(value, dict):
+                    raise ValueError('进度记录须为对象')
+                return value
+            except FileNotFoundError:
+                return {} if default is None else default
+            except (ValueError, UnicodeError, OSError) as error:
+                if attempt == 3:
+                    raise RuntimeError('已有视频进度暂时无法读取，原文件与片段保留，未重建任务：' + str(error)) from error
+                time.sleep(.05 * (attempt + 1))
     return store.load_json(path, {} if default is None else default)
 
 
 def _save(path, obj):
+    runtime_reset.assert_current()
     store.save_json(path, obj)
 
 
@@ -268,7 +298,8 @@ def action(tid, act, segment=None):
             folder = _folder(task)
             manifest = _load(folder/'manifest.json') if folder else {}
             if act == 'rewrite':
-                return start(task['inputs'])
+                policy = _reference_wardrobe_policy(task['inputs']) if task['inputs'].get('input_mode') == 'reference' else None
+                return start(task['inputs'], wardrobe_policy=policy)
             _busy()
             if not manifest.get('plan'):
                 raise ValueError('请先生成故事')
@@ -302,10 +333,9 @@ def action(tid, act, segment=None):
         if act in ('pause', 'cancel') and task.get('status') in ('running', 'queued'):
             # Keep running until the in-flight inference reaches a checkpoint.
             # This prevents a premature resume from creating a second worker.
-            task[act + '_requested'] = True
-            task['detail'] = '当前阶段完成后' + ('暂停' if act == 'pause' else '取消') + '，结果将保留'
-            runtime.save(task)
-            return task
+            return runtime.update(tid, expected_statuses=('running', 'queued'),
+                **{act + '_requested': True,
+                   'detail': '当前阶段完成后' + ('暂停' if act == 'pause' else '取消') + '，结果将保留'})
         if act in ('resume', 'retry'):
             process = _CHILDREN.get(tid)
             if process and process.poll() is None:
@@ -318,7 +348,7 @@ def action(tid, act, segment=None):
             runtime.save(task)
             runtime.RUNNERS[KIND] = _runner
             return runtime.action(tid, act)
-        if act == 'cancel' and task.get('status') in ('paused', 'interrupted', 'failed', 'waiting_user'):
+        if act == 'cancel' and task.get('status') in ('paused', 'interrupted', 'failed', 'partial', 'waiting_user'):
             return runtime.action(tid, act)
         return task
 
@@ -326,6 +356,42 @@ def action(tid, act, segment=None):
 def _url(path):
     from urllib.parse import quote
     return '/files/' + quote(Path(path).resolve().relative_to(ROOT).as_posix(), safe='/')
+
+
+def _completed_output(manifest, task):
+    """Publish only a saved whole film, never an arbitrary truthy worker result."""
+    output = manifest.get('output')
+    if not isinstance(output, dict):
+        raise RuntimeError('尚未保存完整成片，已生成片段保留，可从检查点继续')
+    rows = manifest.get('segments') or []
+    count = int(task.get('inputs', {}).get('segment_count') or len(manifest.get('plan', {}).get('beats') or []))
+    from .story_video_continuation import PARTIAL_POLICY
+    if output.get('generation_completed') is False and output.get('partial_policy') == PARTIAL_POLICY:
+        indices = [row.get('index') for row in rows]
+        missing = [index for index in range(1, count + 1) if index not in indices]
+        if (count < 1 or len(indices) != len(set(indices)) or any(type(index) is not int or
+                not 1 <= index <= count for index in indices) or
+                output.get('missing_segments') != missing or output.get('segments') != len(rows)):
+            raise RuntimeError('部分成品记录与实际分段不一致，已有片段保留')
+        for row in rows:
+            clip = Path(row.get('clip_path') or row.get('video_path') or '')
+            if not clip.is_file() or not clip.stat().st_size:
+                raise RuntimeError('部分成品的已保存片段不存在，原记录保留')
+            if row.get('clip_sha256') and _frame_signature(clip) != row['clip_sha256']:
+                raise RuntimeError('部分成品的已保存片段内容改变，原记录保留')
+        if output.get('output_path') and (not Path(output['output_path']).is_file() or
+                not Path(output['output_path']).stat().st_size or
+                output.get('full_decode_passed') is not True or output.get('audio_consistency_passed') is not True):
+            raise RuntimeError('部分合并成品尚未通过音画完整性检查，片段保留')
+        return output
+    if count < 1 or [row.get('index') for row in rows] != list(range(1, count + 1)):
+        raise RuntimeError('视频分段尚未完整，已有片段保留，未标记整片完成')
+    film = output.get('output_path')
+    if not isinstance(film, str) or not Path(film).is_file() or not Path(film).stat().st_size:
+        raise RuntimeError('成片文件不存在或为空，已有片段保留，可恢复合并')
+    if output.get('full_decode_passed') is not True or output.get('audio_consistency_passed') is not True:
+        raise RuntimeError('成片音画完整性尚未确认，已有片段保留，可恢复合并')
+    return output
 
 
 def _runner(handle, task):
@@ -353,16 +419,17 @@ def _runner(handle, task):
                 runtime_reset.assert_current(task.get('runtime_generation', 'initial'))
                 time.sleep(1)
             current = runtime.load(task['id']) or {}
+            if current.get('cancel_requested') or current.get('pause_requested'):
+                handle.set(status='cancelled' if current.get('cancel_requested') else 'paused',
+                           detail='已保存当前阶段，生成结果保留')
+                raise runtime.TaskPaused()
             if current.get('status') == 'waiting_user':
                 return None
             if current.get('status') in ('paused', 'cancelled'):
                 raise runtime.TaskPaused()
             if process.returncode:
                 raise RuntimeError(current.get('error') or '本地故事视频中断，检查点已保存，可重试')
-            output = _load(folder/'manifest.json').get('output')
-            if not output:
-                raise RuntimeError('任务未返回经过验收的成片')
-            return output
+            return _completed_output(_load(folder/'manifest.json'), task)
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -619,12 +686,17 @@ def _quality_gate(manifest, folder, inputs, opening_state, stage):
         return _continuing_quality_gate(manifest, folder, inputs, opening_state, stage)
     prompts = _prompt_builder(inputs)
     automatic = inputs.get('quality_mode') == 'automatic'
+    def ask_review(request, directory, images=None, validator=None):
+        return _request_plan_review(request, directory)
+
     if inputs.get('flow_version', 1) >= 2 and inputs.get('quality_mode') != 'automatic':
         if not manifest.get('plan_review'):
             stage('本地AI审阅故事（意见供你参考）', 0)
             request = prompts.review_request(manifest['plan'], inputs['story_direction'], inputs['style'],
                 inputs['segment_count'], inputs['segment_seconds'], opening_state)
-            review = _request_plan_review(request, folder/'planning/review_1')
+            review = continuation.optional_request(request, folder/'planning/review_1', ask_review, _save)
+            if review.get('status') == 'unavailable':
+                _continuation_warning(manifest, 'plan_review', review)
             manifest['plan_review'] = dict(review, advisory=True, round=1, pending=False,
                 plan_signature=plan_signature(manifest['plan']), plan_source=manifest.get('plan_source'),
                 review_source=str((folder/'planning/review_1/accepted.json').resolve()))
@@ -639,6 +711,8 @@ def _quality_gate(manifest, folder, inputs, opening_state, stage):
     stored = manifest.get('plan_review') or {}
     if stored and stored.get('plan_signature') != signature:
         raise RuntimeError('当前计划与已保存审阅版本不一致，结果已保留，请新建任务')
+    if stored.get('continuation_policy') == continuation.POLICY and not stored.get('pending'):
+        return current
     if stored.get('passed') and not stored.get('pending'):
         stored_payload = prompts.review_request(current, inputs['story_direction'], inputs['style'],
             inputs['segment_count'], inputs['segment_seconds'], opening_state,
@@ -658,11 +732,17 @@ def _quality_gate(manifest, folder, inputs, opening_state, stage):
         request = prompts.review_request(current, inputs['story_direction'], inputs['style'],
             inputs['segment_count'], inputs['segment_seconds'], opening_state,
             blocking_only=automatic)
-        review = _request_plan_review(request, review_dir)
+        review = continuation.optional_request(request, review_dir, ask_review, _save)
         manifest['plan_review'] = dict(review, round=round_no, pending=False,
             plan_signature=signature, plan_source=plan_source,
             review_source=str((review_dir/'accepted.json').resolve()))
         _save(folder/'manifest.json', manifest)
+        if review.get('status') == 'unavailable':
+            manifest['plan_review'].update(continuation_policy=continuation.POLICY,
+                                           advisory=True, quality_gate=False)
+            _continuation_warning(manifest, 'plan_review', review)
+            _save(folder/'manifest.json', manifest)
+            return current
         if review['passed']:
             if automatic:
                 manifest['plan_advisories'] = [copy.deepcopy(item) for item in review['issues']
@@ -670,7 +750,11 @@ def _quality_gate(manifest, folder, inputs, opening_state, stage):
                 _save(folder/'manifest.json', manifest)
             return current
         if round_no == 2:
-            raise RuntimeError('本地AI剧本复审仍未通过，原稿、修改稿和审阅均已保留，未开始生成视频')
+            manifest['plan_review'].update(continuation_policy=continuation.POLICY,
+                                           advisory=True, quality_gate=False)
+            _continuation_warning(manifest, 'plan_review', review)
+            _save(folder/'manifest.json', manifest)
+            return current
         stage('本地AI按审阅修改整稿（仅一次）', 0)
         revision_request = prompts.plan_request(inputs['story_direction'], inputs['style'],
             inputs['segment_count'], inputs['segment_seconds'], opening_state)
@@ -681,7 +765,16 @@ def _quality_gate(manifest, folder, inputs, opening_state, stage):
             review_feedback=feedback,
             revision_scope='仅依据本地AI审阅修复整稿，保持用户目标与输入段数时长；这是唯一一次整稿重写')
         revision_dir = folder/'planning/revision_1'
-        revised = request_json(revision_request, revision_dir, validator=validate_plan)
+        revised = continuation.optional_request(revision_request, revision_dir,
+            request_json, _save, validator=validate_plan)
+        if revised.get('status') == 'unavailable':
+            manifest['plan_review'].update(continuation_policy=continuation.POLICY,
+                                           advisory=True, quality_gate=False)
+            manifest['plan_revision_warning'] = revised
+            _continuation_warning(manifest, 'plan_revision', revised,
+                '整稿修订失败，保留已有有效故事和分段计划继续')
+            _save(folder/'manifest.json', manifest)
+            return current
         manifest.setdefault('rejected_plan_versions', []).append({
             'plan': copy.deepcopy(current), 'plan_signature': signature, 'plan_source': plan_source,
             'error': '本地AI剧本审阅未通过', 'review': copy.deepcopy(review), 'time': time.time()})
@@ -855,6 +948,82 @@ def validate_written(obj, payload):
         raise ValueError('H3提示词中的对白须逐句对应原话与顺序')
 
 
+def _latest_model_reply_complete(directory):
+    """Do not revive an older reply over a newer failed/interrupted native call."""
+    requests = list(Path(directory).glob('call_*/*/request.json'))
+    if not requests:
+        return True
+    latest = max(requests, key=lambda path: path.stat().st_mtime_ns)
+    return latest.with_name('response.json').is_file() and not latest.with_name('error.json').exists()
+
+
+def _model_cache_current(directory, marker):
+    """A saved result may cover its own failed call, never a newer native call."""
+    requests = list(Path(directory).glob('call_*/*/request.json'))
+    return not requests or max(path.stat().st_mtime_ns for path in requests) <= Path(marker).stat().st_mtime_ns
+
+
+def _request_director(request, directory):
+    """After bounded format repair, transport an existing Chinese plan only."""
+    from . import story_video_continuation as continuation
+    if request[1].get('director_profile') != 'story-mode-director-zh-v1':
+        return request_json(request, directory, validator=validate_written), None
+    directory = Path(directory)
+    binding = dict(system=request[0], payload=request[1], schema=request[2], images=[])
+    target, marker = directory/'binding.json', directory/'source_fallback.json'
+    if target.exists() and _load(target) != binding:
+        raise RuntimeError('模型请求或证据变化，未复用旧回复：' + str(directory))
+    token = plan_signature(binding)
+
+    def fallback(error):
+        if not continuation.is_optional_error(error):
+            raise error
+        if marker.exists():
+            report = _load(marker)
+            if (report.get('request_sha256') != token
+                    or report.get('candidate_sha256') != plan_signature(report.get('candidate'))):
+                raise RuntimeError('导演保底缓存或输入发生变化，已有视频保留')
+            candidate = copy.deepcopy(report['candidate'])
+        else:
+            candidate = continuation.source_director_fallback(request[1])
+            report = dict(status='warning', quality_gate=False, reason=str(error),
+                policy='saved-beat-director-fallback-v1', request_sha256=token,
+                candidate_sha256=plan_signature(candidate), candidate=copy.deepcopy(candidate),
+                raw_response_paths=[str(path) for path in sorted(directory.glob('call_*/*/response.json'))])
+        validate_schema(candidate, request[2])
+        validate_written(candidate, request[1])
+        _save(target, binding)
+        _save(marker, report)
+        return candidate, report
+
+    complete = _latest_model_reply_complete(directory)
+    if marker.exists() and _model_cache_current(directory, marker):
+        return fallback(RuntimeError('本地模型格式修复仍未通过：复用已保存的本段传输保底'))
+    exhausted = list(directory.glob('call_2_*/contract_error.json'))
+    if target.exists() and exhausted and complete:
+        for path in sorted(directory.glob('call_*/*/response.json'),
+                           key=lambda value: value.stat().st_mtime_ns, reverse=True):
+            if path.with_name('error.json').exists():
+                continue
+            try:
+                response = _load(path)
+                if response.get('meta', {}).get('finish_reason') == 'length':
+                    continue
+                text = re.sub(r'^```(?:json)?\s*|\s*```$', '', str(response.get('text', '')).strip())
+                candidate = json.loads(text)
+                validate_schema(candidate, request[2])
+                validate_written(candidate, request[1])
+                return candidate, None
+            except (ValueError, KeyError, TypeError):
+                continue
+        return fallback(RuntimeError('本地模型格式修复仍未通过：复用已保存的两次格式失败'))
+    _save(target, binding)
+    try:
+        return request_json(request, directory, validator=validate_written), None
+    except RuntimeError as error:
+        return fallback(error)
+
+
 def request_json(request, directory, images=None, validator=None):
     from models import story_video_client as client
     system, payload, schema = request
@@ -867,7 +1036,8 @@ def request_json(request, directory, images=None, validator=None):
         except ValueError:
             pass
         return dict(payload, previous_reply=previous, correction=str(error), correction_scope=scope)
-    if target.exists():
+    complete = _latest_model_reply_complete(directory)
+    if target.exists() and _model_cache_current(directory, target):
         accepted = _load(target)
         try:
             validate_schema(accepted, schema)
@@ -880,10 +1050,17 @@ def request_json(request, directory, images=None, validator=None):
             payload = correction_payload(accepted, error, '依据更新后的同一契约修复当前回复，保持用户目标')
     # Recover a complete local-model response after interruption or a contract
     # upgrade. Revalidate it; never manufacture replacement creative content.
-    responses = sorted(directory.glob('call_*/*/response.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    responses = (sorted(directory.glob('call_*/*/response.json'),
+                        key=lambda p: p.stat().st_mtime_ns, reverse=True) if complete else [])
     for response in responses:
+        if response.with_name('error.json').exists():
+            continue
         try:
-            candidate = json.loads(_load(response).get('text', ''))
+            retained = _load(response)
+            if retained.get('meta', {}).get('finish_reason') == 'length':
+                continue
+            text = re.sub(r'^```(?:json)?\s*|\s*```$', '', str(retained.get('text', '')).strip())
+            candidate = json.loads(text)
             validate_schema(candidate, schema)
             if validator:
                 validator(candidate, payload)
@@ -976,6 +1153,10 @@ def _automatic_resume_check(row, plan, previous, inputs=None):
         raise RuntimeError('第%d段的自动验收记录或输入已变化，已保留结果，请新建任务或明确重做该段' % row['index'])
 
 
+class SavedMediaIntegrityError(RuntimeError):
+    """An adopted receipt no longer matches the files it binds."""
+
+
 def _guided_resume_media_check(row):
     """Check saved evidence before a guided continuation consumes its tail.
 
@@ -985,10 +1166,10 @@ def _guided_resume_media_check(row):
     for key, label in (('raw', '原视频'), ('clip', '采用视频'), ('anchor', '续接尾帧')):
         path = row.get(key + '_path') or (row.get('video_path') if key == 'clip' else None)
         if not path or not Path(path).is_file():
-            raise RuntimeError('第%d段%s文件缺失，已有素材保留，未重新生成或替换' % (row['index'], label))
+            raise SavedMediaIntegrityError('第%d段%s文件缺失，已有素材保留，未重新生成或替换' % (row['index'], label))
         expected = row.get(key + '_sha256')
         if expected and _frame_signature(path) != expected:
-            raise RuntimeError('第%d段%s内容变化，已有素材保留，未继续使用或重新生成' % (row['index'], label))
+            raise SavedMediaIntegrityError('第%d段%s内容变化，已有素材保留，未继续使用或重新生成' % (row['index'], label))
 
 
 def _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, state, stage, note):
@@ -1048,8 +1229,14 @@ def _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, stat
                 request[1].update(previous_reply=written, storyboard_feedback=storyboard,
                     correction='按分镜预审的阻塞问题修正当前词稿，保留全部原对白、用户事件及合格内容',
                     correction_scope='仅当前段因果、对白时序、可拍性与容量')
-            writer = optional if revision else request_json
-            draft = writer(request, work/('writing' if not revision else 'writing_revision_1'), validator=validate_written)
+            writing_dir = work/('writing' if not revision else 'writing_revision_1')
+            if revision:
+                draft = optional(request, writing_dir, validator=validate_written)
+            else:
+                draft, fallback_report = _request_director(request, writing_dir)
+                if fallback_report:
+                    entry['writing_fallback_warning'] = copy.deepcopy(fallback_report)
+                    warnings.append('导演格式修复耗尽，沿用已保存分段动作和原对白继续')
             if continuing and draft.get('status') == 'unavailable':
                 entry['writing_revision_warning'] = draft
                 warnings.append('分镜修订格式不可用，保留已验证有效的原提示词')
@@ -1133,7 +1320,7 @@ def _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, stat
             audio = flow.disabled_audio()
             _save(work/'audio_review'/'review.json', audio)
         if continuing:
-            continuation.assert_audio_source_usable(audio)
+            audio = continuation.usable_clip_audio_evidence(audio, clip_path)
         if audio['status'] == 'unavailable' and not continuing:
             entry.update(status='audio_unavailable', audio=audio)
             checkpoint()
@@ -1227,6 +1414,7 @@ def run_job(tid):
     if not task or task.get('kind') != KIND or _folder(task) is None:
         raise RuntimeError('故事视频任务检查点不存在')
     if task['inputs'].get('input_mode') == 'reference':
+        _reference_wardrobe_policy(task['inputs'])
         from .story_video_reference import run_job as run_reference_job
         return run_reference_job(tid)
     handle = runtime.TaskHandle(tid)
@@ -1255,6 +1443,10 @@ def run_job(tid):
         inputs['director_profile'] = manifest['director_profile']
     prompts = _prompt_builder(inputs)
     continuing = continuation.enabled(inputs)
+    # Recovery is a scheduling policy for every saved task, independent of the
+    # selected prompt template. Older tasks keep their original writer/profile,
+    # while optional evidence and individual slot failures cannot end the batch.
+    optional_mode_reports = True
     optimized = flow.enabled(inputs)
     if continuing:
         inputs['continuation_policy'] = manifest['continuation_policy'] = continuation.POLICY
@@ -1272,6 +1464,8 @@ def run_job(tid):
 
     def stage(label, done):
         _checkpoint(handle)
+        if label.startswith('第'):
+            done = len(manifest['segments'])
         handle.step(label, done, inputs['segment_count'], str(folder))
         note(label)
 
@@ -1289,9 +1483,9 @@ def run_job(tid):
                 stage('本地视觉识别起始图', 0)
                 opening_request = observation_request('opening', None, None, inputs)
                 state = (continuation.optional_request(opening_request, folder/'opening_observation',
-                    request_json, _save, images=[opening]) if continuing else
+                    request_json, _save, images=[opening]) if optional_mode_reports else
                     request_json(opening_request, folder/'opening_observation', [opening]))
-                if continuing and state.get('status') == 'unavailable':
+                if optional_mode_reports and state.get('status') == 'unavailable':
                     _continuation_warning(manifest, 'opening_observation', state)
                     state = continuation.unknown_observation(state)
                 manifest['opening_observation'] = state
@@ -1333,149 +1527,209 @@ def run_job(tid):
             raise RuntimeError('故事内容已变化，请重新确认')
         previous = opening or None
         for beat in plan['beats']:
-            index = beat['index']
-            accepted = next((s for s in manifest['segments'] if s['index'] == index), None)
-            if accepted:
-                if automatic:
-                    _automatic_resume_check(accepted, plan, previous, inputs)
-                else:
-                    _guided_resume_media_check(accepted)
-                previous, state = accepted['anchor_path'], accepted['observation']
-                continue
-            if automatic:
-                row = _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, state, stage, note)
-                manifest['segments'].append(row)
-                manifest['segments'].sort(key=lambda item: item['index'])
-                manifest['quality_summary'] = (_continuation_summary(manifest) if continuing else
-                    {'passed': False, 'status': 'working',
-                     'accepted_segments': len(manifest['segments']), 'reasons': []})
-                _save(manifest_path, manifest)
-                previous, state = row['anchor_path'], row['observation']
-                note(('第%d段已保存并按实际末帧续接：%s' if continuing else
-                      '第%d段已通过本地画面与台词验收并保存：%s') % (index, state['actual_visible']))
-                continue
-            # Bounded, local take repair.  A minor drift continues from observed facts.
-            initial_take = int(manifest.get('takes', {}).get(str(index), 1)) - 1
-            for take in (range(initial_take, initial_take+1) if staged else range(2)):
-                work = folder/'segments'/('%02d_take_%d' % (index, take+1))
-                work.mkdir(parents=True, exist_ok=True)
-                stage('第%d/%d段：本地AI写电影提示词' % (index, len(plan['beats'])), index-1)
-                mode = 'i2va' if previous else 't2va'
-                req = prompts.write_request(plan, beat, state, inputs['segment_seconds'], mode,
-                                            visual_style=inputs['style'])
-                if optimized:
-                    req = flow.continuity_request(req, previous, state)
-                if take and not staged:
-                    req[1]['previous_take_feedback'] = observation
-                    req[1]['retry_scope'] = '只重做本段可见关键错误，从同一采用首帧开始，不重写全故事'
-                written = request_json(req, work/'writing', validator=validate_written)
-                written = prompts.compile_written(written, req[1])
-                _save(work/'director.json', written)
-                raw_path = work/'raw.mp4'
-                if not raw_path.exists():
-                    stage('第%d/%d段：H3本地生成' % (index, len(plan['beats'])), index-1)
-                    geometry_options = {'geometry': manifest['geometry']} if staged else {}
-                    result = client.video(written['prompt'], first_frame=previous,
-                        seconds=inputs['segment_seconds'], trace_dir=work/'generation',
-                        recovery_key='local-story:%s:%d:%d' % (tid, index, take+1), **geometry_options)
-                    if staged:
-                        from .video_geometry import preserve_display_ratio
-                        preserve_display_ratio(result['output_path'], raw_path, manifest['geometry'])
+            try:
+                index = beat['index']
+                accepted = next((s for s in manifest['segments'] if s['index'] == index), None)
+                if accepted:
+                    if automatic:
+                        accepted_previous = previous
+                        retained_work = folder/'segments'/('%02d_take_%d' % (index, accepted.get('take', 1)))
+                        if optional_mode_reports and (retained_work/'continuation_input.json').exists():
+                            accepted_previous, _, retained_context = continuation.freeze_segment_context(
+                                retained_work, manifest, plan, index, previous, state, _save)
+                            if retained_context:
+                                _continuation_warning(manifest, '第%d段 continuity_input' % index,
+                                    dict(status='warning', quality_gate=False),
+                                    '前段补齐后保留本段原片和原始续接输入，未自动重拍；请预览衔接')
+                        _automatic_resume_check(accepted, plan, accepted_previous, inputs)
                     else:
-                        shutil.copy2(result['output_path'], raw_path)
-                    _save(work/'generation_result.json', result)
-                stage('第%d/%d段：本地视觉核对实际画面' % (index, len(plan['beats'])), index-1)
-                prepared = (media.adopt(raw_path, work/'adopted', end_seconds=inputs['segment_seconds'])
-                            if optimized else None)
-                samples = media.sample_frames(prepared['clip_path'] if prepared else raw_path,
-                    work/'samples', seconds=inputs['segment_seconds'])
-                observe = observation_request('segment', state, beat, inputs)
-                observe[1]['sample_timestamps'] = [s['time_seconds'] for s in samples]
-                observe[1]['clip_duration_seconds'] = inputs['segment_seconds']
-                observe[1]['repair_policy'] = (
-                    'only set retry_required=true for clearly unusable/blank frames, duplicated main subjects, '
-                    'or the core goal entirely missing. Minor shape/color drift should continue from actual facts. '
-                    'This is the final available take.' if take else
-                    'One local retry is allowed only for clearly unusable/blank frames, duplicate main subjects, '
-                    'or the core goal entirely missing. Minor shape/color drift should continue from actual facts.')
-                if staged:
-                    observe[1]['repair_policy'] = '只记录实际画面偏差和尾部停顿。完整保留本段，不裁短、不自动重做或重试视频。'
-                    observe[1]['retention_policy'] = 'full_duration'
-                observe[2]['properties'].update(retry_required={'type': 'boolean'}, retry_reason={'type': 'string'})
-                observe[2]['required'].extend(['retry_required', 'retry_reason'])
-                shown = flow.compact_samples(samples, prepared) if optimized else samples
-                if optimized:
-                    observe = flow.compact_request(observe, shown)
-                    observation = continuation.optional_request(observe, work/'observation', request_json,
-                        _save, images=[s['path'] for s in shown])
-                    if observation.get('status') == 'unavailable':
-                        _continuation_warning(manifest, '第%d段 observation' % index, observation)
-                        observation = continuation.unknown_observation(observation, last_known=state)
-                else:
-                    observation = request_json(observe, work/'observation', [s['path'] for s in samples])
-                if observation.get('style_alignment') == 'mismatch' and index == 1 and not previous:
-                    observation['retry_required'] = True
-                    observation['retry_reason'] = '本地视觉发现首段风格不符：' + observation['actual_visual_style']
-                if observation.get('retry_required') and not staged and take == 0:
-                    note('第%d段本地视觉要求局部重试：%s' % (index, observation['retry_reason']))
+                        _guided_resume_media_check(accepted)
+                    previous, state = accepted['anchor_path'], accepted['observation']
                     continue
-                if observation.get('retry_required') and not staged:
-                    raise RuntimeError('第%d段两次尝试仍不可用，已保留检查点：%s' % (index, observation['retry_reason']))
-                if staged and observation.get('retry_required'):
-                    note('第%d段有重做建议，保留当前版本供你选择：%s' % (index, observation['retry_reason']))
-                end = (inputs['segment_seconds'] if staged else
-                       observation.get('keep_end_seconds') or inputs['segment_seconds'])
-                end = min(float(end), inputs['segment_seconds'])
-                if end < min(2, inputs['segment_seconds']):
-                    end = inputs['segment_seconds']
-                    observation['unknowns'].append('建议裁切过早，保留整段；实际采用末帧另行确认')
-                adopted = prepared or media.adopt(raw_path, work/'adopted', end_seconds=end)
-                # A short visual check of the exact adopted frame prevents an
-                # earlier sample summary from being mistaken for the endpoint.
-                if optimized:
-                    observation, endpoint = flow.observation_pair(observation)
-                    _save(work/'endpoint'/'derived.json', endpoint)
-                else:
-                    stage('第%d/%d段：确认真实续接末帧' % (index, len(plan['beats'])), index-1)
-                    endpoint_request = observation_request('opening', observation, beat, inputs)
-                    endpoint_request[1]['stage_detail'] = '精确采用末帧：只记录这一帧当前姿势/持物/水态，动作完成仍以上一步序列证据为准'
+                context_work = folder/'segments'/('%02d_take_%d' %
+                    (index, int(manifest.get('takes', {}).get(str(index), 1))))
+                if optional_mode_reports:
+                    previous, state, retained_context = continuation.freeze_segment_context(
+                        context_work, manifest, plan, index, previous, state, _save)
+                    if retained_context:
+                        _continuation_warning(manifest, '第%d段 continuity_input' % index,
+                            dict(status='warning', quality_gate=False),
+                            '前段补齐后保留本段原始续接输入以恢复同一任务，未自动重拍；请预览衔接')
+                if automatic:
+                    row = _automatic_segment(tid, manifest, folder, inputs, plan, beat, previous, state, stage, note)
+                    manifest.setdefault('segment_failures', {}).pop(str(index), None)
+                    manifest['segments'].append(row)
+                    manifest['segments'].sort(key=lambda item: item['index'])
+                    manifest['quality_summary'] = (_continuation_summary(manifest) if continuing else
+                        {'passed': False, 'status': 'working',
+                         'accepted_segments': len(manifest['segments']), 'reasons': []})
+                    _save(manifest_path, manifest)
+                    previous, state = row['anchor_path'], row['observation']
+                    note(('第%d段已保存并按实际末帧续接：%s' if continuing else
+                          '第%d段已通过本地画面与台词验收并保存：%s') % (index, state['actual_visible']))
+                    continue
+                # Bounded, local take repair.  A minor drift continues from observed facts.
+                initial_take = int(manifest.get('takes', {}).get(str(index), 1)) - 1
+                for take in (range(initial_take, initial_take+1) if staged else range(2)):
+                    work = folder/'segments'/('%02d_take_%d' % (index, take+1))
+                    work.mkdir(parents=True, exist_ok=True)
+                    stage('第%d/%d段：本地AI写电影提示词' % (index, len(plan['beats'])), index-1)
+                    mode = 'i2va' if previous else 't2va'
+                    req = prompts.write_request(plan, beat, state, inputs['segment_seconds'], mode,
+                                                visual_style=inputs['style'])
+                    if optimized:
+                        req = flow.continuity_request(req, previous, state)
+                    if take and not staged:
+                        req[1]['previous_take_feedback'] = observation
+                        req[1]['retry_scope'] = '只重做本段可见关键错误，从同一采用首帧开始，不重写全故事'
+                    written, fallback_report = _request_director(req, work/'writing')
+                    if fallback_report:
+                        _continuation_warning(manifest, '第%d段 writing_fallback' % index, fallback_report,
+                            '导演格式修复耗尽，沿用已保存分段动作和原对白继续')
+                    written = prompts.compile_written(written, req[1])
+                    _save(work/'director.json', written)
+                    raw_path = work/'raw.mp4'
+                    if not raw_path.exists():
+                        stage('第%d/%d段：H3本地生成' % (index, len(plan['beats'])), index-1)
+                        geometry_options = {'geometry': manifest['geometry']} if staged else {}
+                        result = client.video(written['prompt'], first_frame=previous,
+                            seconds=inputs['segment_seconds'], trace_dir=work/'generation',
+                            recovery_key='local-story:%s:%d:%d' % (tid, index, take+1), **geometry_options)
+                        if staged:
+                            from .video_geometry import preserve_display_ratio
+                            preserve_display_ratio(result['output_path'], raw_path, manifest['geometry'])
+                        else:
+                            shutil.copy2(result['output_path'], raw_path)
+                        _save(work/'generation_result.json', result)
+                    stage('第%d/%d段：本地视觉核对实际画面' % (index, len(plan['beats'])), index-1)
+                    prepared = (media.adopt(raw_path, work/'adopted', end_seconds=inputs['segment_seconds'])
+                                if optimized else None)
+                    samples = media.sample_frames(prepared['clip_path'] if prepared else raw_path,
+                        work/'samples', seconds=inputs['segment_seconds'])
+                    observe = observation_request('segment', state, beat, inputs)
+                    observe[1]['sample_timestamps'] = [s['time_seconds'] for s in samples]
+                    observe[1]['clip_duration_seconds'] = inputs['segment_seconds']
+                    observe[1]['repair_policy'] = (
+                        'only set retry_required=true for clearly unusable/blank frames, duplicated main subjects, '
+                        'or the core goal entirely missing. Minor shape/color drift should continue from actual facts. '
+                        'This is the final available take.' if take else
+                        'One local retry is allowed only for clearly unusable/blank frames, duplicate main subjects, '
+                        'or the core goal entirely missing. Minor shape/color drift should continue from actual facts.')
                     if staged:
-                        endpoint_request[1]['stage_detail'] = '完整时长末帧：本段未按视觉建议截短；只记录这一帧的真实姿势、持物及环境状态，下一段从此帧接续'
-                    endpoint = request_json(endpoint_request, work/'endpoint', [adopted['anchor_path']])
-                endpoint['actions'] = observation['actions']
-                endpoint['completed'] = observation['completed']
-                endpoint['beat_status'] = observation['beat_status']
-                endpoint['continuity_risks'] = list(dict.fromkeys(observation['continuity_risks']+endpoint['continuity_risks']))
-                row = dict(adopted, index=index, raw_path=str(raw_path), observation=endpoint,
-                           sequence_observation=observation, prompt_path=str(work/'director.json'),
-                           model_mode=mode, take=take+1,
-                           retention_policy='full_duration' if staged else 'suggested_endpoint')
-                for key, path in (('raw', raw_path), ('clip', row.get('clip_path') or row.get('video_path')),
-                                  ('anchor', row['anchor_path'])):
-                    if not row.get(key + '_sha256'):
-                        row[key + '_sha256'] = _frame_signature(path)
-                if optimized:
-                    if flow.audio_enabled(inputs):
-                        from . import story_video_asr as asr
-                        row['asr'] = asr.review(adopted['clip_path'], written['dialogue'], work/'audio_review')
-                        continuation.assert_audio_source_usable(row['asr'])
-                        if row['asr'].get('status') != 'passed':
-                            _continuation_warning(manifest, '第%d段 asr' % index, row['asr'])
+                        observe[1]['repair_policy'] = '只记录实际画面偏差和尾部停顿。完整保留本段，不裁短、不自动重做或重试视频。'
+                        observe[1]['retention_policy'] = 'full_duration'
+                    observe[2]['properties'].update(retry_required={'type': 'boolean'}, retry_reason={'type': 'string'})
+                    observe[2]['required'].extend(['retry_required', 'retry_reason'])
+                    shown = flow.compact_samples(samples, prepared) if optimized else samples
+                    if optimized:
+                        observe = flow.compact_request(observe, shown)
+                        observation = continuation.optional_request(observe, work/'observation', request_json,
+                            _save, images=[s['path'] for s in shown])
+                        if observation.get('status') == 'unavailable':
+                            _continuation_warning(manifest, '第%d段 observation' % index, observation)
+                            observation = continuation.unknown_observation(observation, last_known=state)
                     else:
-                        row['asr'] = flow.disabled_audio()
-                        _save(work/'audio_review'/'review.json', row['asr'])
-                manifest['segments'].append(row)
-                manifest['segments'].sort(key=lambda item: item['index'])
-                _save(manifest_path, manifest)
-                previous, state = row['anchor_path'], endpoint
-                note('第%d段已保存：%s' % (index, endpoint['actual_visible']))
-                handle.step('已完成%d/%d段' % (index, len(plan['beats'])), index, len(plan['beats']))
-                if staged and not opening and index == 1 and not manifest.get('approved'):
-                    _wait_for_user(handle, manifest, folder, 'preview')
-                break
+                        observation = (continuation.optional_request(observe, work/'observation', request_json,
+                            _save, images=[s['path'] for s in samples]) if optional_mode_reports else
+                            request_json(observe, work/'observation', [s['path'] for s in samples]))
+                        if optional_mode_reports and observation.get('status') == 'unavailable':
+                            _continuation_warning(manifest, '第%d段 observation' % index, observation)
+                            observation = continuation.unknown_observation(observation, last_known=state)
+                    if observation.get('style_alignment') == 'mismatch' and index == 1 and not previous:
+                        observation['retry_required'] = True
+                        observation['retry_reason'] = '本地视觉发现首段风格不符：' + observation['actual_visual_style']
+                    if observation.get('retry_required') and not staged and take == 0:
+                        note('第%d段本地视觉要求局部重试：%s' % (index, observation['retry_reason']))
+                        continue
+                    if observation.get('retry_required') and not staged:
+                        raise RuntimeError('第%d段两次尝试仍不可用，已保留检查点：%s' % (index, observation['retry_reason']))
+                    if staged and observation.get('retry_required'):
+                        note('第%d段有重做建议，保留当前版本供你选择：%s' % (index, observation['retry_reason']))
+                    end = (inputs['segment_seconds'] if staged else
+                           observation.get('keep_end_seconds') or inputs['segment_seconds'])
+                    end = min(float(end), inputs['segment_seconds'])
+                    if end < min(2, inputs['segment_seconds']):
+                        end = inputs['segment_seconds']
+                        observation['unknowns'].append('建议裁切过早，保留整段；实际采用末帧另行确认')
+                    adopted = prepared or media.adopt(raw_path, work/'adopted', end_seconds=end)
+                    # A short visual check of the exact adopted frame prevents an
+                    # earlier sample summary from being mistaken for the endpoint.
+                    if optimized:
+                        observation, endpoint = flow.observation_pair(observation)
+                        _save(work/'endpoint'/'derived.json', endpoint)
+                    else:
+                        stage('第%d/%d段：确认真实续接末帧' % (index, len(plan['beats'])), index-1)
+                        endpoint_request = observation_request('opening', observation, beat, inputs)
+                        endpoint_request[1]['stage_detail'] = '精确采用末帧：只记录这一帧当前姿势/持物/水态，动作完成仍以上一步序列证据为准'
+                        if staged:
+                            endpoint_request[1]['stage_detail'] = '完整时长末帧：本段未按视觉建议截短；只记录这一帧的真实姿势、持物及环境状态，下一段从此帧接续'
+                        endpoint = (continuation.optional_request(endpoint_request, work/'endpoint', request_json,
+                            _save, images=[adopted['anchor_path']]) if optional_mode_reports else
+                            request_json(endpoint_request, work/'endpoint', [adopted['anchor_path']]))
+                        if optional_mode_reports and endpoint.get('status') == 'unavailable':
+                            _continuation_warning(manifest, '第%d段 endpoint' % index, endpoint)
+                            endpoint = continuation.unknown_observation(endpoint, last_known=state)
+                    endpoint['actions'] = observation['actions']
+                    endpoint['completed'] = observation['completed']
+                    endpoint['beat_status'] = observation['beat_status']
+                    endpoint['continuity_risks'] = list(dict.fromkeys(observation['continuity_risks']+endpoint['continuity_risks']))
+                    row = dict(adopted, index=index, raw_path=str(raw_path), observation=endpoint,
+                               sequence_observation=observation, prompt_path=str(work/'director.json'),
+                               model_mode=mode, take=take+1,
+                               retention_policy='full_duration' if staged else 'suggested_endpoint')
+                    for key, path in (('raw', raw_path), ('clip', row.get('clip_path') or row.get('video_path')),
+                                      ('anchor', row['anchor_path'])):
+                        if not row.get(key + '_sha256'):
+                            row[key + '_sha256'] = _frame_signature(path)
+                    if optimized:
+                        if flow.audio_enabled(inputs):
+                            from . import story_video_asr as asr
+                            row['asr'] = asr.review(adopted['clip_path'], written['dialogue'], work/'audio_review')
+                            row['asr'] = continuation.usable_clip_audio_evidence(row['asr'], adopted['clip_path'])
+                            if row['asr'].get('status') != 'passed':
+                                _continuation_warning(manifest, '第%d段 asr' % index, row['asr'])
+                        else:
+                            row['asr'] = flow.disabled_audio()
+                            _save(work/'audio_review'/'review.json', row['asr'])
+                    manifest.setdefault('segment_failures', {}).pop(str(index), None)
+                    manifest['segments'].append(row)
+                    manifest['segments'].sort(key=lambda item: item['index'])
+                    _save(manifest_path, manifest)
+                    previous, state = row['anchor_path'], endpoint
+                    note('第%d段已保存：%s' % (index, endpoint['actual_visible']))
+                    saved_count = len(manifest['segments'])
+                    handle.step('已保存%d/%d段' % (saved_count, len(plan['beats'])), saved_count, len(plan['beats']))
+                    if staged and not opening and index == 1 and not manifest.get('approved'):
+                        _wait_for_user(handle, manifest, folder, 'preview')
+                    break
+            except Exception as error:
+                if not optional_mode_reports:
+                    raise
+                _checkpoint(handle)
+                index = beat['index']
+                failure_work = folder/'segments'/('%02d_take_%d' %
+                    (index, int(manifest.get('takes', {}).get(str(index), 1))))
+                continuation.record_segment_failure(manifest, index, error,
+                    '该段写词、生成或采用阶段', _save, failure_work)
+                note('第%d段待补，保留原任务与已有结果，继续后续段：%s' % (index, error))
+                continue
+        expected = len(plan['beats'])
+        if optional_mode_reports and len(manifest['segments']) != expected:
+            stage('拼接已保存片段，缺段保留待补', len(manifest['segments']))
+            return continuation.partial_output(manifest, plan, folder, expected,
+                media.join, _save, _url)
         stage('拼接与完整音画解码验收', len(plan['beats']))
         movie_name = 'movie_revision_%d' % len(manifest['history']) if manifest.get('history') else 'movie'
-        output = media.join(manifest['segments'], folder/movie_name)
+        try:
+            output = media.join(manifest['segments'], folder/movie_name)
+        except Exception as error:
+            if not optional_mode_reports:
+                raise
+            from .runtime_core import item_failure_requires_stop
+            if item_failure_requires_stop(error):
+                raise
+            return continuation.partial_output(manifest, plan, folder, len(plan['beats']),
+                lambda rows, path: (_ for _ in ()).throw(error), _save, _url)
         output.update(title=plan['title'], segments=len(manifest['segments']),
                       manifest_url=_url(manifest_path), local_ai_only=True,
                       visual_review='local visual model, sampled frames and exact adopted endpoint',
@@ -1484,14 +1738,19 @@ def run_job(tid):
                                     '音轨完整解码；未审听或验证中文口型'),
                       network_audit_url=_url(folder/'network_audit.jsonl'))
         manifest['output'] = output
+        if not automatic and manifest.get('continuation_warnings'):
+            manifest['quality_summary'] = _continuation_summary(manifest, complete=True)
+            output.update(generation_completed=True, quality_status='completed_with_warnings',
+                          quality_passed=False, warnings=manifest['quality_summary']['warnings'])
         if automatic:
-            manifest['quality_summary'] = (_continuation_summary(manifest, complete=True) if continuing else
+            manifest['quality_summary'] = (_continuation_summary(manifest, complete=True)
+                if continuing or manifest.get('continuation_warnings') else
                 {'passed': True, 'status': 'passed',
                 'accepted_segments': len(manifest['segments']), 'reasons': [],
                 'rejected_takes': sum(e['status'] == 'rejected' for batch in manifest.get('quality_attempts', {}).values()
                                       for e in batch['attempts'].values())})
             output['quality_passed'] = manifest['quality_summary']['passed']
-            if continuing:
+            if continuing or manifest.get('continuation_warnings'):
                 output['generation_completed'] = True
                 output['quality_status'] = manifest['quality_summary']['status']
         manifest['ended'] = time.time()

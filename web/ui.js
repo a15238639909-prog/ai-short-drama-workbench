@@ -5,7 +5,7 @@ window.UI = (function () {
     const map = {
       "adopted": "已采用", "candidate": "候选", "superseded": "已替代",
       "running": "制作中", "queued": "排队中", "waiting_user": "等待确认",
-      "completed": "已完成", "failed": "失败", "cancelled": "已取消", "paused": "已暂停"
+      "completed": "已完成", "partial": "本轮已处理，部分待补", "failed": "失败", "cancelled": "已取消", "paused": "已暂停"
     };
     return '<span class="badge ' + s + '">' + (map[s] || s) + "</span>";
   }

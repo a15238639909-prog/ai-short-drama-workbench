@@ -61,6 +61,40 @@ window.Pages.settings = (function () {
   var STEPS_OPT = ["10", "15", "20", "25"];
   var RATIO_OPT = ["16:9", "3:4", "1:1"];
 
+  function mainImageControls(s) {
+    s = s || {};
+    var inherited = s.image_model === "moss" ? "moss" : "krea2";
+    var characterModel = (s.character_image_model || inherited) === "moss" ? "moss" : "krea2";
+    var sceneModel = (s.scene_image_model || inherited) === "moss" ? "moss" : "krea2";
+    var usesMoss = characterModel === "moss" || sceneModel === "moss";
+    var quality = s.image_quality === "4k" ? "4k" : "2x";
+    return '<span><span class="option-label"><span>人设图模型</span></span>' +
+      '<select id="psImageModel" style="width:100%;height:36px">' +
+      '<option value="moss"' + (characterModel === "moss" ? ' selected' : '') + '>Moss</option>' +
+      '<option value="krea2"' + (characterModel === "krea2" ? ' selected' : '') + '>Krea2</option></select></span>' +
+      '<span><span class="option-label"><span>场景图模型</span></span>' +
+      '<select id="psSceneImageModel" style="width:100%;height:36px">' +
+      '<option value="moss"' + (sceneModel === "moss" ? ' selected' : '') + '>Moss</option>' +
+      '<option value="krea2"' + (sceneModel === "krea2" ? ' selected' : '') + '>Krea2</option></select></span>' +
+      '<span id="psImageQualityWrap"' + (usesMoss ? '' : ' hidden') + '>' +
+      '<span class="option-label"><span>Moss清晰度（人设／场景共用）</span></span>' +
+      '<select id="psImageQuality" style="width:100%;height:36px"' + (usesMoss ? '' : ' disabled') + '>' +
+      '<option value="2x"' + (quality === "2x" ? ' selected' : '') + '>2倍（推荐）</option>' +
+      '<option value="4k"' + (quality === "4k" ? ' selected' : '') + '>4K（更慢）</option></select></span>';
+  }
+
+  function mainImageSelection(s) {
+    s = s || {};
+    var inherited = s.image_model === "moss" ? "moss" : "krea2";
+    var characterModel = (document.getElementById("psImageModel") || {}).value || s.character_image_model || inherited;
+    var sceneModel = (document.getElementById("psSceneImageModel") || {}).value || s.scene_image_model || inherited;
+    var quality = (document.getElementById("psImageQuality") || {}).value || s.image_quality;
+    characterModel = characterModel === "moss" ? "moss" : "krea2";
+    sceneModel = sceneModel === "moss" ? "moss" : "krea2";
+    return {image_model: characterModel, char_model: characterModel, scene_model: sceneModel,
+            image_quality: quality === "4k" ? "4k" : "2x"};
+  }
+
   function optLabel(label, kind, sourceId, panelId, sexId) {
     return '<span class="option-label"><span>' + esc(label) + '</span>' +
       '<button type="button" class="option-detail-btn" data-option-detail="' + esc(kind) +
@@ -1154,6 +1188,7 @@ window.Pages.settings = (function () {
       '<div class="settings-choice-grid">' +
       '<span>' + optLabel("世界类型", "world", "psWorld", "psOptionDetail") + sel("psWorld", D.world_types, s.world_type) + "</span>" +
       '<span>' + optLabel("画风", "style", "psStyle", "psOptionDetail") + sel("psStyle", D.styles.map(function (x) { return x.name; }), s.style) + "</span>" +
+      mainImageControls(s) +
       /* 【五维改造 2026-08-29】影片类型＝叙事结构、角色审美＝长相体型、视点＝摄影机身份。
          选项由 /api/kits/options 提供，没取到时退回只有「自动」的单项，不影响老项目。 */
       /* 默认节奏（影片类型）下拉已删（用户 2026-09-06 定）：节奏由结构表每话自带 */
@@ -1410,6 +1445,40 @@ window.Pages.settings = (function () {
   }
 
   function wire(main, st, s) {
+    var imageSave = Promise.resolve();
+    function saveImageSelection() {
+      var selected = mainImageSelection(s);
+      imageSave = imageSave.catch(function () {}).then(function () {
+        return window.api.post("/api/project/settings", {story_id: st.storyId, settings: {
+          image_model: selected.image_model,
+          character_image_model: selected.char_model,
+          scene_image_model: selected.scene_model,
+          image_quality: selected.image_quality
+        }});
+      }).then(function () {
+        s.image_model = selected.image_model;
+        s.character_image_model = selected.char_model;
+        s.scene_image_model = selected.scene_model;
+        s.image_quality = selected.image_quality;
+      });
+      imageSave.catch(function (e) { UI.toast(e.message, "err"); });
+      return imageSave;
+    }
+    function changeImageModel() {
+      var selected = mainImageSelection(s);
+      var show = selected.char_model === "moss" || selected.scene_model === "moss";
+      var wrap = document.getElementById("psImageQualityWrap");
+      var quality = document.getElementById("psImageQuality");
+      if (wrap) wrap.hidden = !show;
+      if (quality) quality.disabled = !show;
+      return saveImageSelection();
+    }
+    ["psImageModel", "psSceneImageModel"].forEach(function (id) {
+      var modelSelect = document.getElementById(id);
+      if (modelSelect) modelSelect.onchange = changeImageModel;
+    });
+    var imageQuality = document.getElementById("psImageQuality");
+    if (imageQuality) imageQuality.onchange = saveImageSelection;
     renderPlan(main, st);              /* 整部规划卡（P287）：想法 → 整部方案 → 改/确认 → 逐话生成 */
     function syncCameraOwner() {
       var control = document.getElementById("psCameraOwnerControl");
@@ -1578,7 +1647,12 @@ window.Pages.settings = (function () {
         var v = (document.getElementById(id) || {}).value || "";
         return v === "自动" ? "" : v;
       };
+      var imageOptions = mainImageSelection(s);
       var settings = {
+        image_model: imageOptions.image_model,
+        character_image_model: imageOptions.char_model,
+        scene_image_model: imageOptions.scene_model,
+        image_quality: imageOptions.image_quality,
         genre: pick("psGenre"),
         look: "",   /* 角色审美已撤：由画风推出真实组/夸张组（2026-09-04） */
         pov: pick("psPov"),
@@ -1619,7 +1693,9 @@ window.Pages.settings = (function () {
       var input = {ep:+((document.getElementById("mkEp") || {}).value || manualEp), brief:(document.getElementById("plIdea") || {}).value || "",
         notes:(document.getElementById("plNotes") || {}).value || "",
         shooting_notes:(document.getElementById("plShoot") || {}).value || ""};
-      return window.api.post("/api/project/settings", currentProjectPayload()).then(function (j) {
+      return imageSave.catch(function () {}).then(function () {
+        return window.api.post("/api/project/settings", currentProjectPayload());
+      }).then(function (j) {
         /* skipRoute=true：只刷新顶部项目名下拉，不重渲染本页（重渲染会把
            置灰计时中的「全部生成」按钮换成新按钮，看着像点了没反应）。 */
         if (window.Shell && window.Shell.reloadStories) window.Shell.reloadStories(true);
@@ -1706,7 +1782,7 @@ window.Pages.settings = (function () {
         if (!window.confirm("保存当前人物卡，并严格按照现在的选项和文字生成一张新设计图？")) return;
         window.UIActions.progress.busy("正在保存当前人设…");
         if (b) b.disabled = true;
-        return Promise.resolve(doSave())
+        return imageSave.then(doSave)
           /* 手改提示词优先级最高；这里必须先清掉，否则旧提示词会覆盖刚保存的人物卡。 */
           .then(function () {
             return window.api.post("/api/asset/prompt", {
@@ -1760,9 +1836,9 @@ window.Pages.settings = (function () {
           /* 出图 2~4 分钟。必须有进度，否则用户以为按钮坏了 */
           window.UIActions.progress.busy("正在生成设定图…");
           if (b) { b.disabled = true; }
-          return window.api.post("/api/produce",
+          return imageSave.then(function () { return window.api.post("/api/produce",
             { story_id: st.storyId, kind: kind === "scene" ? "scene_master" : "character_master",
-              owner_id: ownerId })
+              owner_id: ownerId }); })
             .then(function () {
               return new Promise(function (res, rej) {
                 var t = setInterval(function () {
@@ -2290,9 +2366,9 @@ window.Pages.settings = (function () {
         var pkind = b.getAttribute("data-pkind") || "character_master";
         box.innerHTML = '<div class="sub">' + (pkind === "character_master"
           ? '读取中…尚无提示词时由本地千问整理文字，此处只写词、不出图。' : '读取中…') + '</div>';
-        window.api.post("/api/asset/prompt",
+        imageSave.then(function () { return window.api.post("/api/asset/prompt",
                         { story_id: st.storyId, owner_id: oid, kind: pkind,
-                          generate: pkind === "character_master" })
+                          generate: pkind === "character_master" || mainImageSelection(s).scene_model === "moss" }); })
           .then(function (j) {
             /* api.post 已经把 {ok,data} 拆成 data 了，这里不要再拆一层 */
             var d0 = j || {};
@@ -2321,7 +2397,7 @@ window.Pages.settings = (function () {
       };
       q("[data-pgen]").onclick = function (ev) {
         var btn = ev.target; btn.disabled = true; btn.textContent = "出图中…";
-        save().then(function () {
+        imageSave.then(save).then(function () {
           return window.api.post("/api/produce", { story_id: st.storyId,
             kind: kind, owner_id: oid, prompt: ta.value });
         }).then(function () {

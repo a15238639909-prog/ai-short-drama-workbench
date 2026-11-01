@@ -258,11 +258,12 @@ class CollectiveImageTests(unittest.TestCase):
         self.assertIn('蓝色工作服', prompt)
         self.assertIn('自然构图', prompt)
         self.assertIn('所有成员', prompt)
-        self.assertIn('不使用四格', prompt)
+        self.assertIn('单幅连续的自然群像', prompt)
+        self.assertNotRegex(prompt, r'不使用|不增加|不显示|禁止|不得|不要')
 
     def test_unknown_count_sheet_has_no_invented_exact_count(self):
         prompt = groups.group_sheet_prompt({'name': '游客们', 'entity_type': 'group'})
-        self.assertIn('原文未规定精确人数', prompt)
+        self.assertIn('人数呈现为自然群像', prompt)
         self.assertNotRegex(prompt, r'\d+名')
 
     def test_individual_trait_design_never_rewrites_group(self):

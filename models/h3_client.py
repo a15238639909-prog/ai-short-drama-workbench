@@ -431,11 +431,10 @@ def generate(mode, prompt, images=None, seconds=15, ratio=None, seed=None, timeo
                 receipt.update(status='completed', result=result)
                 _save_receipt(recovery_key, receipt)
                 return result
-            if receipt.get('status') == 'submitting':
-                raise RuntimeError('H3提交结果待核对，已保存任务编号；继续查询原任务，不重复生成')
-            # The service had acknowledged this exact id. If both the active
-            # queue and history lost it (e.g. service restart), no job remains.
-            resume = False
+            # Missing service history does not prove the job never ran. Keep
+            # the acknowledged id too; a batch may continue other slots while
+            # this one awaits recovery, without charging a second submission.
+            raise RuntimeError('H3提交结果待核对，已保存任务编号；继续查询原任务，不重复生成')
     if resume:
         meta = receipt['meta']
         _t0 = float(receipt.get('started_at') or time.time())

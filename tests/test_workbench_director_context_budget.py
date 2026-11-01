@@ -75,6 +75,7 @@ class DirectorContextBudgetTests(unittest.TestCase):
             return dict(prompt='已编译测试词')
 
         with patch.object(release.original, 'compile_reply', side_effect=compile_reply), \
+                patch.object(release.legacy, 'prompt_problems', return_value=[]), \
                 patch.object(release.identity_continuity, 'apply_compiled_authority', side_effect=lambda value: value):
             prompt, compiled, fallback = release._request(query, request, {}, refs, trace)
         self.assertEqual(prompt, '已编译测试词')
@@ -96,6 +97,7 @@ class DirectorContextBudgetTests(unittest.TestCase):
             return '格式错误' if len(sent) == 1 else '{}'
 
         with patch.object(release.original, 'compile_reply', return_value=dict(prompt='修复后的测试词')) as compiler, \
+                patch.object(release.legacy, 'prompt_problems', return_value=[]), \
                 patch.object(release.identity_continuity, 'apply_compiled_authority', side_effect=lambda value: value):
             release._request(query, request, {}, refs, trace)
         self.assertEqual(len(sent), 2)

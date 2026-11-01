@@ -176,9 +176,9 @@ class SegmentRenderRecoveryTests(unittest.TestCase):
         self.assertEqual(rendered['render_request']['snapshot_origin'], 'legacy_reconstructed')
         self.scope.assert_not_called()
 
-    def test_new_prompt_without_scope_marker_does_not_claim_policy_applied(self):
+    def test_new_scope_policy_metadata_does_not_depend_on_visible_marker(self):
         rendered = self.render()
-        self.assertEqual(rendered['reference_scope_version'], 'legacy')
+        self.assertEqual(rendered['reference_scope_version'], vc.REFERENCE_SCOPE_VERSION)
 
     def previous_fixture(self):
         video = self.directory / 'preceding_segment.mp4'

@@ -61,20 +61,19 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
             side_effect=ValueError('最终视频提示词含未绑定的图片编号，已暂停生成')))
         return sa._first_video_chain('STORY_SAFE_FIXTURE', job, ep=1, n=None, approved=True)
 
-    def test_zero_clips_reports_actual_failure_and_unexecuted_segments(self):
+    def test_zero_clips_reports_each_failure_after_trying_all_segments(self):
         job = self.job()
         self.assertEqual(self.chain(job), [])
-        self.render.assert_called_once()
+        self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2, 3])
         self.assertEqual(job['saved_video_count'], 0)
-        self.assertEqual(job['failed_render_segments'], [1])
-        self.assertEqual(job['unexecuted_render_segments'], [2, 3])
+        self.assertEqual(job['failed_render_segments'], [1, 2, 3])
+        self.assertEqual(job['unexecuted_render_segments'], [])
         self.assertEqual(job['pending_render_segments'], [1, 2, 3])
         self.assertIn('当前0/3段视频', job['partial'])
-        self.assertIn('第1段提交前检查失败', job['partial'])
-        self.assertIn('第2、3段尚未执行', job['partial'])
+        self.assertIn('第1、2、3段待重试', job['partial'])
         self.assertIn('未绑定的图片编号', job['partial'])
         self.assertNotIn('已保存视频保留', job['partial'])
-        self.assertNotIn('本轮已处理', job['partial'])
+        self.assertIn('本轮已处理全部目标段', job['partial'])
         sa._finish_job(job)
         self.assertEqual(job['status'], 'failed')
         self.assertEqual(job['err'], job['failure_reason'])
@@ -83,11 +82,11 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
 
     def test_actual_saved_clips_are_preserved_and_counted(self):
         job = self.job()
-        self.assertEqual(self.chain(job, saved=(1,), failure_at=2), [])
-        self.assertEqual([call.args[3] for call in self.render.call_args_list], [2])
+        self.assertEqual(self.chain(job, saved=(1,), failure_at=2), ['clip1.mp4'])
+        self.assertEqual([call.args[3] for call in self.render.call_args_list], [2, 3])
         self.assertEqual(job['saved_video_segments'], [1])
         self.assertEqual(job['saved_video_count'], 1)
-        self.assertEqual(job['unexecuted_render_segments'], [3])
+        self.assertEqual(job['unexecuted_render_segments'], [])
         self.assertIn('已保存1/3段', job['partial'])
         self.assertIn('已保存视频保留', job['partial'])
         sa._finish_job(job)
@@ -99,9 +98,9 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
         job = self.job()
         self.chain(job, saved=(3,))
         self.assertEqual(job['saved_video_segments'], [3])
-        self.assertEqual(job['unexecuted_render_segments'], [2])
+        self.assertEqual(job['unexecuted_render_segments'], [])
         self.assertEqual(job['pending_render_segments'], [1, 2])
-        self.render.assert_called_once()
+        self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2])
 
     def test_confirmed_pre_submit_failure_clears_only_false_inflight_marker(self):
         job = self.job()
@@ -121,10 +120,9 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
                 try:
                     job = self.job()
                     self.chain(job, request=dict(key='persisted-original-request', status=state))
-                    self.assertEqual(job['_recovery']['external_inflight'], 'video:1:1')
-                    self.assertEqual(job['render_submission_state'], 'request_exists')
-                    self.assertEqual(job['failure_stage'], 'video_render')
-                    self.render.assert_called_once()
+                    self.assertEqual(job['_recovery']['pending_external']['video:1:1']['request_key'], 'persisted-original-request')
+                    self.assertEqual(job['pending_render_requests']['video:1:1']['status'], state)
+                    self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2, 3])
                 finally:
                     self.stack = previous
 
@@ -139,8 +137,8 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
     def test_malformed_request_metadata_is_unknown_not_proof_of_no_submission(self):
         job = self.job()
         self.chain(job, request='unreadable-request-metadata')
-        self.assertEqual(job['_recovery']['external_inflight'], 'video:1:1')
-        self.assertEqual(job['render_submission_state'], 'unknown')
+        self.assertEqual(job['_recovery']['pending_external']['video:1:1']['status'], 'unknown')
+        self.assertEqual(job['pending_render_requests']['video:1:1']['request_key'], '')
         self.assertIn('未绑定的图片编号', job['failure_reason'])
 
     def test_all_valid_existing_clips_reuse_without_render_and_may_continue_merge(self):
@@ -151,7 +149,7 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
         self.assertNotIn('partial', job)
         self.assertNotIn('failed_render_segments', job)
 
-    def test_partial_registered_run_does_not_merge_or_mark_completed(self):
+    def test_partial_registered_run_checks_saved_clips_for_merge_without_claiming_complete(self):
         from cores import shot_edit, manual_story
         job = self.job(_recovery=dict(phase='render', request=dict(ep=1, stage='video', n=None)))
 
@@ -165,7 +163,7 @@ class WorkbenchPartialStatusTests(unittest.TestCase):
                 patch.object(manual_story, 'enabled', return_value=False), patch.object(shot_edit, 'approve'), \
                 patch.object(sa, '_merge_generated_episode') as merge:
             sa._run_registered_make('STORY_SAFE_FIXTURE', job)
-        merge.assert_not_called()
+        merge.assert_called_once()
         self.assertEqual(job['status'], 'failed')
         self.assertEqual(job['err'], '图片编号未绑定')
 

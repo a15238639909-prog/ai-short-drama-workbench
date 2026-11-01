@@ -450,8 +450,8 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                            'last_end_unit': len(units), 'task': '只规划下方units；whole_story仅用于理解背景。'},
                        'units': units,
                        'continuity_contract': {
-                           'source_presence': contract.presence_evidence(event, chars),
-                           'rules': 'cast包含本镜实际行动者和说话人，以及原文视线目标、明确同框对象的身份参考；参考槽位不要求全员出镜。仅被提及、被寻找或已失踪的人不能因此在场。承接state_context中的人数、姿势、携带关系、道具归属和地点；发生变化必须有原文动作依据。end_state明确留下谁、谁离开以及手中物和姿势，不能把整个项目人物表当作本镜在场表。'},
+                           'source_presence': contract.presence_evidence(event, chars, context='\n'.join(events[:index])),
+                           'rules': 'cast包含本镜实际行动者和说话人，以及原文视线目标、明确同框对象的身份参考；参考槽位不要求全员出镜。仅被提及、被寻找或已失踪的人不能因此在场。承接state_context中的人数、姿势、携带关系、道具归属和地点；发生变化必须有原文动作依据。end_state明确留下谁、谁离开以及手中物和姿势，不能把整个项目人物表当作本镜在场表。复杂穿脱、包裹和交接按可执行动作量独立留时；动作较多的镜头分配更多秒，简单反应或空镜较短；输入的手动时间边界保持。'},
                        'dialogue': [{'id': u['dialogue_id'], 'speaker': dialogue[u['dialogue_id']-1][0],
                                      'text': dialogue[u['dialogue_id']-1][1]}
                                     for u in units if u['dialogue_id']]}
@@ -474,7 +474,8 @@ def plan(pics, scenes, chars, q, on_step=None, prev_ledger='', debug_path=''):
                     if shot['scene_name'] not in places or not set(cast) <= set(names):
                         raise ValueError('地点和人物须来自给定卡片')
                     current = units[cursor:end]
-                    presence = contract.presence_evidence('\n'.join(u['text'] for u in current), chars)
+                    presence = contract.presence_evidence('\n'.join(u['text'] for u in current), chars,
+                        context='\n'.join(events[:index]) + '\n' + '\n'.join(u['text'] for u in units[:cursor]))
                     # Keep explicit departures active in later shots, until a
                     # new action/return in the source establishes presence again.
                     progress = contract.presence_evidence(state + '\n' + '\n'.join(u['text'] for u in units[:end]), chars)
@@ -561,7 +562,7 @@ def _clip(sl, number, chars, speakers, prior, settings, direction):
     # Re-evaluate frozen slices too: an earlier source-contract version may
     # already be valid while its cast omitted a hand, silhouette or background
     # person explicitly visible in the camera description.
-    presence=contract.presence_evidence(sl.get('text'), chars)
+    presence=contract.presence_evidence(sl.get('text'), chars, context=prior)
     progress=contract.presence_evidence('\n'.join((prior or '', d.get('start_state') or '', sl.get('text') or '')), chars)
     presence['absent']=list(dict.fromkeys(progress['absent'] + [n for n in (d.get('presence') or {}).get('absent', [])
                                                              if n not in presence['actors']]))
@@ -685,27 +686,25 @@ def assemble(data, clip):
         role='environment' if r['role']=='scene' else 'character'
         definitions.append('<Subject %d> is %s, the %s from <Picture %d>.' % (r['subject'],r['name'],role,r['picture']))
         if r['role']=='scene':
-            definitions[-1] += ' Reference scope: fixed architecture, fixed furniture layout and lighting only; movable props and any people in the image are not fixed scene content.'
+            definitions[-1] += ' 场景参考提供固定建筑、陈设布局、材质与现场光。'
         else:
-            definitions[-1] += ' Reference scope: character identity, face, hair and clothing only; pose, hand occupancy and carried objects follow the current action and preceding state.'
+            definitions[-1] += ' 人物身份、面容与发型沿用对应参考图。'
             if r.get('entity_type') == 'group':
-                definitions[-1] += ' This subject is a collective group, not one individual. Preserve the source-defined group count%s, appearance and shared positions: %s.' % (
+                definitions[-1] += ' This subject is the source-defined group%s, with shared appearance: %s.' % (
                     ' (%s people)' % r['group_count'] if r.get('group_count') else '', r.get('group_appearance') or 'follow the current source')
         if r.get('voice') and r['name'] in {u.get('speaker') for u in dialogue}:
             definitions[-1] += ' Voice reference: '+str(r['voice'])+'.'
     for collective in clip.get('collectives') or []:
         if collective.get('members') and collective.get('complete_members', True):
-            definitions.append('The collective "%s" consists of %s; these are the same source-defined people, not additional background duplicates. Use their own identities and voices when speaking together.' % (
+            definitions.append('The collective "%s" consists of %s, with their individual identities and voices.' % (
                 collective['name'], ' and '.join(collective['subject_labels']) or 'the source-defined members'))
-    object_scope = ('Movable object count, location, holder and completed actions follow the confirmed source and preceding state, '
-                    'advanced only by the written actions; do not duplicate an object or restore its earlier placement from a reference image.')
     fields=dict(subject_definitions='\n'.join(definitions),summary='[reference generation] '+raw['summary'],
         retention_analysis='\n'.join(
-            ('<Subject %d> (appears in [Shot 1]): partially_preserved - retain fixed architecture, fixed furniture layout and lighting only. ' % r['subject'] + object_scope)
+            ('<Subject %d>: partially_preserved - fixed architecture, furniture layout, materials and lighting.' % r['subject'])
             if r['role']=='scene' else
-            ('<Subject %d> (appears in [Shot 1]): fully_preserved - character identity, face, hair and clothing only; pose and hand occupancy follow the current action and preceding state.' % r['subject'])
+            ('<Subject %d>: fully_preserved - character identity, face and hair.' % r['subject'])
             if r['subject_label'] in text else
-            ('<Subject %d> (identity reference only): fully_preserved - retain identity, face, hair and clothing if visible; pose and hand occupancy follow the current action and preceding state; no additional entrance is specified.' % r['subject'])
+            ('<Subject %d>: character identity reference.' % r['subject'])
             for r in clip['references']),
         detailed_description=raw['style']+'\n[Shot 1]\nFrom 0 to %g seconds, '%clip['seconds']+text,
         overall_soundscape=raw['overall_soundscape'], non_diegetic_music='N/A')
@@ -945,6 +944,73 @@ def make_prompts(slices, chars, scenes, q, settings=None, start=0, count=None, o
     return out
 
 
+def _prompt_speaker_problems(prompt, source_text):
+    """Check saved speech against explicit identities, not vocal-ID numbers.
+
+    Subject slots follow image order; S labels follow first vocal appearance
+    and may be nonnumeric in saved adapters.  Only the actual definition and
+    the identity attached to each dialogue occurrence establish its speaker.
+    """
+    from . import reference_bindings
+    definitions, problems = {}, []
+    for line in reference_bindings._definition_lines(prompt):
+        match = re.match(r'^<Subject\s*(\d+)>\s*is\s+(.+?),\s*the\s+'
+                         r'(character|environment)(?:\s+from\s+<Picture\s*(\d+)>)?(?=[.\s]|$)', line)
+        if match:
+            number, name, role, picture = match.groups()
+        else:
+            match = re.match(r'^<Subject\s*(\d+)>\s*(.+?)是\s*<Picture\s*(\d+)>', line)
+            if not match:
+                continue
+            number, name, picture = match.groups()
+            role = 'character'
+        number, identity = int(number), (name.strip(), role, int(picture) if picture else None)
+        if number in definitions and definitions[number] != identity:
+            problems.append('视频提示词Subject %d重复绑定了不同人物或素材' % number)
+        else:
+            definitions[number] = identity
+    # Named collective speech retains the exact source group while its own
+    # member subjects provide identities; it is not one invented extra person.
+    collectives = {}
+    for match in re.finditer(r'(?m)^The collective "([^"\n]+)" consists of ([^;\n]+)', prompt):
+        collectives[match[1]] = set(map(int, re.findall(r'<Subject\s*(\d+)>', match[2])))
+    people = [dict(name=identity[0]) for identity in definitions.values() if identity[1] == 'character']
+    people.extend(dict(name=name, entity_type='group', group_members=[definitions[number][0]
+        for number in members if number in definitions]) for name, members in collectives.items())
+    people.extend(dict(name=name) for name in re.findall(r'The source voice "([^"\n]+)"', prompt))
+    _, source, _ = contract.prepare_source(source_text, people)
+    spoken = list(re.finditer(r'<d>\[Chinese\]\s*(.*?)</d>', prompt, re.S))
+    previous_end = 0
+    for index, (match, (speaker, _)) in enumerate(zip(spoken, source), 1):
+        # Compilers put every vocal event on its own line or after an explicit
+        # At anchor. Earlier action references must not become its speaker.
+        delivery = prompt[previous_end:match.start()].rsplit('\n', 1)[-1]
+        previous_end = match.end()
+        anchors = list(re.finditer(r'\bAt\s+\d{1,2}:\d{2}(?:\.\d+)?\s*,', delivery))
+        if anchors:
+            delivery = delivery[anchors[-1].end():]
+        voice = re.search(r'The source voice "([^"\n]+)"', delivery)
+        collective = re.search(r'The collective "([^"\n]+)" comprising\b', delivery)
+        labels = set(map(int, re.findall(r'<Subject\s*(\d+)>', delivery)))
+        if collective:
+            expected = collectives.get(collective[1])
+            valid = (collective[1] == speaker and bool(expected) and labels == expected
+                     and all(definitions.get(number, ('', ''))[1] == 'character' for number in labels))
+        elif voice:
+            valid = (voice[1] == speaker or
+                     (speaker == '待核对说话人' and voice[1] == '未具名说话者')) and not labels
+        elif labels:
+            valid = (len(labels) == 1 and all(
+                definitions.get(number, ('', ''))[:2] == (speaker, 'character') for number in labels))
+        else:
+            # Off-screen speech in the Chinese adapter has no Subject slot.
+            # It must never borrow a visible character, but needs no fake image.
+            valid = not any(identity[:2] == (speaker, 'character') for identity in definitions.values())
+        if not valid:
+            problems.append('视频提示词第%d句说话者绑定与当前原文「%s」不一致' % (index, speaker))
+    return problems, source
+
+
 def prompt_problems(prompt, source_text, seconds, scene):
     """Six-field text uses <d> dialogue, not the legacy Chinese 镜头N parser."""
     from . import oral_story
@@ -952,10 +1018,11 @@ def prompt_problems(prompt, source_text, seconds, scene):
     departure = contract.unsupported_departure(prompt, source_text)
     if departure:
         problems.append(departure)
-    _, source, _=contract.prepare_source(source_text)
+    identity_problems, source = _prompt_speaker_problems(prompt, source_text)
     spoken=re.findall(r'<d>\[Chinese\]\s*(.*?)</d>',prompt,re.S)
     if spoken != [line for _,line in source]:
         problems.append('视频提示词对白与当前分段原话或顺序不一致')
+    problems.extend(identity_problems)
     if any(field+':' not in prompt for field in FIELDS):
         problems.append('视频提示词六字段不完整')
     if not 4 <= float(seconds or 0) <= 15:
@@ -970,7 +1037,7 @@ def with_pose_reference(prompt, number, mode):
     if mode == 'none':
         return prompt
     role = ('The first frame continues from this image; current action advances from it.' if mode == 'first' else
-            'Use only room geometry and light continuity; framing and current action follow this shot.' if mode == 'space' else
+            'The image provides room geometry and lighting reference.' if mode == 'space' else
             'Use spatial relationships at the previous ending as context; current action follows this shot.')
     definition='<Picture %d> is the previous rendered frame. %s\n' % (number,role)
     prompt=prompt.replace('\n\nsummary:', '\n'+definition+'\nsummary:', 1)

@@ -24,7 +24,9 @@ def fixture():
                 blocks=[[0, seconds / 2, '阿岚扶稳茶杯。', []],
                         [seconds / 2, seconds, '【D%d】%s：%s' % (did, speaker, text), [did]]],
                 says=[[speaker, text]])))
-    settings = dict(style='写实摄影', _director_reference_paths={name: __file__ for name in ('阿岚', '顾亭', '竹庭')},
+    # These regressions retain the accepted legacy director/rollback contract.
+    # The new default source-owned route has its own integration suite.
+    settings = dict(video_action_compiler='legacy', style='写实摄影', _director_reference_paths={name: __file__ for name in ('阿岚', '顾亭', '竹庭')},
                     _director_user_brief='在竹庭扶稳茶杯并自然交流。')
     return slices, cards, settings
 
@@ -146,12 +148,91 @@ class OriginalDirectorReleaseTests(unittest.TestCase):
             value['integrated_multimodal_description'] = '[Shot 1] 远景，薄雾沿溪水自然移动，持续四秒。'
             return json.dumps(value, ensure_ascii=False)
         rows = release.make_prompts([sl], [], ['山谷'], q,
-            settings=dict(_director_reference_paths={'山谷': __file__}, style='写实摄影'))
+            settings=dict(video_action_compiler='legacy', _director_reference_paths={'山谷': __file__}, style='写实摄影'))
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['seconds'], 4)
         self.assertEqual(rows[0]['chars'], [])
         self.assertNotIn('character from', rows[0]['prompt'])
         self.assertIn('the environment from <Picture 1>', rows[0]['prompt'])
+
+    def test_final_preflight_failure_is_repaired_before_returning_to_renderer(self):
+        slices, cards, settings = fixture()
+        attempts = []
+        def query(system, user, **kwargs):
+            payload = json.loads(user)
+            attempts.append(payload)
+            value = response(payload)
+            if len(attempts) == 1:
+                value['integrated_multimodal_description'] += '\n阿岚走出门外。'
+            return json.dumps(value, ensure_ascii=False)
+        rows = release.make_prompts(slices, cards, ['竹庭'], query, settings=settings, count=1)
+        self.assertEqual(len(attempts), 2)
+        self.assertIn('离场', attempts[1]['format_error'])
+        self.assertFalse(rows[0]['source_fallback'])
+        self.assertNotIn('走出门外', rows[0]['prompt'])
+
+    def test_final_preflight_exhaustion_uses_exact_source_and_continues(self):
+        slices, cards, settings = fixture()
+        calls = []
+        def query(system, user, **kwargs):
+            payload = json.loads(user)
+            calls.append(payload)
+            value = response(payload)
+            value['integrated_multimodal_description'] += '\n阿岚走出门外。'
+            return json.dumps(value, ensure_ascii=False)
+        rows = release.make_prompts(slices, cards, ['竹庭'], query, settings=settings, count=1)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(rows[0]['source_fallback'])
+        self.assertNotIn('走出门外', rows[0]['prompt'])
+        self.assertEqual(rows[0]['prompt'].count('慢一点。'), 1)
+        self.assertEqual(release.legacy.prompt_problems(rows[0]['prompt'],
+            slices[0]['text'], slices[0]['seconds'], '竹庭'), [])
+
+    def test_auxiliary_trace_access_denied_keeps_completed_prompt(self):
+        slices, cards, settings = fixture()
+        def query(system, user, **kwargs):
+            return json.dumps(response(json.loads(user)), ensure_ascii=False)
+        with patch.object(Path, 'mkdir', side_effect=PermissionError('[WinError 5] 拒绝访问')):
+            rows = release.make_prompts(slices, cards, ['竹庭'], query,
+                settings=settings, count=1, trace_dir='unused')
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['source_fallback'])
+        self.assertTrue(any('日志未保存' in warning for warning in rows[0]['problems']))
+
+    def test_unavailable_text_service_uses_confirmed_source_for_each_slot(self):
+        slices, cards, settings = fixture()
+        calls = []
+        def unavailable(*args, **kwargs):
+            calls.append(1)
+            raise TimeoutError('本地文字服务连接超时')
+        rows = release.make_prompts(slices, cards, ['竹庭'], unavailable, settings=settings)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row['source_fallback'] for row in rows))
+        self.assertEqual(rows[0]['prompt'].count('慢一点。'), 1)
+        self.assertEqual(rows[1]['prompt'].count('这回稳了。'), 1)
+
+    def test_game_guard_is_never_converted_to_source_fallback(self):
+        slices, cards, settings = fixture()
+        def blocked(*args, **kwargs):
+            raise RuntimeError('PUBG正在运行')
+        with self.assertRaisesRegex(RuntimeError, 'PUBG'):
+            release.make_prompts(slices, cards, ['竹庭'], blocked, settings=settings, count=1)
+
+    def test_optional_observation_os_error_continues_but_user_stop_propagates(self):
+        slices, cards, settings = fixture()
+        def query(system, user, **kwargs):
+            return json.dumps(response(json.loads(user)), ensure_ascii=False)
+        def unavailable(index):
+            raise TimeoutError('可选观察超时')
+        rows = release.make_prompts(slices, cards, ['竹庭'], query,
+            settings=settings, count=1, actual_state_for=unavailable)
+        self.assertEqual(len(rows), 1)
+        def canceled(index):
+            raise RuntimeError('已取消')
+        with self.assertRaisesRegex(RuntimeError, '已取消'):
+            release.make_prompts(slices, cards, ['竹庭'], query,
+                settings=settings, count=1, actual_state_for=canceled)
 
 
 if __name__ == '__main__':

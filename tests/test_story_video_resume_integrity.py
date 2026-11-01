@@ -89,7 +89,7 @@ class StoryResumeIntegrityTests(unittest.TestCase):
         core.action(case.task['id'], 'approve')
         case.task['status'] = 'running'
         def pause_after_first(label, done):
-            if label == '已完成1/2段':
+            if label in ('已完成1/2段', '已保存1/2段'):
                 case.task['pause_requested'] = True
         case.after_step = pause_after_first
         with self.assertRaises(core.ControlStop):

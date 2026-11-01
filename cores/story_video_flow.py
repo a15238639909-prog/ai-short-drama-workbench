@@ -1,6 +1,8 @@
 """Opt-in flow improvements; no inference, media mutation or guessed observations."""
 import copy
 
+from . import wardrobe_continuity as wardrobe
+
 PROFILE = 'story-video-flow-v2'
 
 
@@ -64,6 +66,10 @@ def compact_request(request, samples):
         '最后一张endpoint图记录末态：人物的相对位置、朝向、姿势、持物和环境；看不清写unknown，'
         '不把中间帧或开头状态复制为末态。人物外貌只记识别所需变化，不重复长篇衣饰。'
         '这三张图不足以证明完整剧情或口型；completed保持证据边界。')
+    if wardrobe.enabled(payload):
+        system += ('\nwardrobe_events只在顶层记录本次过程图片有明确前后变化证据的穿脱或换装，'
+            '不能把单独末帧颜色或外观差异当成穿脱；endpoint_state只记录实际最后一帧，'
+            '不在其中臆造before、动作或衣物去向，遮挡保持未知。')
     return system, payload, schema
 
 

@@ -102,6 +102,79 @@ class WorkbenchRuntimeTests(unittest.TestCase):
             self.assertTrue(runtime.enabled(self.sid,1))
             paths.assert_called_once_with(self.sid)
 
+    def test_segment_failure_keeps_later_work_and_reports_missing_slot(self):
+        from api import segment_api
+        rows = [dict(no=no, prompt='saved words') for no in range(1, 5)]
+        saga_core.save_ep_timeline(self.sid,1,dict(scenes=[dict(no=1,segments=rows)]))
+        attempted, errors, complete = [], [], []
+        def render(scene, no):
+            attempted.append(no)
+            if no == 2:
+                raise RuntimeError('recoverable individual request')
+            return dict(video='clip%d.mp4' % no)
+        with patch.object(segment_api,'is_segment_current',return_value=False), \
+             patch.object(runtime,'explicit_opening'), \
+             patch.object(runtime,'after_render',side_effect=ValueError('optional observation broken')):
+            outputs = runtime.run_sequence(self.sid,1,[1,2,3,4],render=render,
+                on_error=lambda no,error: errors.append((no,error)),
+                on_complete=lambda no,reused: complete.append(no))
+        self.assertEqual(attempted,[1,2,3,4])
+        self.assertEqual(outputs,['clip1.mp4','clip3.mp4','clip4.mp4'])
+        self.assertEqual(complete,[1,3,4])
+        self.assertEqual([no for no,_ in errors],[2])
+
+    def test_missing_writer_result_or_reference_only_skips_affected_slot(self):
+        from api import segment_api
+        rows = [dict(no=2,prompt='saved words'), dict(no=3,prompt='saved words')]
+        saga_core.save_ep_timeline(self.sid,1,dict(scenes=[dict(no=1,segments=rows)]))
+        errors, rendered = [], []
+        def prepare(no):
+            if no == 2:
+                raise ValueError('one missing reference')
+        with patch.object(segment_api,'is_segment_current',return_value=False), \
+             patch.object(authoring,'make_h3_prompts',return_value=[]), \
+             patch.object(runtime,'explicit_opening'), patch.object(runtime,'after_render'):
+            outputs = runtime.run_sequence(self.sid,1,[1,2,3],prepare=prepare,
+                render=lambda sc,no: (rendered.append(no) or dict(video='three.mp4')),
+                on_error=lambda no,error: errors.append(no))
+        self.assertEqual(errors,[1,2])
+        self.assertEqual(rendered,[3])
+        self.assertEqual(outputs,['three.mp4'])
+
+    def test_control_stop_and_game_guard_never_turn_into_continue(self):
+        from api import segment_api
+        from cores.runtime_reset import Cancelled
+        rows = [dict(no=no,prompt='saved words') for no in (1,2)]
+        saga_core.save_ep_timeline(self.sid,1,dict(scenes=[dict(no=1,segments=rows)]))
+        for error in (Cancelled('state cleared'), RuntimeError('PUBG正在运行')):
+            with self.subTest(error=str(error)), \
+                 patch.object(segment_api,'is_segment_current',return_value=False), \
+                 patch.object(runtime,'explicit_opening'), \
+                 patch.object(runtime,'after_render'), \
+                 patch.object(authoring,'make_h3_prompts',side_effect=AssertionError('not needed')):
+                rendered = []
+                def render(sc,no):
+                    rendered.append(no)
+                    raise error
+                with self.assertRaises(type(error)):
+                    runtime.run_sequence(self.sid,1,[1,2],render=render)
+                self.assertEqual(rendered,[1])
+
+    def test_stale_video_is_not_counted_when_renderer_returns_no_video(self):
+        from api import segment_api
+        rows = [dict(no=1,prompt='saved words',video='old.mp4',stale_video=True),
+                dict(no=2,prompt='saved words')]
+        saga_core.save_ep_timeline(self.sid,1,dict(scenes=[dict(no=1,segments=rows)]))
+        errors = []
+        with patch.object(segment_api,'is_segment_current',return_value=False), \
+             patch.object(runtime,'explicit_opening'), patch.object(runtime,'after_render'):
+            outputs = runtime.run_sequence(self.sid,1,[1,2],
+                render=lambda sc,no: {} if no == 1 else dict(video='two.mp4'),
+                on_error=lambda no,error: errors.append(no))
+        self.assertEqual(outputs,['two.mp4'])
+        self.assertEqual(errors,[1])
+        self.assertTrue(runtime._segment(self.sid,1,1)[2]['stale_video'])
+
     def test_both_user_buttons_use_shared_sequence_while_text_only_keeps_batch(self):
         from api import timeline, saga_api, segment_api
         from cores import story_core, reference_ready, episode_ledger

@@ -124,6 +124,18 @@ def edit(image_path, prompt, seed=None, image_b=None, mp=1.0, timeout=900,
     if __import__("os").environ.get("V41_NO_MODEL"):
         raise RuntimeError("V41_NO_MODEL=1：零模型测试不许调模型（图片编辑）")
     from . import gpu_manager
+    # An already running Comfy instance is still a new local inference call.
+    # Acquire before entering finally so a rejected claim cannot release an
+    # unrelated process/thread's ownership record.
+    gpu_manager.acquire('krea', note='image edit')
+    try:
+        return _edit(image_path, prompt, seed, image_b, mp, timeout, out_name)
+    finally:
+        gpu_manager.release('krea')
+
+
+def _edit(image_path, prompt, seed, image_b, mp, timeout, out_name):
+    from . import gpu_manager
     if not krea_client.up():
         with gpu_manager.GPU_LOCK:
             gpu_manager.claim("krea")

@@ -79,25 +79,17 @@ class H3RequestRecoveryTests(unittest.TestCase):
         self.assertFalse(any(call.args[0] == "POST" for call in self.http.call_args_list))
         self.build.assert_not_called()
 
-    def test_acknowledged_request_lost_from_queue_and_history_resubmits(self):
+    def test_acknowledged_request_lost_from_queue_and_history_never_resubmits(self):
         self.receipt("submitted")
-        new_ids = []
-        def http(method, path, data=None, **kwargs):
-            if path == "/queue":
-                return {"queue_running": [], "queue_pending": []}
-            if path == "/history/old-id":
-                return {}
-            if method == "POST" and path == "/prompt":
-                self.assertNotEqual(data["prompt_id"], "old-id")
-                self.assertEqual(h3.recovery_receipt(self.key)["status"], "submitting")
-                self.assertEqual(h3.recovery_receipt(self.key)["prompt_id"], data["prompt_id"])
-                new_ids.append(data["prompt_id"])
-                return {"prompt_id": data["prompt_id"]}
-            return self.success(new_ids[-1])
-        self.http.side_effect = http
-        self.generate()
-        self.assertEqual(len(new_ids), 1)
-        self.assertEqual(h3.recovery_receipt(self.key)["status"], "completed")
+        self.http.side_effect = lambda method, path, **kwargs: {
+            "queue_running": [], "queue_pending": []} if path == "/queue" else {}
+        for _ in range(2):
+            with self.assertRaisesRegex(RuntimeError, "提交结果待核对"):
+                self.generate()
+        self.assertEqual(h3.recovery_receipt(self.key)["status"], "submitted")
+        self.assertEqual(h3.recovery_receipt(self.key)["prompt_id"], "old-id")
+        self.assertFalse(any(call.args[0] == "POST" for call in self.http.call_args_list))
+        self.build.assert_not_called()
 
     def test_http_500_is_unknown_submission_and_preserves_receipt(self):
         self.http.side_effect = urllib.error.HTTPError("http://fake/prompt", 500, "failure", {}, None)
@@ -190,27 +182,19 @@ class H3RequestRecoveryTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.receipt(status)
                 self.http.reset_mock()
-                new_ids = []
                 def http(method, path, data=None, **kwargs):
+                    self.assertEqual(method, 'GET')
                     if path == "/queue":
                         return {"queue_running": [], "queue_pending": []}
-                    if path == "/history/old-id":
-                        return {}
-                    if path == "/prompt":
-                        new_ids.append(data["prompt_id"])
-                        return {"prompt_id": data["prompt_id"]}
-                    return self.success(new_ids[-1])
+                    self.assertEqual(path, '/history/old-id')
+                    return {}
                 self.http.side_effect = http
                 with patch.object(h3, "_has_audio_stream", return_value=False):
-                    if status == "submitting":
-                        with self.assertRaisesRegex(RuntimeError, "提交结果待核对"):
-                            self.generate()
-                        self.assertEqual(new_ids, [])
-                        self.assertEqual(h3.recovery_receipt(self.key)["status"], "submitting")
-                    else:
-                        result = self.generate()
-                        self.assertEqual(len(new_ids), 1)
-                        self.assertNotEqual(result["output_file"], raw.name)
+                    with self.assertRaisesRegex(RuntimeError, "提交结果待核对"):
+                        self.generate()
+                self.assertEqual(h3.recovery_receipt(self.key)["status"], status)
+                self.assertEqual(h3.recovery_receipt(self.key)["prompt_id"], 'old-id')
+                self.build.assert_not_called()
 
 
 if __name__ == "__main__":

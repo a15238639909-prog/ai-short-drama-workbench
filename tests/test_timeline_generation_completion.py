@@ -42,7 +42,7 @@ class TimelineGenerationCompletionTests(unittest.TestCase):
     def row(self, no, **changes):
         return dict({"no": no, "prompt": "合法提示词%d" % no, "seconds": 8, "scene": "院子"}, **changes)
 
-    def test_three_of_four_prompts_is_partial_and_never_enters_h3(self):
+    def test_three_of_four_prompts_is_partial_but_renders_available_segments(self):
         for prompts_only in (True, False):
             with self.subTest(prompts_only=prompts_only):
                 self.data = {"scenes": [{"no": 1, "segments": []}]}
@@ -54,13 +54,17 @@ class TimelineGenerationCompletionTests(unittest.TestCase):
                 timeline._gen_next("STORY_TEST", 2, 4, prompts_only=prompts_only)
                 job = timeline._job("STORY_TEST")
                 self.assertEqual(job["status"], "partial")
-                self.assertEqual(job["done"], 3)
+                self.assertEqual(job["done"], 3 if prompts_only else 6)
                 self.assertEqual(job["missing_prompt_segments"], [4])
                 self.assertIn("3/4", job["partial"])
                 self.assertTrue(job["err"])
-                self.render.assert_not_called()
-                self.opening.assert_not_called()
-                self.references.assert_not_called()
+                if prompts_only:
+                    self.render.assert_not_called()
+                    self.opening.assert_not_called()
+                    self.references.assert_not_called()
+                else:
+                    self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2, 3])
+                    self.assertEqual([call.args[2] for call in self.references.call_args_list], [[1], [2], [3]])
 
     def test_missing_second_video_is_not_hidden_by_successful_third(self):
         self.data["scenes"][0]["segments"] = [self.row(no, video="clip%d.mp4" % no if no != 2 else "") for no in (1, 2, 3, 4)]
@@ -103,6 +107,70 @@ class TimelineGenerationCompletionTests(unittest.TestCase):
         self.assertEqual(self.prompts.call_args.args[2], 2)
         self.assertEqual(timeline._job("STORY_TEST")["status"], "completed")
         self.render.assert_not_called()
+
+    def test_middle_render_failure_keeps_attempting_later_segments(self):
+        self.data["scenes"][0]["segments"] = [self.row(no) for no in (1, 2, 3)]
+        self.prompts.return_value = ([], 3)
+        def render(*args, **kwargs):
+            if args[3] == 2:
+                raise RuntimeError("单段服务返回错误")
+            return {"video": "generated-%s.mp4" % args[3]}
+        self.render.side_effect = render
+        timeline._gen_next("STORY_TEST", 2, 3)
+        self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2, 3])
+        job = timeline._job("STORY_TEST")
+        self.assertEqual(job["status"], "partial")
+        self.assertEqual(job["missing_video_segments"], [2])
+        self.assertIn("2/3", job["partial"])
+
+    def test_missing_middle_reference_does_not_block_later_scene(self):
+        self.data["scenes"] = [{"no": no, "segments": [self.row(no)]} for no in (1, 2, 3)]
+        self.prompts.return_value = ([], 3)
+        def refs(sid, ep, targets, *args):
+            if targets == [2]:
+                raise RuntimeError("第2段人设图未就绪")
+        self.references.side_effect = refs
+        timeline._gen_next("STORY_TEST", 2, 3)
+        self.assertEqual([(call.args[2], call.args[3]) for call in self.render.call_args_list], [(1, 1), (3, 3)])
+        self.assertEqual(timeline._job("STORY_TEST")["missing_video_segments"], [2])
+
+    def test_review_block_is_advisory_but_empty_video_never_counts_complete(self):
+        self.data["scenes"][0]["segments"] = [self.row(no) for no in (1, 2)]
+        self.prompts.return_value = ([], 2)
+        self.gate.return_value = {"blocked": True}
+        self.render.side_effect = [{}, {"video": "two.mp4"}]
+        timeline._gen_next("STORY_TEST", 2, 2)
+        self.assertEqual(self.render.call_count, 2)
+        job = timeline._job("STORY_TEST")
+        self.assertEqual(job["status"], "partial")
+        self.assertEqual(job["missing_video_segments"], [1])
+
+    def test_user_cancel_is_honored_instead_of_submitting_later_segments(self):
+        self.data["scenes"][0]["segments"] = [self.row(no) for no in (1, 2, 3)]
+        self.prompts.return_value = ([], 3)
+        self.render.side_effect = timeline._Cancelled()
+        timeline._gen_next("STORY_TEST", 2, 3)
+        self.assertEqual(self.render.call_count, 1)
+        self.assertEqual(timeline._job("STORY_TEST")["status"], "cancelled")
+
+    def test_selected_rerender_attempts_all_requested_slots_and_keeps_errors(self):
+        from types import SimpleNamespace
+        from cores import runtime_reset
+        self.data["scenes"][0]["segments"] = [self.row(no) for no in (1, 2, 3)]
+        def render(*args, **kwargs):
+            if args[3] == 2:
+                raise RuntimeError("one selected render failed")
+            return {"video": "rendered-%s.mp4" % args[3]}
+        self.render.side_effect = render
+        with patch.object(timeline, "_load", return_value=({}, self.data)), \
+             patch.object(runtime_reset, "worker", side_effect=lambda fn: fn), \
+             patch.object(timeline.threading, "Thread", side_effect=lambda target, **kw: SimpleNamespace(start=target)):
+            timeline.timeline_rerender(None, "/api/timeline/STORY_TEST/rerender", {"ep": 2, "segs": [1, 2, 9, 3]})
+        self.assertEqual([call.args[3] for call in self.render.call_args_list], [1, 2, 3])
+        job = timeline._job("STORY_TEST")
+        self.assertEqual(job["status"], "partial")
+        self.assertEqual(job["done"], 2)
+        self.assertEqual(job["missing_video_segments"], [2, 9])
 
 
 if __name__ == "__main__":

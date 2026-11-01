@@ -131,7 +131,7 @@ class NewProjectPortraitTests(unittest.TestCase):
             reference_ready.ensure_characters(self.sid, 1)
         self.assertEqual(asset_core.list_assets(self.sid, 'visuals'), [])
 
-    def test_images_stage_does_not_complete_or_advance_after_portrait_failure(self):
+    def test_images_stage_continues_scenes_after_portrait_failure_but_stays_partial(self):
         self.project(legacy_empty_cast=True)
         self.generate.side_effect = RuntimeError('模拟图像服务不可用')
         job = dict(running=True, status='running', done=0, total=2, logs=[],
@@ -143,10 +143,10 @@ class NewProjectPortraitTests(unittest.TestCase):
             saga_api._run_registered_make(self.sid, job)
         self.assertNotEqual(job['status'], 'completed')
         self.assertFalse(job['running'])
-        self.assertEqual(job['done'], 0)
+        self.assertEqual(job['done'], 2)
         self.assertIn('阿宁', job['err'])
-        checkpoint.assert_not_called()
-        scene_images.assert_not_called()
+        checkpoint.assert_called_once()
+        scene_images.assert_called_once()
 
     def test_real_environment_only_project_needs_no_character_portrait(self):
         self.project(character=False, source='空无一人的修表店，窗外雨滴落在玻璃上，墙钟指针缓慢转动。')

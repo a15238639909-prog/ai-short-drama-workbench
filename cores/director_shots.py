@@ -1024,7 +1024,7 @@ _NO_SUBJ_HEAD = re.compile(r"^(镜头|画面|前景|背景|远处|近处|房门|
                            r"海|风|雨|火|浪|阳光|晨光|夜|沙滩|帐篷|四人|三人|两人|众人|她们|他们|长枪|枪|绳|网|一根|一张|一道|一阵|一片|一只|一辆|车|马|狗|猫|鸟)")
 
 
-def assemble(body, d, chars, say_lines_by_d, scene_space=""):
+def assemble(body, d, chars, say_lines_by_d, scene_space="", offscreen_speakers=()):
     """模型写的正文 → 按骨架钉死：【机位】行 = 导演的；块头按骨架（多写的块并进最后一块、少写的用骨架句补）；
     台词行放进骨架标的那一块末尾（前面补口型）；结尾状态程序写。"""
     from .authoring import _tl_blocks, _TL_BLOCK
@@ -1042,7 +1042,9 @@ def assemble(body, d, chars, say_lines_by_d, scene_space=""):
     while len(texts) < len(sk):
         texts.append(sk[len(texts)][2])
     out = ["【机位】" + str(d.get("camera") or "").strip("。") + "。"]
+    offscreen_speakers = set(offscreen_speakers or ())
     names = [str(c.get("name") if isinstance(c, dict) else c) for c in (chars or [])] or list(d.get("cast") or [])
+    names = [n for n in names if n not in offscreen_speakers]
     shorts = [_os_.short_name(n) for n in names]
     try:
         _alias_marks = [a for a, full in _os_.card_aliases([c for c in (chars or []) if isinstance(c, dict)]).items() if a not in names and len(a) >= 2]
@@ -1089,7 +1091,7 @@ def assemble(body, d, chars, say_lines_by_d, scene_space=""):
             sl = say_lines_by_d.get(x)
             if sl:
                 spk = sl.split("说：", 1)[0]
-                if not re.search(re.escape(spk) + r"[^。]{0,6}嘴唇开合", lines[0]):
+                if spk not in offscreen_speakers and not re.search(re.escape(spk) + r"[^。]{0,6}嘴唇开合", lines[0]):
                     lines[0] = lines[0].rstrip("。") + "。" + spk + "嘴唇开合。"
                 lines.append(sl)
         lines[0] = re.sub(r"((?:[^。；，\n]{1,6})嘴唇开合。)(?:\s*\1)+", r"\1", lines[0])          # P437：同一个人的口型只留一个

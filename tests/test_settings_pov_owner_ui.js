@@ -122,4 +122,5 @@ async function main(){
   assert.equal(h.messages.filter(row=>row[1]==='err').length,0,JSON.stringify(h.messages));
   console.log('Settings whole-page POV UI passed: default viewer, explicit character, normal save, make-images, fix-images, project switch and stale reply, non-POV/selfie preservation. No models or server calls.');
 }
-main().catch(error=>{console.error(error);process.exitCode=1;});
+module.exports = {project, harness, flush};
+if (require.main === module) main().catch(error=>{console.error(error);process.exitCode=1;});

@@ -10,6 +10,7 @@ import re
 
 from . import story_video_prompts as base
 from . import story_video_quality as quality
+from . import wardrobe_continuity as wardrobe
 
 
 MAX_REFERENCES = 8
@@ -107,16 +108,43 @@ def _director_system():
 WRITE_SYSTEM = _director_system()
 
 
-def reference_visual_rule(has_scene_reference):
+def reference_visual_rule(has_scene_reference, *, wardrobe_policy=None):
     """Simple image authority for new tasks; this is an instruction, not a lock claim."""
     character_rule = ('人物的脸、发型、发色、肤色、体型、服装和饰品全部按各自人设图，'
         '不重新设计、美化或补造服饰配饰。看不清或本地观察未知时直接遵循原图，不补写外貌。'
         '动作、表情、姿势和位置可随故事变化；上一段画面提供动作与空间衔接，'
         '其中的外形漂移不作为新的人设。')
+    if wardrobe.enabled(dict(wardrobe_policy=wardrobe_policy)):
+        character_rule = ('人物身份、脸、发型、发色、肤色和体型按各自人设图；'
+            '初始衣装只作尚未发生已确认变化时的基线，当前穿戴按已确认衣着状态延续。'
+            '动作、表情、姿势和位置随故事变化，不把随机外貌漂移当成换装。')
     background_rule = ('场景参考用于其对应地点，其他地点按故事生成场景，回访时沿用参考。'
         if has_scene_reference else
         '未提供场景参考时，根据故事地点、时代与剧情生成场景。')
     return character_rule + background_rule
+
+
+def _wardrobe_request(request, policy):
+    if not wardrobe.enabled(dict(wardrobe_policy=policy)):
+        return request
+    system, payload, schema = request
+    system = system.replace(
+        '人物参考只固定身份、脸、发型、体态和服装，不永久锁定站位、姿势或持物。',
+        '人物参考固定身份、脸、发型和体态，当前穿戴按已确认衣着状态延续，不永久锁定站位、姿势或持物。')
+    system = system.replace(
+        '此优先级只用于姿势、位置、持物和已发生的动作，人物固定外观只按对应人设图。',
+        '此优先级用于姿势、位置、持物和已发生的动作；人物稳定身份按人设图，当前穿戴按已确认衣着状态延续。')
+    system = system.replace(
+        '人物外形漂移如实记录，后续外观仍按对应人设图。',
+        '人物身份外形漂移如实记录，不能重定义身份；已确认的衣着变化延续，不重置回原图衣装。')
+    system = system.replace(
+        '人物身份、脸、发型和服装以人物设定为准；',
+        '人物身份、脸和发型以人物设定为准，当前衣着按已确认穿戴状态延续；')
+    payload['wardrobe_policy'] = policy
+    if 'canonical_references' in payload:
+        payload['wardrobe_state'] = wardrobe.model_state(
+            payload.get('wardrobe_state'), payload['canonical_references'])
+    return system + '\n' + wardrobe.authority_rules(), payload, schema
 
 
 def _image_authority_system(system):
@@ -138,7 +166,7 @@ def _image_authority_system(system):
 
 
 def plan_request(brief, style, count, seconds, opening_observation=None, *, flow_optimization=False,
-                 reference_visual_policy=None, scene_reference_provided=False):
+                 reference_visual_policy=None, scene_reference_provided=False, wardrobe_policy=None):
     system, payload, schema = base.plan_request(brief, style, count, seconds,
                                                opening_observation)
     payload['content_language'] = '简体中文'
@@ -149,21 +177,21 @@ def plan_request(brief, style, count, seconds, opening_observation=None, *, flow
     if reference_visual_policy == REFERENCE_VISUAL_POLICY:
         payload.update(reference_visual_policy=reference_visual_policy,
                        scene_reference_provided=scene_reference_provided)
-        system += '\n' + reference_visual_rule(scene_reference_provided)
-    return system, payload, schema
+        system += '\n' + reference_visual_rule(scene_reference_provided, wardrobe_policy=wardrobe_policy)
+    return _wardrobe_request((system, payload, schema), wardrobe_policy)
 
 
 def review_request(plan, brief, style, count, seconds, opening_observation=None,
                    blocking_only=False, *, reference_visual_policy=None,
-                   scene_reference_provided=False):
+                   scene_reference_provided=False, wardrobe_policy=None):
     system, payload, schema = base.review_request(plan, brief, style, count,
         seconds, opening_observation, blocking_only=blocking_only)
     system += _CHINESE_POLICY
     if reference_visual_policy == REFERENCE_VISUAL_POLICY:
         payload.update(reference_visual_policy=reference_visual_policy,
                        scene_reference_provided=scene_reference_provided)
-        system += '\n' + reference_visual_rule(scene_reference_provided)
-    return system, payload, schema
+        system += '\n' + reference_visual_rule(scene_reference_provided, wardrobe_policy=wardrobe_policy)
+    return _wardrobe_request((system, payload, schema), wardrobe_policy)
 
 
 def observe_request(stage, previous_state=None, beat=None, image_role_bindings=None):
@@ -212,7 +240,7 @@ def _references(references):
 
 def write_request(plan, beat, actual_state, seconds, mode='i2va', visual_style='',
                   references=None, *, flow_optimization=False, reference_visual_policy=None,
-                  scene_reference_provided=False):
+                  scene_reference_provided=False, wardrobe_policy=None, wardrobe_state=None):
     mode = str(mode).strip().lower()
     if mode not in ('i2va', 't2va', 'ref2va'):
         raise ValueError('mode须为i2va、t2va或ref2va')
@@ -236,7 +264,7 @@ def write_request(plan, beat, actual_state, seconds, mode='i2va', visual_style='
                 '它是多图参考生成，不能宣称第一帧硬锁定。canonical_references中character用<Subject N>'
                 '指代对应唯一人物，正文和delivery可以使用Subject标签，但不自行写Picture定义、保留分析或六字段包装。'
                 '不把人物三视图画成多个角色。首镜接续实际姿态和动作，按剧情切镜。'
-                + reference_visual_rule(scene_reference_provided))
+                + reference_visual_rule(scene_reference_provided, wardrobe_policy=wardrobe_policy))
         else:
             system += '''\nmode=ref2va时保留上述全部导演、动作因果、中文对白时序、完整时长及末态续写规则。它是多图参考生成，不能宣称第一帧硬锁定。canonical_references中character用<Subject N>指代对应唯一人物，正文和delivery可以使用Subject标签，但不自行写Picture定义、保留分析或六字段包装。人物身份、脸、发型和服装以人物设定为准；actual_state及实际末帧负责当前姿势、持物、位置和已经发生的动作，不让末帧中的外形漂移重定义人设。场景图仅在故事到达其对应地点时提供该地空间、陈设、光线与美术，不限制每镜必须同一机位；转去其他地点按完整story_plan和beat建立新环境，不能把每段强拉回参考图地点，回访该地点时再延续参考外观。连续动作仍须建立可见通道或清楚的剧情转场，不用人物瞬移代替过渡。不照搬灰底人物拼图或把多个视图当多个角色。首镜根据实际末态接续，切镜服务剧情，不为了展示人设而摆拍。'''
         previous = next((ref for ref in payload['canonical_references'] if ref['role'] == 'previous_frame'), None)
@@ -247,7 +275,9 @@ def write_request(plan, beat, actual_state, seconds, mode='i2va', visual_style='
             system += '''\ncontinuation_contract给出上一段实际末态及其真实尾帧软参考。本段首镜先接续尾帧中可见的姿态、位置、手中物、承托关系和动作进度，再推进本段新的动作；actual_state与previous_observation中已实际完成的动作不重新开始，不为重建场面而重复走近、迎接、拿起或完成同一次交接。计划里尚未实际发生的目标仍是待拍目标，未知保持未知，不能把计划ending当成既成事实。开场连续性不等于固定机位：接续后可按剧情切多个景别、展示反应或改变地点，转场须有可见通道、动作过渡或明确的剧情时间地点变化。人物卡只约束稳定外形，不恢复其旧姿势；尾帧提供动作续接线索，不宣称多图参考硬锁首帧或已保证人物一致。'''
     if not payload['is_final']:
         system += '''\n本段还有后续：若当前出场主体具有可辨面部且下一段需要保持身份，优先让所需主要角色在段尾正常行动或互动中面部清楚可辨，采用符合剧情的景别和角度；单人、多人均以实际人数为准，无人物场景不适用露脸要求。可通过有剧情意义的抬眼、回应、侧身交流自然做到，不要求直视镜头或突然扭头；不能为露脸牺牲核心行动。末帧采用真实视频最后一帧，露脸是生成目标，不是已锁脸或已验收的保证。'''
-    return system, payload, schema
+    if wardrobe.enabled(dict(wardrobe_policy=wardrobe_policy)):
+        payload['wardrobe_state'] = copy.deepcopy(wardrobe_state)
+    return _wardrobe_request((system, payload, schema), wardrobe_policy)
 
 
 def revision_request(written, payload, feedback):
@@ -257,7 +287,8 @@ def revision_request(written, payload, feedback):
         references=payload.get('canonical_references'),
         flow_optimization=payload.get('flow_optimization') is True,
         reference_visual_policy=payload.get('reference_visual_policy'),
-        scene_reference_provided=payload.get('scene_reference_provided', False))
+        scene_reference_provided=payload.get('scene_reference_provided', False),
+        wardrobe_policy=payload.get('wardrobe_policy'), wardrobe_state=payload.get('wardrobe_state'))
     # Preserve prior caller evidence/advisories without carrying a previous
     # compiled prompt into the creative body or changing source dialogue slots.
     new_payload.update(copy.deepcopy(payload))
@@ -319,7 +350,7 @@ def _timeline(obj, seconds):
 
 
 def _reference_fields(refs, *, flow_optimization=False, reference_visual_policy=None,
-                      scene_reference_provided=False):
+                      scene_reference_provided=False, wardrobe_policy=None):
     definitions, retention = [], []
     image_authority = reference_visual_policy == REFERENCE_VISUAL_POLICY
     for ref in refs:
@@ -327,7 +358,11 @@ def _reference_fields(refs, *, flow_optimization=False, reference_visual_policy=
         if ref['role'] == 'character':
             subject = ref['subject']
             identity = _label(ref.get('character_id') or 'char_%02d' % subject)
-            if image_authority:
+            if wardrobe.enabled(dict(wardrobe_policy=wardrobe_policy)):
+                definitions.append('<Subject %d>是人物%s，面容、发型与体型沿用<Picture %d>；图内多视图对应同一位人物。' %
+                                   (subject, identity, picture))
+                retention.append('<Subject %d>：面容、发型与体型沿用人物参考。' % subject)
+            elif image_authority:
                 definitions.append('<Subject %d>是人物%s，外观完整沿用<Picture %d>；图内多视图是同一人。' %
                                    (subject, identity, picture))
                 retention.append('<Subject %d>：外观按人设原图；姿势、位置、持物和动作随本段真实状态变化。' % subject)
@@ -336,18 +371,16 @@ def _reference_fields(refs, *, flow_optimization=False, reference_visual_policy=
                                    (subject, identity, picture))
                 retention.append('<Subject %d>：保留身份外形，年龄以设定为准，姿势、位置和持物随本段真实状态与动作变化。' % subject)
         elif ref['role'] == 'scene_anchor':
-            definitions.append('<Picture %d>是场景参考，仅本段位于其对应地点时提供该地环境、陈设、光线与美术。' % picture)
-            retention.append('<Picture %d>：部分保留对应地点外观，允许剧情转去其他地点，回访才延续参考；不提供人物身份、固定人物站位或全片地点硬约束。' % picture)
+            definitions.append('<Picture %d>提供当前地点的建筑结构、陈设、现场光线与美术。' % picture)
+            retention.append('<Picture %d>：当前地点的空间与现场美术。' % picture)
         else:
             definitions.append('<Picture %d>是本组上一段的真实最后一帧，提供当前姿势、位置、持物与动作衔接。' % picture)
-            if flow_optimization is True:
-                retention.append('<Picture %d>：优先完整承接上一帧可见的姿态、位置布局、持物与动作进度，首镜先续接再推进，已完成动作不重启；素材属于软参考，不是硬首帧保证，人物稳定外形仍以各自人设为准，后续可依剧情切镜或合理转场。' % picture)
+            if wardrobe.enabled(dict(wardrobe_policy=wardrobe_policy)):
+                retention.append('<Picture %d>：首镜的可见姿态、位置与持物。' % picture)
+            elif flow_optimization is True:
+                retention.append('<Picture %d>：首镜姿态、空间布局、持物与动作进度。' % picture)
             else:
-                retention.append('<Picture %d>：部分保留实际末态与动作关系；它是续接参考而非硬首帧，人物外形以各自人设为准。' % picture)
-    if image_authority:
-        rule = reference_visual_rule(scene_reference_provided)
-        definitions.append(rule)
-        retention.append(rule)
+                retention.append('<Picture %d>：首镜的可见姿态与动作关系。' % picture)
     return '\n'.join(definitions), '\n'.join(retention)
 
 
@@ -610,12 +643,16 @@ def compile_written(obj, payload):
     if mode == 'ref2va':
         definitions, retention = _reference_fields(refs, flow_optimization=payload.get('flow_optimization') is True,
             reference_visual_policy=payload.get('reference_visual_policy'),
-            scene_reference_provided=payload.get('scene_reference_provided', False))
+            scene_reference_provided=payload.get('scene_reference_provided', False),
+            wardrobe_policy=payload.get('wardrobe_policy'))
         fields = dict(subject_definitions=definitions, summary=result['brief'].strip(),
             retention_analysis=retention, detailed_description=bound_description,
             overall_soundscape=content['overall_soundscape'], non_diegetic_music=content['non_diegetic_music'])
         result.update(fields=fields, reference_audit=refs)
         prompt = '\n\n'.join(field + ':\n' + fields[field] for field in FIELDS)
+        if wardrobe.enabled(payload):
+            result = wardrobe.apply_compiled(result, payload.get('wardrobe_state'), refs)
+            prompt = result['prompt']
         _check_references(prompt, refs)
     else:
         content[CONTENT_FIELDS[0]] = bound_description

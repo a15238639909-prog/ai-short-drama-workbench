@@ -682,16 +682,20 @@ def write(settings, ep=1, previous=None, brief="", characters=None, model=None, 
         if not getattr(error, "partial_text", ""):
             raise
         prose = error.partial_text
-        return {"prose": prose, "review": {"verdict": "unknown", "issues": [{"detail": str(error)}],
-                "summary": "", "outcomes": [], "state": [], "prose_sig": signature(prose)}}
+        review = {"verdict": "unknown", "issues": [{"detail": str(error)}],
+                  "summary": "", "outcomes": [], "state": [], "prose_sig": signature(prose)}
+        if source_authority:
+            review.update(source_authority=True, production_blocked=True,
+                          internal_continuity={"status": "unavailable", "reason": "source_generation_incomplete"})
+        return {"prose": prose, "request": request, "review": review}
     if source_authority:
-        if on_step:
-            on_step("正文已完成，人物、对白和画面按正文继续制作")
-        return {"prose": prose, "request": request, "review": {
-            "verdict": "accepted", "source_authority": True,
-            "summary": "以生成的故事正文为后续制作依据，不再按原构想回审或改写。",
-            "issues": [], "outcomes": [], "state": [], "checks": [],
-            "prose_sig": signature(prose)}}
+        # Existing/approved prose stays authoritative. Only this newly returned
+        # draft receives a bounded, source-internal continuity check; no idea,
+        # old target or style review is reintroduced.
+        from .source_continuity_review import review_new_draft
+        result = review_new_draft(prose, model=model, on_step=on_step)
+        result['request'] = request
+        return result
     if on_step:
         on_step("核对第%d话事实、衔接和结果" % ep)
     review = review_prose(prose, data, model)
@@ -723,4 +727,6 @@ class DraftNotReady(RuntimeError):
     def __init__(self, result):
         self.result = result
         why = "；".join(str(x.get("detail") or "") for x in result["review"].get("issues", []))
-        super().__init__("正文草稿已保留，核对未通过：" + (why[:220] or "本话目标尚未全部确认完成"))
+        fallback = ("正文内部连续性尚未确认" if result['review'].get('production_blocked')
+                    and result['review'].get('source_authority') else "本话目标尚未全部确认完成")
+        super().__init__("正文草稿已保留，核对未通过：" + (why[:220] or fallback))

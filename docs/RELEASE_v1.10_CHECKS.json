@@ -1,0 +1,191 @@
+{
+  "version": "1.10",
+  "checked_at": "2026-11-01T11:31:46.428894+00:00",
+  "baseline_commit": "b5695fa069ba162b338823706f46e338483173e6",
+  "passed": true,
+  "scope": "Targeted public release regressions, not a full repository suite or visual AI acceptance.",
+  "unique_tests": 668,
+  "unique_passed": 667,
+  "unique_failed": 0,
+  "unique_errors": 0,
+  "unique_skipped": 1,
+  "groups": [
+    {
+      "label": "main_images_and_scene_opening",
+      "modules": [
+        "tests.test_scene_opening_main",
+        "tests.test_scene_opening_projection",
+        "tests.test_scene_prompt_content",
+        "tests.test_scene_default_main",
+        "tests.test_scene_board_curation",
+        "tests.test_scene_material_condition",
+        "tests.test_scene_condition_place_regressions",
+        "tests.test_scene_source_contract",
+        "tests.test_scene_condition",
+        "tests.test_main_images",
+        "tests.test_scene_default_authoring",
+        "tests.test_split_image_models"
+      ],
+      "tests": 196,
+      "duplicates_not_rerun": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "passed": true
+    },
+    {
+      "label": "moss_and_anima",
+      "modules": [
+        "tests.test_moss_client",
+        "tests.test_moss_prompt_writer",
+        "tests.test_moss_prompt_presets",
+        "tests.test_moss_comic_layout",
+        "tests.test_moss_sheet",
+        "tests.test_main_moss_api",
+        "tests.test_main_moss_defaults",
+        "tests.test_anima_artist_selector",
+        "tests.test_anima_gpt_prompt",
+        "tests.test_anima_named_identity",
+        "tests.test_anima_names",
+        "tests.test_anima_sheet_layout_synonyms",
+        "tests.test_anima_two_presets"
+      ],
+      "tests": 143,
+      "duplicates_not_rerun": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "long_comic_and_optional_edit",
+      "modules": [
+        "tests.test_long_comic_core",
+        "tests.test_long_comic_api",
+        "tests.test_long_comic_character_reuse",
+        "tests.test_long_comic_evidence_context",
+        "tests.test_long_comic_source_and_props",
+        "tests.test_long_comic_edit",
+        "tests.test_long_comic_edit_api",
+        "tests.test_qwen_image21_client"
+      ],
+      "tests": 105,
+      "duplicates_not_rerun": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "source_continuity_and_positive_prompts",
+      "modules": [
+        "tests.test_source_action_continuation",
+        "tests.test_source_action_continuation_integration",
+        "tests.test_source_actor_staging",
+        "tests.test_source_actor_integration",
+        "tests.test_source_continuity_review",
+        "tests.test_source_lighting_state",
+        "tests.test_source_prop_handoff_regressions",
+        "tests.test_source_shot_compiler",
+        "tests.test_source_shot_text_review",
+        "tests.test_source_shot_user_timing",
+        "tests.test_source_wardrobe_plan",
+        "tests.test_final_source_wardrobe_text",
+        "tests.test_text_only_wardrobe_projection",
+        "tests.test_positive_image_content",
+        "tests.test_positive_content_subjects",
+        "tests.test_positive_video_photography",
+        "tests.test_positive_video_presentation",
+        "tests.test_positive_video_transport"
+      ],
+      "tests": 182,
+      "duplicates_not_rerun": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "label": "saving_and_recovery_regressions",
+      "modules": [
+        "tests.test_full_audit_generation_20261028",
+        "tests.test_full_audit_product_20261028",
+        "tests.test_full_audit_ui_20261028",
+        "tests.test_generation_recovery",
+        "tests.test_episode_scene_references"
+      ],
+      "tests": 42,
+      "duplicates_not_rerun": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": true
+    }
+  ],
+  "skipped_tests": [
+    {
+      "test": "tests.test_scene_condition_place_regressions.RealStory071PlaceRegression.test_real_source_all_explicit_places_stay_nouns_and_rain_survives",
+      "reason": "retained real source project unavailable"
+    }
+  ],
+  "missing_modules": [],
+  "syntax": {
+    "python": 410,
+    "json": 31,
+    "javascript": 39,
+    "javascript_reference_exclusions": [
+      "presets/8848_底层定义原文.js"
+    ]
+  },
+  "syntax_findings": [],
+  "javascript_tests": [
+    {
+      "file": "tests/test_main_image_settings.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_moss_prompt_ui.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_long_comic_ui.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_full_audit_ui_20261028.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_story_video_reference_ui.js",
+      "passed": true
+    },
+    {
+      "file": "tests/test_runtime_cache_reset.js",
+      "passed": true
+    }
+  ],
+  "environment": {
+    "V41_NO_MODEL": "1",
+    "V41_NO_BROWSER": "1",
+    "V41_RELEASE_TEST": "1"
+  },
+  "guards": {
+    "private_path_checks_suppressed": 1,
+    "private_reads_blocked": 0,
+    "network_blocked": 0,
+    "unsafe_process_blocked": 0,
+    "deletion_blocked": 0
+  },
+  "real_model_calls": 0,
+  "real_media_generation": 0,
+  "permanent_deletion": 0,
+  "known_excluded_legacy_suites": "Old verbose wardrobe/legacy entry hash assertions are not represented as passing; private real-project traces are skipped.",
+  "retained_fixtures": true,
+  "bounded_packaging_recheck": {
+    "tests": 1,
+    "cases": [
+      "tests.test_anima_named_identity.AnimaNamedIdentityTests.test_identity_rule_is_final_instruction_for_all_preset_routes"
+    ],
+    "passed": true
+  }
+}

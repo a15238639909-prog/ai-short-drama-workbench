@@ -652,23 +652,21 @@ FOREGROUND_FRAME_OUT = ("前景左右各放一棵粗大的树干（或一块高�
                         "作为视觉框架，只占画面两侧边缘，中间完全让开")
 VOLUMETRIC = ("空气里有轻微雾霭和烟气，光从侧面高处穿透空气形成明显的体积光柱，"
               "远处结构因空气透视逐渐降低对比度，制造真实的超大空间距离感")
-# 【不许写成中式宫殿专有】第一版写的是"鎏金与古铜"，那是仙侠大殿才有的东西，
-# 套到现代公寓卧室上就成了笑话。这里只写"材质该怎么真实"，不指定是什么材质。
-MATERIAL_REAL = ("所有材质都有真实的使用痕迹：金属带氧化和磨损、"
-                 "木头有漆面裂纹和纹理、石材有打磨面、织物有褶皱和起绒，"
-                 "反光按各自的材质规律来，不是统一的塑料光")
-# 【画出来的画风用这一段】上面那段是实拍语汇（氧化磨损、漆面裂纹、反光规律），
-# 日漫／插画的场景图套上去，就和"精致赛璐璐、线条干净"在同一份提示词里打架。
-# 同样是"让材质有旧感和层次"，换成绘画的说法。
-MATERIAL_DRAWN = ("每种材质用不同的笔触和色块区分：金属用高光边和冷色反光，"
-                  "木头用木纹线条和暖色分层，石材用块面和颗粒质感，"
-                  "布料用褶皱线和柔和的明暗过渡，旧感靠脏色和磨损的色块画出来")
+# 材质细节与保养、损毁程度分开：通用成像描述只补纹理和受光，
+# 场景卡中明确的完好、陈旧或破损事实仍由原字段提供。
+MATERIAL_REAL = ("近处材质的纹理走向、构件接缝和边缘厚度清晰，"
+                 "表面反射随材质与光源方向变化，"
+                 "受光面的亮度、色泽与背光面的细节过渡自然")
+# 二维媒介以笔触与色块交代结构，保持与当前画风一致的质感语言。
+MATERIAL_DRAWN = ("各类材质通过线条、笔触和色块层次区分，"
+                  "纹理走向沿着物体表面展开，构件接缝和轮廓转折清楚，"
+                  "明暗色块随光源方向连贯变化")
 # 【三维渲染单独一档】3D 既不是实拍也不是手绘：说笔触色块就串成了插画
 # （2026-08-30 审计发现，我原来只分"写实/非写实"两档，把 3D 归进了画出来的那档）。
 # 三维的材质语言是贴图、粗糙度、金属度、法线。
-MATERIAL_CG = ("每种材质给出清晰的物理属性：金属高反射低粗糙度、"
-               "木头有木纹贴图和中等粗糙度、石材有凹凸法线和磨损遮罩、"
-               "布料有绒毛和次表面透光，旧感靠污渍贴图和边缘磨损做出来")
+MATERIAL_CG = ("各类材质呈现清晰的表面纹理、构件接缝和边缘厚度，"
+               "反射强度与光斑扩散呈现材质差异，"
+               "受光面、背光面与接触阴影衔接自然")
 VOLUMETRIC_CG = ("空气里有体积雾，光穿过形成清晰的体积光束，"
                  "远处物体按距离衰减对比度，层次靠景深和雾效拉开")
 # 体积光那段里的"制造真实的超大空间距离感"同样是实拍口吻。
@@ -787,7 +785,7 @@ def _strip_place_words(text, indoor):
     return out if out.strip() else str(text)
 
 def compile_scene_prompt(scene, state=None, style="电影级写实", composition="", purpose_details="",
-                         appearance_only=False):
+                         appearance_only=False, clear_reference=False):
     """编译发给 Krea2 的场景基准图提示词。
 
     规矩和人物提示词完全一致（用户定的）：
@@ -1034,6 +1032,14 @@ def compile_scene_prompt(scene, state=None, style="电影级写实", composition
              "近景、中景、远景层次分明，全画面清晰没有虚化"]
     if composition:
         comp.append(clean(composition))
+    if clear_reference:
+        # Main background references use the actual location, not the optional
+        # monumental/atmospheric framing recipe used by other callers.
+        comp = ["16:9 横向场景全景，广角平视，画面端正，透视与场所尺度自然",
+                place_lock, "前中远景清晰，主体空间与出入口完整可辨"]
+        comp.extend(clean(g(k)) for k in ("scale", "depth") if g(k))
+        if composition:
+            comp.append(clean(composition))
     S.append("2.摄影构图 " + "，".join(x for x in comp if x))
 
     # 3. 材质陈设 —— 地面墙面门窗的具体材料，去掉「X是Y」的字段标签
@@ -1074,9 +1080,7 @@ def compile_scene_prompt(scene, state=None, style="电影级写实", composition
     location_kit = _filter_by_place(_pp.scene_type_kit(sc, proj) if _pp else "", indoor)
     if location_kit and location_kit not in mat and not user_env_is_enough:
         mat.append(location_kit)
-    # 【材质写法要跟画风走】MATERIAL_REAL 是实拍语汇（氧化磨损、漆面裂纹、
-    # 反光按材质规律）。日漫画风的场景图套上这段，就成了"精致赛璐璐"和
-    # "真实使用痕迹"同一份提示词里打架（2026-08-30 用户实测 STORY_066）。
+    # 材质写法按实拍、三维、二维分别呈现；维护程度沿用场景事实。
     mat.append(MATERIAL_REAL if scene_kind == "photo" else
                MATERIAL_CG if scene_kind == "3d" else MATERIAL_DRAWN)
     if mat:
@@ -1137,7 +1141,8 @@ def compile_scene_prompt(scene, state=None, style="电影级写实", composition
 
     text = "。".join(x.strip().rstrip("。；;，") for x in S if str(x).strip()) + "。"
     text = re.sub(r"，(?=，)", "", text)      # 摊平括号会留下空档，收掉连续逗号
-    return text.replace("。。", "。").replace("，。", "。")
+    from .image_prompt_content import image_prompt_content
+    return image_prompt_content(text.replace("。。", "。").replace("，。", "。"), normalize=True)
 
 def validate_continuity(story, episode, state_snapshot):
     errors, warnings = [], []

@@ -1,276 +1,276 @@
 {
- "137": {
-  "inputs": {
-   "samples": [
-    "158",
-    0
-   ],
-   "vae": [
-    "167",
-    0
-   ]
+  "137": {
+    "inputs": {
+      "samples": [
+        "158",
+        0
+      ],
+      "vae": [
+        "167",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode"
+    }
   },
-  "class_type": "VAEDecode",
-  "_meta": {
-   "title": "VAE解码"
-  }
- },
- "140": {
-  "inputs": {
-   "conditioning": [
-    "164",
-    0
-   ]
+  "140": {
+    "inputs": {
+      "conditioning": [
+        "164",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
   },
-  "class_type": "ConditioningZeroOut",
-  "_meta": {
-   "title": "条件零化"
-  }
- },
- "153": {
-  "inputs": {
-   "seed": 683753707259018
+  "153": {
+    "inputs": {
+      "seed": 683753707259018
+    },
+    "class_type": "Seed (rgthree)",
+    "_meta": {
+      "title": "Seed (rgthree)"
+    }
   },
-  "class_type": "Seed (rgthree)",
-  "_meta": {
-   "title": "Seed (rgthree)"
-  }
- },
- "156": {
-  "inputs": {
-   "width": 760,
-   "height": 1280,
-   "batch_size": 1
+  "156": {
+    "inputs": {
+      "width": 760,
+      "height": 1280,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "EmptyLatentImage"
+    }
   },
-  "class_type": "EmptyLatentImage",
-  "_meta": {
-   "title": "空Latent图像"
-  }
- },
- "158": {
-  "inputs": {
-   "seed": [
-    "153",
-    0
-   ],
-   "steps": 10,
-   "cfg": 1.0,
-   "sampler_name": "euler",
-   "scheduler": "simple",
-   "denoise": 1.0,
-   "model": [
-    "349",
-    0
-   ],
-   "positive": [
-    "164",
-    0
-   ],
-   "negative": [
-    "140",
-    0
-   ],
-   "latent_image": [
-    "156",
-    0
-   ]
+  "158": {
+    "inputs": {
+      "seed": [
+        "153",
+        0
+      ],
+      "steps": 10,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "349",
+        0
+      ],
+      "positive": [
+        "164",
+        0
+      ],
+      "negative": [
+        "140",
+        0
+      ],
+      "latent_image": [
+        "156",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
   },
-  "class_type": "KSampler",
-  "_meta": {
-   "title": "K采样器"
-  }
- },
- "164": {
-  "inputs": {
-   "text": "",
-   "clip": [
-    "166",
-    0
-   ]
+  "164": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
   },
-  "class_type": "CLIPTextEncode",
-  "_meta": {
-   "title": "CLIP文本编码"
-  }
- },
- "166": {
-  "inputs": {
-   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
-   "type": "krea2",
-   "device": "default"
+  "166": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "CLIPLoader"
+    }
   },
-  "class_type": "CLIPLoader",
-  "_meta": {
-   "title": "加载CLIP"
-  }
- },
- "167": {
-  "inputs": {
-   "vae_name": "qwen_image_vae.safetensors"
+  "167": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
   },
-  "class_type": "VAELoader",
-  "_meta": {
-   "title": "加载VAE"
-  }
- },
- "168": {
-  "inputs": {
-   "unet_name": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors",
-   "weight_dtype": "default"
+  "168": {
+    "inputs": {
+      "unet_name": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNETLoader"
+    }
   },
-  "class_type": "UNETLoader",
-  "_meta": {
-   "title": "UNet加载器"
-  }
- },
- "173": {
-  "inputs": {
-   "text": "马赛克, mosaic, censored, 模糊，低分辨率，低质量图像，扭曲的肢体，诡异的外观，丑陋，噪点，网格感，JPEG压缩条纹，异常的肢体，水印，乱码，意义不明的字符",
-   "clip": [
-    "166",
-    0
-   ]
+  "173": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
   },
-  "class_type": "CLIPTextEncode",
-  "_meta": {
-   "title": "负面条件"
-  }
- },
- "180": {
-  "inputs": {
-   "multiplier": 4,
-   "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"
+  "180": {
+    "inputs": {
+      "multiplier": 4,
+      "per_layer_weights": "1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0"
+    },
+    "class_type": "ConditioningKrea2Rebalance",
+    "_meta": {
+      "title": "ConditioningKrea2Rebalance"
+    }
   },
-  "class_type": "ConditioningKrea2Rebalance",
-  "_meta": {
-   "title": "Conditioning Krea2 Rebalance"
-  }
- },
- "305": {
-  "inputs": {
-   "filename_prefix": "Krea2-20260722165117",
-   "images": [
-    "137",
-    0
-   ]
+  "305": {
+    "inputs": {
+      "filename_prefix": "Workbench",
+      "images": [
+        "137",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "SaveImage"
+    }
   },
-  "class_type": "SaveImage",
-  "_meta": {
-   "title": "保存图像"
-  }
- },
- "348": {
-  "inputs": {
-   "group_mode": true,
-   "default_active": {
-    "__value__": [
-     {
-      "text": "createconcept",
-      "active": true
-     },
-     {
-      "text": "DS-Illu",
-      "active": true
-     }
-    ]
-   },
-   "allow_strength_adjustment": false,
-   "toggle_trigger_words": {
-    "__value__": []
-   },
-   "orinalMessage": "",
-   "trigger_words": [
-    "349",
-    2
-   ]
+  "348": {
+    "inputs": {
+      "group_mode": true,
+      "default_active": {
+        "__value__": [
+          {
+            "text": "createconcept",
+            "active": true
+          },
+          {
+            "text": "DS-Illu",
+            "active": true
+          }
+        ]
+      },
+      "allow_strength_adjustment": false,
+      "toggle_trigger_words": {
+        "__value__": []
+      },
+      "orinalMessage": "",
+      "trigger_words": [
+        "349",
+        2
+      ]
+    },
+    "class_type": "TriggerWord Toggle (LoraManager)",
+    "_meta": {
+      "title": "TriggerWord Toggle (LoraManager)"
+    }
   },
-  "class_type": "TriggerWord Toggle (LoraManager)",
-  "_meta": {
-   "title": "TriggerWord Toggle (LoraManager)"
-  }
- },
- "349": {
-  "inputs": {
-   "__lm_autocomplete_meta_text": {
-    "version": 1,
-    "textWidgetName": "text"
-   },
-   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-5.00>",
-   "loras": {
-    "__value__": [
-     {
-      "name": "Krea2-滑块-年龄age_krea2_loraholic",
-      "strength": "-5.00",
-      "active": false,
-      "expanded": false,
-      "clipStrength": "-5.00",
-      "locked": false
-     }
-    ]
-   },
-   "model": [
-    "168",
-    0
-   ]
+  "349": {
+    "inputs": {
+      "__lm_autocomplete_meta_text": {
+        "version": 1,
+        "textWidgetName": "text"
+      },
+      "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-5.00>",
+      "loras": {
+        "__value__": [
+          {
+            "name": "Krea2-滑块-年龄age_krea2_loraholic",
+            "strength": "-5.00",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "-5.00",
+            "locked": false
+          }
+        ]
+      },
+      "model": [
+        "168",
+        0
+      ]
+    },
+    "class_type": "Lora Loader (LoraManager)",
+    "_meta": {
+      "title": "Lora Loader (LoraManager)"
+    }
   },
-  "class_type": "Lora Loader (LoraManager)",
-  "_meta": {
-   "title": "Lora Loader (LoraManager)"
-  }
- },
- "351": {
-  "inputs": {
-   "group_mode": true,
-   "default_active": {
-    "__value__": [
-     {
-      "text": "createconcept",
-      "active": true
-     },
-     {
-      "text": "DS-Illu",
-      "active": true
-     }
-    ]
-   },
-   "allow_strength_adjustment": false,
-   "toggle_trigger_words": {
-    "__value__": []
-   },
-   "orinalMessage": "",
-   "trigger_words": [
-    "352",
-    2
-   ]
+  "351": {
+    "inputs": {
+      "group_mode": true,
+      "default_active": {
+        "__value__": [
+          {
+            "text": "createconcept",
+            "active": true
+          },
+          {
+            "text": "DS-Illu",
+            "active": true
+          }
+        ]
+      },
+      "allow_strength_adjustment": false,
+      "toggle_trigger_words": {
+        "__value__": []
+      },
+      "orinalMessage": "",
+      "trigger_words": [
+        "352",
+        2
+      ]
+    },
+    "class_type": "TriggerWord Toggle (LoraManager)",
+    "_meta": {
+      "title": "TriggerWord Toggle (LoraManager)"
+    }
   },
-  "class_type": "TriggerWord Toggle (LoraManager)",
-  "_meta": {
-   "title": "TriggerWord Toggle (LoraManager)"
+  "352": {
+    "inputs": {
+      "__lm_autocomplete_meta_text": {
+        "version": 1,
+        "textWidgetName": "text"
+      },
+      "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-4.00>",
+      "loras": {
+        "__value__": [
+          {
+            "name": "Krea2-滑块-年龄age_krea2_loraholic",
+            "strength": "-4.00",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "-4.00",
+            "locked": false
+          }
+        ]
+      }
+    },
+    "class_type": "Lora Loader (LoraManager)",
+    "_meta": {
+      "title": "Lora Loader (LoraManager)"
+    }
   }
- },
- "352": {
-  "inputs": {
-   "__lm_autocomplete_meta_text": {
-    "version": 1,
-    "textWidgetName": "text"
-   },
-   "text": "<lora:Krea2-滑块-年龄age_krea2_loraholic:-4.00>",
-   "loras": {
-    "__value__": [
-     {
-      "name": "Krea2-滑块-年龄age_krea2_loraholic",
-      "strength": "-4.00",
-      "active": false,
-      "expanded": false,
-      "clipStrength": "-4.00",
-      "locked": false
-     }
-    ]
-   }
-  },
-  "class_type": "Lora Loader (LoraManager)",
-  "_meta": {
-   "title": "Lora Loader (LoraManager)"
-  }
- }
 }

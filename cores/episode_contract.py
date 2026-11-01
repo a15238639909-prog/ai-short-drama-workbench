@@ -8,7 +8,7 @@ import hashlib
 import re
 
 
-VERSION = 'episode-source-v1'
+VERSION = 'episode-source-v2'
 
 
 class ContractError(ValueError):
@@ -90,6 +90,34 @@ def split_speech(words, limit=15):
     return fragments
 
 
+def _action_attached_speech(body, aliases):
+    """A single explicit actor can own speech after their completed action.
+
+    Keep the action prefix verbatim. Thoughts, signs, plans, and multiple
+    possible actors remain outside this deterministic attribution.
+    """
+    colon = re.search('[：:]', body)
+    if not colon or not aliases:
+        return None
+    head, speech = body[:colon.start()], body[colon.end():].strip()
+    # Quoted speech already has the established attribution/classification
+    # path, including collective speakers, signs and remembered quotations.
+    if speech.startswith(('“', '「', '"')):
+        return None
+    if not speech or re.search(r'心想|心里|想起|回忆|默念|写着|刻着|贴着|标着|显示|牌上|屏幕|计划|打算|准备', head):
+        return None
+    labels = '|'.join(re.escape(name) for name in sorted(aliases, key=len, reverse=True))
+    subject = re.match(r'^\s*(?:(?:随后|接着|这时|此时|于是)[，,]?\s*)?(' + labels + r')(?P<action>.+)$', head)
+    cue = r'(?:点头|摇头|颔首|开口|说道|问道|答道|喊道|应道|回道|说|问|答|喊|回应|回答|低语|嘱咐|补充|提醒)(?:[了，,\s]*)$'
+    if not subject or not re.search(cue, subject['action']):
+        return None
+    owners = {aliases[match[0]] for match in re.finditer(labels, head)}
+    who = aliases[subject[1]] if len(owners) == 1 else '待核对说话人'
+    if len(speech) > 1 and (speech[0], speech[-1]) in (('“', '”'), ('「', '」'), ('"', '"')):
+        speech = speech[1:-1]
+    return body[:colon.end()], who, speech, colon.end()
+
+
 def prepare_source(source, chars=(), *, split_long_dialogue=False):
     """Return numbered source, (speaker, exact words) rows, and source evidence.
 
@@ -149,8 +177,16 @@ def prepare_source(source, chars=(), *, split_long_dialogue=False):
     for offset, line in segments:
         body = line.rstrip('\r\n')
         explicit = oral_story._DLG_LINE.match(re.sub(r'^\s*【D\d+】\s*', '', body).strip())
+        attached = _action_attached_speech(body, aliases)
         # These labels describe narration, not an on-screen speaking character.
         if explicit and explicit[1] in ('旁白', '画外音', '内心', '心声', '音效', '场景', '地点', '时间'):
+            lines.append(body)
+        elif attached:
+            prefix, who, speech, position = attached
+            lines.append(prefix)
+            add(who, speech, body, offset + position, source_end=offset + len(body))
+        elif (explicit and explicit[1] not in aliases
+              and re.search(r'心想|准备|打算|计划|写着|刻着|贴着|标着|显示', explicit[1])):
             lines.append(body)
         elif (explicit and not body.lstrip().startswith('──') and
               (explicit[1] in aliases or not re.search(r'(?:说|道|问|答|喊|写|刻|想|念|标|印|贴|叫|声|着)$', explicit[1]))):
@@ -243,6 +279,10 @@ def _departure_matches(text, source=False):
             matches.extend(_SOURCE_OUTWARD_TRANSITION.finditer(clause))
         for match in matches:
             before, after = clause[:match.start()], clause[match.end():]
+            if match[0] == '出门' and re.search(r'(?:勾勒|描绘|映|透|露|突|显)$', before):
+                # "勾勒出门外的光" describes an image, not an actor leaving.
+                # A separate physical exit in the same text is still checked.
+                continue
             if _FRAME_ONLY.match(after) or _DEPARTURE_NEGATION.search(before):
                 continue
             if source and _DEPARTURE_INTENT.search(before):
@@ -252,6 +292,17 @@ def _departure_matches(text, source=False):
 
 def unsupported_departure(model_text, source_text):
     """Small physical-exit guard, not general action or actor inference."""
+    # Reference definitions/retention describe rules, not events in this clip.
+    # In particular wardrobe retention mentions "离场" conditionally; checking
+    # the complete six-field envelope mistakes that policy for a staged exit.
+    fields = re.compile(r'(?im)^\s*(subject_definitions|summary|retention_analysis|'
+                        r'detailed_description|overall_soundscape|non_diegetic_music)\s*:\s*')
+    headers = list(fields.finditer(str(model_text or '')))
+    if any(match[1].lower() == 'detailed_description' for match in headers):
+        model_text = '\n'.join(str(model_text)[match.end():headers[index + 1].start()
+            if index + 1 < len(headers) else len(str(model_text))]
+            for index, match in enumerate(headers)
+            if match[1].lower() in ('summary', 'detailed_description'))
     script, _, _ = prepare_source(source_text)
     narrative = '\n'.join(line for line in script.splitlines() if not line.startswith('【D'))
     if next(_departure_matches(narrative, source=True), None):
@@ -322,7 +373,7 @@ def camera_identity_evidence(camera, chars=(), absent=()):
     return result
 
 
-def presence_evidence(source, chars=()):
+def presence_evidence(source, chars=(), context=''):
     """Return only explicit actor/absence evidence, never all named entities."""
     aliases = {a: n for a, n in _aliases(chars).items() if a and a not in ('他', '她', '你', '我')}
     if not aliases:
@@ -362,6 +413,13 @@ def presence_evidence(source, chars=()):
                 elif not departing and who in absent:
                     absent.remove(who)
                 facts.append({'name': who, 'presence': 'action', 'evidence': clause.strip()})
+    from . import group_entities
+    for occurrence in group_entities.collective_actions(source, chars, context=context):
+        for name in occurrence['members']:
+            if name not in actions:
+                actions.append(name)
+            facts.append({'name': name, 'presence': 'collective_action',
+                          'evidence': occurrence['evidence'], 'collective': occurrence['label']})
     counts = []
     digits = {'一': 1, '两': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
     for match in re.finditer(r'(?<![\w一-龥])(?:其余|剩下的?|在场的?)?([一两二三四五六七八九十]|\d+)人', narrative):

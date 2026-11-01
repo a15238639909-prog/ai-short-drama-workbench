@@ -175,9 +175,9 @@ def apply_compiled_authority(compiled):
     fields = result['fields']
     fields['subject_definitions'] = fields['subject_definitions'].replace(
         '人物外观完整沿用对应人设图；当前姿势、表情、持物和位置服从故事及实际状态。',
-        '固定身份与面部沿用对应人设图；原文明确的衣着与发型变化按剧情时序执行；'
-        '当前姿势、表情、持物和位置承接实际状态，不把错误观测外观变成人设。')
-    fields['retention_analysis'] += '\nIdentity authority (' + POLICY + '): ' + RULES
+        '人物身份与面部沿用对应人设图。')
+    # Observation/source precedence is enforced by the caller.  The renderer
+    # receives the concrete shot and reference roles, rather than that policy.
     result['prompt'] = '\n\n'.join(field + ':\n' + fields[field] for field in (
         'subject_definitions', 'summary', 'retention_analysis', 'detailed_description',
         'overall_soundscape', 'non_diegetic_music'))

@@ -67,3 +67,21 @@ venv/
 /tools/douyin-downloader/data/
 /tools/douyin-downloader/validation/
 /tools/douyin-downloader/下载的视频/
+
+# Reviewed v1.10 built-in image presets
+!_legacy_8848/presets/
+!_legacy_8848/presets/krea2/
+_legacy_8848/presets/krea2/*
+!_legacy_8848/presets/moss/
+_legacy_8848/presets/moss/*
+!_legacy_8848/presets/anima/
+_legacy_8848/presets/anima/*
+!_legacy_8848/presets/anima/Anima·人设图.txt
+!_legacy_8848/presets/anima/Anima·常规单图.txt
+!_legacy_8848/presets/anima/GPT优化指令词.txt
+!_legacy_8848/presets/krea2/GPT优化指令词.txt
+!_legacy_8848/presets/krea2/Krea2·作品场景还原与定制.txt
+!_legacy_8848/presets/krea2/Krea2·作品角色人设四视图.txt
+!_legacy_8848/presets/moss/GPT优化指令词.txt
+!_legacy_8848/presets/moss/Moss·人物人设图.txt
+!_legacy_8848/presets/moss/Moss·场景图.txt

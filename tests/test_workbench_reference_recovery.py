@@ -125,7 +125,7 @@ class WorkbenchReferenceRecoveryTests(unittest.TestCase):
         job = self.run_batch()
         self.assertEqual(job['status'], 'completed', job.get('err'))
         self.assertEqual(len(self.generated_rows), 11)
-        self.merge.assert_called_once_with(self.sid, 2)
+        self.merge.assert_called_once_with(self.sid, 2, dst=None, skip_invalid=True, report={})
         self.assertEqual(len({row['video'] for row in self.rows()}), 11)
         self.assertEqual(self.old.read_bytes(), old_bytes)
         self.assertEqual(self.rows()[0]['render_history'][0]['video'], str(self.old))
@@ -136,25 +136,28 @@ class WorkbenchReferenceRecoveryTests(unittest.TestCase):
                 self.assertEqual(request[key], before[key])
             self.assertEqual(request['status'], 'completed')
 
-    def test_preparation_reference_error_has_zero_results_and_no_external_request(self):
+    def test_preparation_reference_error_continues_ten_other_segments_and_partial_merge(self):
         self.rows()[0]['prompt'] = self.prompt.replace('<Picture 2>', '<Picture 3>')
         job = self.run_batch()
-        self.generate.assert_not_called()
-        self.merge.assert_not_called()
-        self.assertEqual(self.generated_rows, [])
-        self.assertEqual(job['status'], 'failed')
-        self.assertEqual(job['saved_video_count'], 0)
+        self.assertEqual(self.generate.call_count, 10)
+        self.merge.assert_called_once()
+        self.assertIn('_部分', self.merge.call_args.kwargs['dst'])
+        self.assertEqual(len(self.generated_rows), 10)
+        self.assertEqual(job['status'], 'partial')
+        self.assertEqual(job['saved_video_count'], 10)
         self.assertEqual(job['expected_segments'], 11)
         self.assertEqual(job['failed_render_segments'], [1])
-        self.assertEqual(job['unexecuted_render_segments'], list(range(2, 12)))
-        self.assertEqual(job['pending_render_segments'], list(range(1, 12)))
+        self.assertEqual(job['unexecuted_render_segments'], [])
+        self.assertEqual(job['pending_render_segments'], [1])
         self.assertEqual(job['render_submission_state'], 'not_submitted')
         self.assertEqual(job['failure_stage'], 'video_preflight')
         self.assertLess(saga._job_view(job)['percent'], 100)
         self.assertIn('未绑定的图片编号', str(job))
         self.assertNotIn('已完成视频保留', job.get('err', ''))
         self.assertFalse(job['_recovery'].get('external_inflight'))
-        self.assertTrue(all(not row.get('video') and not row.get('render_request') for row in self.rows()))
+        self.assertFalse(self.rows()[0].get('video'))
+        self.assertFalse(self.rows()[0].get('render_request'))
+        self.assertTrue(all(row.get('video') for row in self.rows()[1:]))
 
     def test_second_segment_terminal_failure_recovers_without_replacing_first(self):
         self.count = 2
@@ -181,7 +184,9 @@ class WorkbenchReferenceRecoveryTests(unittest.TestCase):
         self.assertEqual(self.generated_rows[0]['key'], first['render_request']['key'])
         for key in ('key', 'input_signature', 'final_prompt', 'final_refs', 'resolved_params'):
             self.assertEqual(self.rows()[1]['render_request'][key], frozen_second[key])
-        self.merge.assert_called_once()
+        self.assertEqual(self.merge.call_count, 2)
+        self.assertIn('_部分', self.merge.call_args_list[0].kwargs['dst'])
+        self.assertIsNone(self.merge.call_args_list[1].kwargs['dst'])
 
 
 class WorkbenchExistingRequestTests(unittest.TestCase):

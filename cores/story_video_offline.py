@@ -36,7 +36,7 @@ def _environment(log_path, source):
     result = dict(source)
     result.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
                   HF_DATASETS_OFFLINE='1', NO_PROXY='127.0.0.1,localhost,::1',
-                  no_proxy='127.0.0.1,localhost,::1')
+                  no_proxy='127.0.0.1,localhost,::1', PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
     result[OFFLINE_FLAG] = '1'
     result[AUDIT_PATH] = str(Path(log_path).expanduser().resolve())
     for name in _PROXIES:

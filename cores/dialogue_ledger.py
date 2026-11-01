@@ -106,6 +106,18 @@ def _find_speaker(src, start, end, names):
     before = re.split(r"[。！？\n]", before)[-1]
     after = re.split(r"[。！？\n]", after)[0]
     np_ = _name_pat(names)
+    # 「甲说：“…”乙说：“…”」里的乙属于下一处引号的前置归属，
+    # 不能同时用来给甲的原话作后置归属。真正的「“…”乙说。」不受影响；
+    # 「“…”甲说，乙说：“…”」也仍保留甲这一条独立的后置依据。
+    next_quote = re.search(r"[“「]", after)
+    if next_quote:
+        lead = after[:next_quote.start()]
+        speaker = np_ or r"([一-龥]{2,4})"
+        bound = 12 if np_ else 10
+        introduction = (r"\s*[，,]?\s*" + speaker + r"(?:[^，。！？“”「」]{0,"
+                        + str(bound) + r"}?" + _SAY_V + r"[：:，,]?\s*|\s*[：:]\s*)")
+        if re.fullmatch(introduction, lead):
+            after = ""
     cands = []
     if np_:
         m = re.search(np_ + r"[^，。！？“”「」]{0,24}?" + _SAY_V + r"[：:，,]?\s*$", before)

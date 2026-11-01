@@ -285,18 +285,40 @@ class ContinueModeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             core._automatic_resume_check(manifest['segments'][0], changed, None, inputs)
 
-    def test_initial_unusable_story_or_prompt_remains_a_real_failure(self):
-        for which in ('plan', 'writing'):
-            case, _ = self.fixture()
-            predicate = (lambda payload, path: path.name == 'planning') if which == 'plan' else (
-                lambda payload, path: path.name == 'writing')
-            with self.fail_requests(predicate), self.assertRaisesRegex(RuntimeError, '格式修复'):
-                core.run_job(case.task['id'])
-            self.assertEqual(case.video_calls, [])
-            case.join.assert_not_called()
+    def test_initial_unusable_story_without_saved_plan_remains_a_real_failure(self):
+        case, _ = self.fixture()
+        with self.fail_requests(lambda payload, path: path.name == 'planning'), self.assertRaisesRegex(RuntimeError, '格式修复'):
+            core.run_job(case.task['id'])
+        self.assertEqual(case.video_calls, [])
+        case.join.assert_not_called()
 
-    def test_service_pubg_cancel_and_bad_media_errors_are_never_optional(self):
-        for message in ('本地模型服务不可用', 'PUBG_RUNNING：显卡正被游戏占用', '任务取消'):
+    def test_initial_director_format_failure_finishes_from_saved_plan_in_both_modes(self):
+        for image in (False, True):
+            with self.subTest(image=image):
+                case, _ = self.fixture(image=image)
+                with self.fail_requests(lambda payload, path: path.name == 'writing'):
+                    output = core.run_job(case.task['id'])
+                manifest = self.assert_completed(case, output, warnings=True)
+                self.assertEqual(len(case.video_calls), 2)
+                self.assertEqual(len(list(case.folder.rglob('source_fallback.json'))), 2)
+                self.assertIn('writing_fallback_warning', str(manifest['quality_attempts']))
+
+    def test_optional_service_and_response_failures_preserve_clips_and_finish(self):
+        for stage, error in (('review', RuntimeError('本地模型服务不可用')),
+                ('storyboard_review', TimeoutError('review timed out')),
+                ('segment', ConnectionRefusedError('review connection refused')),
+                ('opening', KeyError('choices'))):
+            for image in (False, True):
+                with self.subTest(stage=stage, image=image):
+                    case, _ = self.fixture(image=image)
+                    with self.fail_requests(lambda payload, path: payload.get('stage') == stage, error):
+                        output = core.run_job(case.task['id'])
+                    manifest = self.assert_completed(case, output)
+                    self.assertTrue(manifest.get('continuation_warnings') or
+                        any(row['quality']['warnings'] for row in manifest['segments']))
+
+    def test_pubg_cancel_and_bad_media_errors_are_never_optional(self):
+        for message in ('PUBG_RUNNING：显卡正被游戏占用', '任务取消'):
             case, _ = self.fixture()
             with self.fail_requests(lambda payload, path: payload.get('stage') == 'review',
                     RuntimeError(message)), self.assertRaisesRegex(RuntimeError, message.split('：')[0]):
@@ -305,35 +327,43 @@ class ContinueModeTests(unittest.TestCase):
             case.join.assert_not_called()
         case, _ = self.fixture()
         with patch.object(media, 'adopt', side_effect=RuntimeError('视频完整解码失败')):
-            with self.assertRaisesRegex(RuntimeError, '解码失败'):
-                core.run_job(case.task['id'])
-        self.assertEqual(len(case.video_calls), 1)
+            output = core.run_job(case.task['id'])
+        self.assertFalse(output['generation_completed'])
+        self.assertEqual(output['missing_segments'], [1, 2])
+        self.assertEqual(len(case.video_calls), 2)
         case.join.assert_not_called()
 
     def test_unusable_audio_source_and_join_failure_remain_real_failures(self):
         case, _ = self.fixture()
         case.audio.side_effect = lambda *args, **kwargs: dict(status='unavailable',
             issues=[dict(code='asr_worker_error', reason='音轨提取失败：损坏视频')])
-        with self.assertRaisesRegex(RuntimeError, '音轨文件处理失败'):
-            core.run_job(case.task['id'])
-        self.assertEqual(len(case.video_calls), 1)
-        case.join.assert_not_called()
+        output = core.run_job(case.task['id'])
+        self.assertTrue(output['generation_completed'])
+        self.assertEqual(len(case.video_calls), 2)
+        self.assertTrue(all(row['quality']['audio']['source_processing_issues']
+                            for row in case.manifest()['segments']))
+        case.join.assert_called_once()
         case, _ = self.fixture()
         case.join.side_effect = RuntimeError('最终完整音画解码失败')
-        with self.assertRaisesRegex(RuntimeError, '完整音画解码失败'):
-            core.run_job(case.task['id'])
+        output = core.run_job(case.task['id'])
+        self.assertFalse(output['generation_completed'])
+        self.assertEqual(output['missing_segments'], [])
+        self.assertEqual(len(output['saved_segments']), 2)
         self.assertFalse(case.manifest()['quality_summary']['passed'])
-        self.assertNotIn('output', case.manifest())
+        self.assertEqual(case.manifest()['output']['partial_policy'], continuation.PARTIAL_POLICY)
 
-    def test_legacy_manifest_and_reference_keep_existing_dispatch_rules(self):
+    def test_legacy_manifest_keeps_template_but_continues_and_reference_dispatch_stays_separate(self):
         case, _ = self.fixture()
         case.save_json(case.folder/'manifest.json', dict(version=1,
             task_id=case.task['id'], inputs=copy.deepcopy(case.task['inputs']),
             segments=[], logs=[], created=0))
         case.review_replies = [review_fixture(False), review_fixture(False)]
-        with self.assertRaisesRegex(RuntimeError, '复审仍未通过'):
-            core.run_job(case.task['id'])
-        self.assertEqual(case.video_calls, [])
+        output = core.run_job(case.task['id'])
+        self.assertEqual(len(case.video_calls), 2)
+        self.assertEqual(output['quality_status'], 'completed_with_warnings')
+        self.assertFalse(case.manifest()['plan_review']['passed'])
+        self.assertEqual(case.manifest()['plan_review']['round'], 2)
+        self.assertNotIn('director_profile', case.manifest())
         self.assertNotIn('continuation_policy', case.manifest())
         case, _ = self.fixture()
         case.task['inputs']['input_mode'] = 'reference'

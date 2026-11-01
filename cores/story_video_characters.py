@@ -442,10 +442,10 @@ def bind_delivery(raw, payload, cards, refs, compiler=None):
             raise ValueError('发声人物缺少本段Subject参考')
         delivery = _text(line.get('delivery'), '当句表演说明')
         subject = subject_by_id[identity]
-        tags = re.findall(r'<Subject\s+(\d+)>', delivery, re.I)
+        tags = re.findall(r'<\s*Subject\s*(\d+)\s*>', delivery, re.I)
         if any(int(number) != subject for number in tags):
             raise ValueError('原delivery引用了与该句说话者不符的Subject，不能静默换人')
-        performance = re.sub(r'<Subject\s+\d+>\s*[，,:：;；]?\s*', '', delivery, flags=re.I).strip()
+        performance = re.sub(r'<\s*Subject\s*\d+\s*>\s*[，,:：;；]?\s*', '', delivery, flags=re.I).strip()
         if not performance:
             raise ValueError('当句表演说明不能只有人物标签')
         final_delivery = '<Subject %d>，音色描述：%s；%s' % (subject, by_id[identity]['voice'], performance)

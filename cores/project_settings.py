@@ -14,6 +14,13 @@ def defaults():
         "world_type": "西方",
         "visual_strength": "美型（默认）",
         "style": "网红自然感",
+        # Missing fields belong to historical projects and retain Krea2.
+        # Only create_story opts new projects into the accepted Moss default.
+        "image_model": "krea2",
+        # Empty per-asset selections inherit the historical shared model.
+        "character_image_model": "",
+        "scene_image_model": "",
+        "image_quality": "2x",
         # 【五维改造 2026-08-29】新增三维，与 world_type / style 合成五维：
         # genre 影片类型＝叙事结构（治「换题材还是一个味」）
         # look  角色审美＝长相与体型（网红脸／沧桑／夸张体型…）

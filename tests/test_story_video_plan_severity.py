@@ -115,20 +115,54 @@ class PlanSeverityTests(unittest.TestCase):
         self.assertEqual(manifest['plan_review']['round'], 2)
         self.assertEqual(manifest['plan_advisories'], passed['issues'])
 
-    def test_second_blocking_review_stops_with_versions_preserved(self):
+    def test_second_blocking_review_continues_with_versions_and_warning_preserved(self):
         manifest = self.manifest()
         revised = plan_fixture()
         revised['title'] = 'A still blocked draft'
         failed = review([issue('blocking')])
         with patch.object(core, '_save'), patch.object(core, 'request_json',
                 side_effect=self.mock_requests([failed, revised, failed])) as request:
-            with self.assertRaisesRegex(RuntimeError, '复审仍未通过'):
-                core._quality_gate(manifest, Path('D:/unit-quality-only'), self.inputs(), None, Mock())
+            result = core._quality_gate(manifest, Path('D:/unit-quality-only'), self.inputs(), None, Mock())
         self.assertEqual(request.call_count, 3)
         self.assertEqual(manifest['segments'], [])
         self.assertFalse(manifest['plan_review']['passed'])
         self.assertEqual(manifest['plan_review']['round'], 2)
         self.assertEqual(len(manifest['rejected_plan_versions']), 1)
+        self.assertEqual(result, revised)
+        self.assertTrue(manifest['continuation_warnings'])
+        with patch.object(core, 'request_json') as request:
+            self.assertEqual(core._quality_gate(manifest, Path('D:/unit-quality-only'),
+                self.inputs(), None, Mock()), revised)
+            request.assert_not_called()
+
+    def test_legacy_review_timeout_keeps_valid_plan_and_unknown_warning(self):
+        manifest = self.manifest()
+        with patch.object(core, '_save'), patch.object(core, 'request_json',
+                side_effect=TimeoutError('review service unavailable')) as request:
+            result = core._quality_gate(manifest, Path('D:/unit-quality-only'),
+                self.inputs(version=1), None, Mock())
+        self.assertEqual(result, plan_fixture())
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(manifest['plan_review']['status'], 'unavailable')
+        self.assertNotIn('passed', manifest['plan_review'])
+        self.assertTrue(manifest['continuation_warnings'])
+
+    def test_legacy_revision_timeout_keeps_valid_source_and_does_not_retry_review(self):
+        manifest = self.manifest()
+        failed = review([issue('blocking')])
+        with patch.object(core, '_save'), patch.object(core, 'request_json',
+                side_effect=[failed, TimeoutError('revision service unavailable')]) as request:
+            result = core._quality_gate(manifest, Path('D:/unit-quality-only'),
+                self.inputs(version=1), None, Mock())
+        self.assertEqual(result, plan_fixture())
+        self.assertEqual(request.call_count, 2)
+        self.assertFalse(manifest['plan_review']['passed'])
+        self.assertEqual(manifest['plan_revision_warning']['status'], 'unavailable')
+        self.assertNotIn('rejected_plan_versions', manifest)
+        with patch.object(core, 'request_json') as request:
+            self.assertEqual(core._quality_gate(manifest, Path('D:/unit-quality-only'),
+                self.inputs(version=1), None, Mock()), result)
+            request.assert_not_called()
 
     def test_guided_and_legacy_keep_the_original_schema_and_gate_behavior(self):
         _, old_payload, old_schema = self.request(blocking_only=False)

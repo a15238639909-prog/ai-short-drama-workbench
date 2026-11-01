@@ -83,13 +83,13 @@
     }
     function statusName(value) {
       return {queued:'排队中',running:'正在生成',paused:'已暂停',interrupted:'已中断',waiting_user:'等待处理',
-        completed:'已完成',failed:'生成失败',cancelled:'已取消',pausing:'正在暂停'}[value] || value || '准备中';
+        completed:'已完成',partial:'本轮已处理，部分待补',failed:'生成失败',cancelled:'已取消',pausing:'正在暂停'}[value] || value || '准备中';
     }
     function invalidatePoll() {
       el._storyVideoPollSequence = (el._storyVideoPollSequence || 0) + 1;
       clearTimeout(timer);
     }
-    function locked() { return !!(task && ['queued','running','waiting_user','pausing','paused','interrupted'].indexOf(task.status) >= 0); }
+    function locked() { return !!(task && ['queued','running','waiting_user','pausing','paused','interrupted','partial'].indexOf(task.status) >= 0); }
     function taskAutomatic() { return !!(task && (task.quality_mode || (task.inputs || {}).quality_mode)==='automatic'); }
     function sync() {
       var hold = clearing || locked(), status = task && task.status;
@@ -102,7 +102,7 @@
       get('ratio').disabled = get('ratio').disabled || !ratioSupported;
       get('start').disabled = hold || pending || uploading;
       get('start').textContent = automatic?'自动生成整片':(mode==='text' ? '生成故事和第一段视频' : '先看故事');
-      get('quality-note').textContent=reference?(automatic?'新自动任务先有限修复；审稿、观察报告不可用、未通过时，记录提醒后继续。每段生成一次，无自动补拍。提示词、素材、视频或生成服务不可用时仍会停止。':'先查看故事，确认后再生成成片。审阅建议会保留，由你决定继续或重做。'):(automatic?'新自动任务先有限修复；审稿及画面核对结果供参考，有提醒也继续生成，不因质量建议中断或自动补拍。':'有首图先看故事；纯文字先看故事和第一段。审阅建议供参考，由你决定继续或重做。');
+      get('quality-note').textContent=reference?(automatic?'新自动任务先有限修复；审稿、观察报告不可用、未通过时，记录提醒后继续。单段失败保留待补，继续后续段；保留可用片段，能合并就合并。每段生成一次，无自动补拍。':'先查看故事，确认后再生成成片。审阅建议会保留，由你决定继续或重做。'):(automatic?'新自动任务先有限修复；审稿及画面核对结果供参考，有提醒也继续生成，不因质量建议中断或自动补拍。单段失败保留待补，继续后续段，能合并就合并。':'有首图先看故事；纯文字先看故事和第一段。审阅建议供参考，由你决定继续或重做。');
       get('audio-review-note').textContent=get('audio-review').checked?'逐段识别语音并核对台词，会增加耗时。核对结果供参考，视频声音按原设置生成。':'跳过语音识别核对，视频声音按原设置生成。';
       get('opening-card').hidden=mode!=='image';
       get('reference-card').hidden=!reference;
@@ -116,8 +116,8 @@
       get('direction').closest('.sv-card').style.gridColumn=mode==='text'?'1 / -1':'';
       get('clear').disabled = hold || pending || uploading;
       get('pause').hidden = !task || ['queued','running'].indexOf(status) < 0;
-      get('resume').hidden = !task || ['paused','interrupted'].indexOf(status) < 0;
-      get('cancel').hidden = !task || ['queued','running','waiting_user','pausing','paused','interrupted'].indexOf(status) < 0;
+      get('resume').hidden = !task || ['paused','interrupted','partial'].indexOf(status) < 0;
+      get('cancel').hidden = !task || ['queued','running','waiting_user','pausing','paused','interrupted','partial'].indexOf(status) < 0;
       get('retry').hidden = !task || ['failed','cancelled'].indexOf(status) < 0;
       ['pause','resume','cancel','retry'].forEach(function (name) { get(name).disabled = pending || uploading; });
       ['approve','rewrite','redo'].forEach(function(name){get(name).disabled=pending||uploading||!!(task&&['running','queued'].includes(status));});
@@ -270,19 +270,20 @@
       var finalUrl = mediaUrl(output.url || output.compact_url || output.final_url || output.output_path || output.compact_path);
       var rawUrl = mediaUrl(output.raw_url || output.raw_path || output.raw_output_path);
       var manifest = mediaUrl(output.manifest_url || output.manifest_path);
-      var key = [finalUrl,rawUrl,manifest].join('|');
-      if (!finalUrl || key === outputKey) return;
+      var partial=output.generation_completed===false, saved=output.saved_segments||[];
+      var key = [finalUrl,rawUrl,manifest,partial,JSON.stringify(output.missing_segments||[])].join('|');
+      if ((!finalUrl&&!partial) || key === outputKey) return;
       outputKey = key;
       var result = get('result'); result.replaceChildren(); result.hidden = false;
-      var title = document.createElement('h3'); title.textContent = '故事成片'; result.appendChild(title);
-      var video = document.createElement('video'); video.controls = true; video.preload = 'metadata'; video.src = finalUrl; result.appendChild(video);
+      var title = document.createElement('h3'); title.textContent = partial?'阶段结果 · 部分待补':'故事成片'; result.appendChild(title);
+      if(finalUrl){var video = document.createElement('video'); video.controls = true; video.preload = 'metadata'; video.src = finalUrl; result.appendChild(video);}
       var links = document.createElement('div'); links.className = 'sv-links';
-      [['打开成片',finalUrl],['完整原片',rawUrl],['生成记录',manifest]].forEach(function (pair) {
+      [[partial?'打开阶段合并':'打开成片',finalUrl],['完整原片',rawUrl],['生成记录',manifest]].concat(saved.map(function(row){return ['第'+row.index+'段',mediaUrl(row.url||row.path)];})).forEach(function (pair) {
         if (!pair[1]) return;
         var link = document.createElement('a'); link.href = pair[1]; link.textContent = pair[0]; link.target = '_blank'; link.rel = 'noopener'; links.appendChild(link);
       });
       result.appendChild(links);
-      if (output.review || output.warning) { var note=document.createElement('p'); note.className='sv-note'; note.textContent=output.review || output.warning; result.appendChild(note); }
+      if (output.review || output.warning || output.detail) { var note=document.createElement('p'); note.className='sv-note'; note.textContent=output.review || output.warning || output.detail; result.appendChild(note); }
     }
     function update(payload) {
       if (!active()) return;
@@ -322,10 +323,11 @@
       var detail = typeof task.detail === 'string' ? task.detail : textOf(task.detail);
       get('status').textContent = task.error || (statusName(task.status) + (label ? '：' + label : '') + (detail && detail !== label ? '\n' + detail : ''));
       var quality=payload.quality_summary||task.quality_summary||{}, reasons=Array.isArray(quality.reasons)?quality.reasons.map(textOf).join('；'):textOf(quality.reasons||'');
-      var completedWithWarnings=quality.status==='completed_with_warnings'&&quality.generation_completed===true, workingWithWarnings=quality.status==='working_with_warnings';
+      var completedWithWarnings=task.status==='completed'&&quality.status==='completed_with_warnings'&&quality.generation_completed===true, workingWithWarnings=quality.status==='working_with_warnings';
+      var warningLabel=['running','queued','pausing'].includes(task.status)?'已保留审稿提醒，继续生成':task.status==='waiting_user'?'已保留审稿提醒，等待确认':task.status==='paused'?'已保留审稿提醒，任务已暂停':task.status==='cancelled'?'已保留审稿提醒，任务已取消':'已保留审稿提醒，本轮已停止，可恢复';
       var warningCount=Array.isArray(quality.warnings)?quality.warnings.length:0;
       get('quality-status').hidden=quality.passed===undefined&&!reasons&&!completedWithWarnings&&!workingWithWarnings;
-      get('quality-status').textContent=(quality.status==='failed'?'本地流程已中断':completedWithWarnings?'生成完成（有审稿提醒）':workingWithWarnings?'已保留审稿提醒，继续生成':quality.passed===true?'本地验收通过':quality.passed===false?'本地验收未通过':'本地验收')+((completedWithWarnings||workingWithWarnings)&&warningCount?' · '+warningCount+'条提醒':'')+(reasons?'：'+reasons:'');
+      get('quality-status').textContent=(quality.status==='failed'?'本地流程已中断':completedWithWarnings?'生成完成（有审稿提醒）':workingWithWarnings?warningLabel:quality.passed===true?'本地验收通过':quality.passed===false?'本地验收未通过':'本地验收')+((completedWithWarnings||workingWithWarnings)&&warningCount?' · '+warningCount+'条提醒':'')+(reasons?'：'+reasons:'');
       get('bar').style.width = percent + '%'; get('stage').textContent = percent + '% · ' + Math.min(done,total) + ' / ' + total;
       var output = payload.output || task.output || {};
       renderObservations(payload.observations || task.observations || output.observations || task.segments || output.segments);

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """runtime_core.py — V4.1 Runtime Core：TaskCenter / GPU 游戏模式 / 存储 / 归档 / 问题。"""
-import json, os, shutil, threading, time, uuid, zipfile
+import errno, hashlib, json, os, shutil, threading, time, uuid, zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from . import store, runtime_reset
 
@@ -11,7 +12,7 @@ TASKS_DIR.mkdir(parents=True, exist_ok=True)
 PRODUCTIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATUSES = ("draft", "queued", "running", "waiting_user", "paused",
-            "interrupted", "failed", "completed", "cancelled")
+            "interrupted", "failed", "partial", "completed", "cancelled")
 
 class TaskPaused(Exception):
     pass
@@ -20,20 +21,83 @@ def _task_path(tid):
     return TASKS_DIR / (tid + ".json")
 
 _TASK_LOCK = threading.RLock()
+_TASK_LOCAL = threading.local()
+
+
+@contextmanager
+def _task_state_lock():
+    """Serialize task read/modify/write across the server and child workers."""
+    with _TASK_LOCK:
+        if getattr(_TASK_LOCAL, 'held', False):
+            yield
+            return
+        TASKS_DIR.mkdir(parents=True, exist_ok=True)
+        # Retain this marker; removing lock files can split active lockers.
+        with (TASKS_DIR / '.task_state.lock').open('a+b') as stream:
+            if not stream.tell():
+                stream.write(b'0')
+                stream.flush()
+            if os.name == 'nt':
+                import msvcrt
+                def lock():
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                def unlock():
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                def lock():
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                def unlock():
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    lock()
+                    break
+                except OSError as error:
+                    if (error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK)
+                            and getattr(error, 'winerror', None) not in (5, 32, 33, 36)):
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('任务状态正在保存，未修改；请稍后重试') from error
+                    time.sleep(0.02)
+            _TASK_LOCAL.held = True
+            try:
+                yield
+            finally:
+                _TASK_LOCAL.held = False
+                unlock()
 
 
 def save(t):
-    with _TASK_LOCK:
+    with _task_state_lock():
         current = load(t['id'])
         if current and current.get('cleared_at'):
             return current
+        # An old worker can finish after a reset. Its final/error save must
+        # obey the same generation barrier as model submission and progress.
+        runtime_reset.assert_current()
         store.save_json(_task_path(t["id"]), t)
     return t
 
 
+def update(tid, *, expected_statuses=None, **changes):
+    """Apply controls/fields to the latest task without replacing progress."""
+    with _task_state_lock():
+        t = load(tid)
+        if not t or t.get('cleared_at'):
+            return t
+        if expected_statuses is not None and t.get('status') not in expected_statuses:
+            return t
+        t.update(changes)
+        return save(t)
+
+
 def clear_all_tasks():
     now = time.time()
-    with _TASK_LOCK, _CV:
+    with _task_state_lock(), _CV:
         queued = len(_QUEUE)
         _QUEUE.clear()
         cleared = cancelled = 0
@@ -79,7 +143,7 @@ class TaskHandle:
         return load(self.tid)
 
     def set(self, **kw):
-        with self._lock:
+        with self._lock, _task_state_lock():
             t = load(self.tid)
             if not t or t.get('cleared_at') or t.get('status') == 'cancelled':
                 raise TaskPaused()
@@ -109,30 +173,32 @@ class TaskHandle:
         return (self._get() or {}).get("status") in ("interrupted", "paused", "cancelled")
 
 def action(tid, act):
-    t = load(tid)
-    if not t:
-        return None
-    if t.get("cleared_at"):
+    with _task_state_lock():
+        t = load(tid)
+        if not t:
+            return None
+        if t.get("cleared_at"):
+            return t
+        st = t.get("status")
+        if act == "pause" and st in ("running", "queued", "waiting_user"):
+            t["status"] = "paused"; t["detail"] = "已暂停（检查点已保存）"; save(t)
+        elif act == "resume" and st in ("paused", "interrupted", "failed", "partial"):
+            t["status"] = "queued"; t["error"] = ""; save(t)
+            _queue(tid)
+        elif act == "retry" and st in ("failed", "cancelled", "partial"):
+            t["status"] = "queued"; t["error"] = ""; save(t)
+            _queue(tid)
+        elif act == "cancel" and st not in ("completed", "cancelled"):
+            t["status"] = "cancelled"; t["detail"] = "已取消"; save(t)
         return t
-    st = t.get("status")
-    if act == "pause" and st in ("running", "queued", "waiting_user"):
-        t["status"] = "paused"; t["detail"] = "已暂停（检查点已保存）"; save(t)
-    elif act == "resume" and st in ("paused", "interrupted", "failed"):
-        t["status"] = "queued"; t["error"] = ""; save(t)
-        _queue(tid)
-    elif act == "retry" and st in ("failed", "cancelled"):
-        t["status"] = "queued"; t["error"] = ""; save(t)
-        _queue(tid)
-    elif act == "cancel" and st not in ("completed", "cancelled"):
-        t["status"] = "cancelled"; t["detail"] = "已取消"; save(t)
-    return t
 
 _QUEUE = []
 _CV = threading.Condition()
 
 def _queue(tid):
     with _CV:
-        _QUEUE.append(tid)
+        if tid not in _QUEUE:
+            _QUEUE.append(tid)
         _CV.notify_all()
 
 @runtime_reset.admission
@@ -161,30 +227,58 @@ def _run(tid):
 
 
 def _run_current(tid):
-    t = load(tid)
-    if not t or t.get("status") != "queued":
-        return
-    t["status"] = "running"; t["started"] = time.time(); save(t)
+    with _task_state_lock():
+        t = load(tid)
+        if not t or t.get("status") != "queued":
+            return
+        t["status"] = "running"; t["started"] = time.time(); save(t)
     h = TaskHandle(tid)
     try:
         runner = RUNNERS.get(t.get("kind"))
         if not runner:
             raise RuntimeError("未知任务类型：" + str(t.get("kind")))
         out = runner(h, t)
-        t = load(tid) or t
-        if t.get("status") in ("paused", "cancelled", "interrupted", "waiting_user"):
-            return
-        t["status"] = "completed"; t["output"] = out; t["ended"] = time.time(); t["detail"] = "完成"
-        save(t)
+        with _task_state_lock():
+            runtime_reset.assert_current()
+            t = load(tid) or t
+            _pending_story_control(t)
+            if t.get("status") in ("paused", "cancelled", "interrupted", "waiting_user"):
+                save(t)
+                return
+            partial = isinstance(out, dict) and out.get('generation_completed') is False
+            t["status"] = "partial" if partial else "completed"
+            t["output"] = out; t["ended"] = time.time()
+            t["detail"] = out.get('detail', '本轮已处理，部分待补，已完成结果保留') if partial else "完成"
+            save(t)
+    except runtime_reset.Cancelled:
+        raise
     except TaskPaused:
-        t = load(tid) or t
-        if t.get("status") == "cancelled":
+        with _task_state_lock():
+            runtime_reset.assert_current()
+            t = load(tid) or t
+            _pending_story_control(t)
+            if t.get("status") not in ("cancelled", "paused", "interrupted", "waiting_user"):
+                t["status"] = "paused"; t["detail"] = "已暂停"
             t["ended"] = time.time(); save(t)
-            return
-        t["status"] = "paused"; t["detail"] = "已暂停"; t["ended"] = time.time(); save(t)
     except Exception as e:
-        t = load(tid) or t
-        t["status"] = "failed"; t["error"] = str(e)[:800]; t["ended"] = time.time(); save(t)
+        with _task_state_lock():
+            runtime_reset.assert_current()
+            t = load(tid) or t
+            _pending_story_control(t)
+            if t.get("status") not in ("cancelled", "paused", "interrupted", "waiting_user"):
+                t["status"] = "failed"; t["error"] = str(e)[:800]
+            t["ended"] = time.time(); save(t)
+
+
+def _pending_story_control(t):
+    # Story-video deliberately waits for the current child phase to save.
+    # A late request must still win over a successful/error runner return.
+    if t.get('kind') != 'story_video':
+        return
+    if t.get('cancel_requested'):
+        t.update(status='cancelled', detail='已取消，所有已生成结果保留')
+    elif t.get('pause_requested'):
+        t.update(status='paused', detail='已保存当前阶段，可继续')
 
 def worker_loop():
     while True:
@@ -199,6 +293,56 @@ def start_worker():
     threading.Thread(target=worker_loop, daemon=True).start()
 
 # ---- 生产 Runner（把长链接入 TaskCenter） ----
+
+def item_failure_requires_stop(error):
+    """A failed independent item must not override controls or changed inputs."""
+    current, seen = error, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if type(current).__name__ in ('TaskPaused', 'ControlStop', 'Cancelled', '_Paused',
+                                     'LocalASRBlocked', 'AgePolicyError', 'BusyError',
+                                     'SavedMediaIntegrityError'):
+            return True
+        if any(word in str(current) for word in (
+                'PUBG', 'pubg', 'V41_NO_MODEL', '显卡正被', '任务取消', '任务已取消',
+                '旧的暂停状态', '任务已被清理', '运行保护', '签名不一致', '输入已变化',
+                '输入发生变化', '产物内容改变', '素材内容改变', '证据变化')):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _batch_checkpoint(h, t, kind, source):
+    token = hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True,
+                                      default=str).encode('utf-8')).hexdigest()
+    batch = t.get('checkpoint', {}).get('batch')
+    if batch is not None and (batch.get('kind') != kind or batch.get('source_signature') != token):
+        raise RuntimeError('批次输入已变化，已有结果保留，未重复生成')
+    if batch is None:
+        batch = dict(kind=kind, source_signature=token, items={}, errors={})
+    _save_batch(h, t, batch)
+    return batch
+
+
+def _save_batch(h, t, batch):
+    checkpoint = dict(t.get('checkpoint') or {}, batch=batch,
+                      done=sum(row.get('status') == 'completed' for row in batch['items'].values()))
+    h.set(checkpoint=checkpoint)
+    t['checkpoint'] = checkpoint
+
+
+def _batch_file(path, expected=None):
+    path = Path(path)
+    if not path.is_file() or not path.stat().st_size:
+        raise RuntimeError(('已保存产物内容改变或文件缺失：' if expected is not None
+                            else '本项产物文件不存在或为空：') + str(path))
+    with path.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if expected is not None and digest != expected:
+        raise RuntimeError('已保存产物内容改变：' + str(path))
+    return digest
+
+
 def _run_comic(h, t):
     from production import comic_core
     from cores import story_core, narrative_core, project_settings
@@ -207,33 +351,63 @@ def _run_comic(h, t):
         raise RuntimeError("故事不存在：" + str(t["inputs"].get("story_id")))
     ps = project_settings.get(story)
     ep = narrative_core.load_episode(story["story_id"], int(t["inputs"].get("episode_no") or 1))
-    pages = comic_core.generate_page_beats(story, ep, int(t["inputs"].get("target_pages") or 8))
+    batch = _batch_checkpoint(h, t, 'comic', dict(inputs=t['inputs'], story=story, episode=ep))
+    pages = batch.get('pages')
+    if pages is None:
+        pages = comic_core.generate_page_beats(story, ep, int(t["inputs"].get("target_pages") or 8))
+        batch['pages'] = pages
+        _save_batch(h, t, batch)
     h.step("分页计划", 0, len(pages))
     total = len(pages)
-    files = []
+    files, covered_pages = [], []
+    outdir = Path(t["inputs"].get("outdir") or (comic_core.COMIC_ROOT / ("task_" + t["id"])))
+    outdir.mkdir(parents=True, exist_ok=True)
     for i, page in enumerate(pages):
         h.check_pause()
         h.step("整页漫画", i, total)
-        panels = comic_core.generate_panel_plan(page)
-        prompt = comic_core.compile_page_prompt(story, ep, page, panels,
-                                                t["inputs"].get("style") or project_settings.style_of(story))
-        from models import krea_client
-        res = krea_client.generate(prompt, width=896, height=1600)
-        outdir = Path(t["inputs"].get("outdir") or (comic_core.COMIC_ROOT / ("task_" + t["id"])))
-        outdir.mkdir(parents=True, exist_ok=True)
-        page_file = outdir / ("page_%02d.png" % (i + 1))
-        comic_core.letter_page(res["output_path"], page_file, panels)
-        files.append(str(page_file))
-        t["checkpoint"] = {"done": i + 1}
-        save(t)
+        key, item = str(i + 1), batch['items'].get(str(i + 1))
+        if item and item.get('status') == 'completed':
+            _batch_file(item['path'], item['sha256'])
+            files.append(item['path']); covered_pages.append(page)
+            continue
+        try:
+            panels = comic_core.generate_panel_plan(page)
+            prompt = comic_core.compile_page_prompt(story, ep, page, panels,
+                                                    t["inputs"].get("style") or project_settings.style_of(story))
+            from models import krea_client
+            res = krea_client.generate(prompt, width=896, height=1600)
+            page_file = outdir / ("page_%02d.png" % (i + 1))
+            comic_core.letter_page(res["output_path"], page_file, panels)
+            batch['items'][key] = dict(status='completed', path=str(page_file), sha256=_batch_file(page_file))
+            batch['errors'].pop(key, None)
+            files.append(str(page_file)); covered_pages.append(page)
+        except Exception as error:
+            h.check_pause(); runtime_reset.assert_current()
+            if item_failure_requires_stop(error):
+                raise
+            batch['errors'][key] = str(error)
+            batch['items'][key] = dict(status='failed', error=str(error))
+        _save_batch(h, t, batch)
+    h.step('分页本轮已处理', len(files), total)
     pdf = outdir / "comic.pdf"
-    comic_core.build_pdf(files, story.get("title") or "comic", pdf)
+    aggregate_error = ''
+    if files:
+        try:
+            comic_core.build_pdf(files, story.get("title") or "comic", pdf)
+        except Exception as error:
+            if item_failure_requires_stop(error):
+                raise
+            aggregate_error = str(error)
+    complete = len(files) == total and not aggregate_error
     rec = {"production_id": store.seq_id("COMIC", int(time.time())), "story_id": story["story_id"],
-           "episode_no": int(t["inputs"].get("episode_no") or 1), "pages": len(files), "pdf": str(pdf),
+           "episode_no": int(t["inputs"].get("episode_no") or 1), "pages": len(files),
+           "pdf": str(pdf) if files and not aggregate_error else None,
            "images": files,
+           "generation_completed": complete, "expected_pages": total,
+           "failed_items": dict(batch['errors']), "aggregate_error": aggregate_error,
            "project_style": ps.get("style", ""),
            "event_coverage": sorted({e["event_id"] for e in ep["events"] if e["importance"] == "core"} & set(
-               eid for p in pages for eid in (p.get("event_ids") or []))),
+               eid for p in covered_pages for eid in (p.get("event_ids") or []))),
            "core_total": len([e for e in ep["events"] if e["importance"] == "core"]), "created": time.time()}
     store.save_json(PRODUCTIONS_DIR / (rec["production_id"] + ".json"), rec)
     return rec
@@ -277,24 +451,49 @@ def _run_video_formal(h, t):
     units = ep["units"]
     n = max(1, min(len(units), max(2, int(round(target / 15)))))
     per = max(8, min(15, int(round(target / n))))
+    batch = _batch_checkpoint(h, t, 'video_formal', dict(inputs=t['inputs'], story=story, episode=ep))
     seq_files, seq_meta = [], []
     prev_end = None
     trace_seqs = []
     for i, unit in enumerate(units[:n]):
         h.check_pause()
         h.step("视频序列", i, n)
-        chars = list(story.get("character_ids") or [])
-        scene = (story.get("scene_ids") or [None])[0]
-        plan = video_plan.build_sequence_plan(story, ep, unit, i + 1)
-        brief = plan["director_brief"]
-        shots_txt = "；".join("镜%s：%s（%s）" % (s.get("shot_id"), s.get("narrative_purpose", ""), s.get("cut_reason", ""))
-                              for s in brief.get("shots", []))
-        prompt = ("%s。关键瞬间：%s。结果：%s。%s。人物外观与场景固定结构不得改变。"
-                  "导演方案：%s。镜头计划：%s。" % (unit.get("purpose", ""), unit.get("key_moment", ""),
-                                               unit.get("result", ""), project_prompt.video_visual_block(ps),
-                                               brief.get("story_script", ""), shots_txt))
-        take = video_core.produce_sequence(story["story_id"], unit, chars, scene, prompt, per,
-                                           mode="ref2va", previous_end_state=prev_end, take=i + 1)
+        key, item = str(i + 1), batch['items'].get(str(i + 1))
+        if item and item.get('status') == 'completed':
+            take, plan = item['take'], item['plan']
+            _batch_file(take['path'], item['sha256'])
+            if item.get('continuity_input_sha256') != (_batch_file(prev_end) if prev_end else None):
+                item['upstream_warning'] = '前段补齐后续接画面发生变化，保留既有视频，未自动重拍；请预览衔接'
+            else:
+                item.pop('upstream_warning', None)
+        else:
+            try:
+                chars = list(story.get("character_ids") or [])
+                scene = (story.get("scene_ids") or [None])[0]
+                plan = video_plan.build_sequence_plan(story, ep, unit, i + 1)
+                brief = plan["director_brief"]
+                shots_txt = "；".join("镜%s：%s（%s）" % (s.get("shot_id"), s.get("narrative_purpose", ""), s.get("cut_reason", ""))
+                                      for s in brief.get("shots", []))
+                prompt = ("%s。关键瞬间：%s。结果：%s。%s。人物外观与场景固定结构不得改变。"
+                          "导演方案：%s。镜头计划：%s。" % (unit.get("purpose", ""), unit.get("key_moment", ""),
+                                                       unit.get("result", ""), project_prompt.video_visual_block(ps),
+                                                       brief.get("story_script", ""), shots_txt))
+                take = video_core.produce_sequence(story["story_id"], unit, chars, scene, prompt, per,
+                                                   mode="ref2va", previous_end_state=prev_end, take=i + 1)
+                item = batch['items'][key] = dict(status='completed', take=take, plan=plan,
+                    sha256=_batch_file(take['path']),
+                    continuity_input_sha256=_batch_file(prev_end) if prev_end else None)
+                batch['errors'].pop(key, None)
+                _save_batch(h, t, batch)
+            except Exception as error:
+                h.check_pause(); runtime_reset.assert_current()
+                if item_failure_requires_stop(error):
+                    raise
+                batch['errors'][key] = str(error)
+                batch['items'][key] = dict(status='failed', error=str(error))
+                _save_batch(h, t, batch)
+                prev_end = None  # A missing segment cannot supply an actual endpoint.
+                continue
         seq_files.append(take["path"])
         seq_meta.append({"unit_id": unit.get("unit_id"), "take": take["take_id"],
                          "pack": take["pack"]["reference_pack_id"], "seconds": per,
@@ -305,17 +504,40 @@ def _run_video_formal(h, t):
                            "output": take["path"], "seconds": per})
         if i + 1 < n:
             frame_png = str(Path(__file__).resolve().parent.parent / "cache" / ("end_frame_%s_%d.png" % (story["story_id"], i + 1)))
-            prev_end, _ = video_plan.extract_end_frame(take["path"], frame_png)
-        t["checkpoint"] = {"done": i + 1}
-        save(t)
-    h.step("拼接", n, n)
-    merged = video_core.concat_sequences(seq_files, target, story.get("title") or "video")
+            try:
+                prev_end, _ = video_plan.extract_end_frame(take["path"], frame_png)
+                item.pop('continuity_warning', None)
+            except Exception as error:
+                h.check_pause(); runtime_reset.assert_current()
+                if item_failure_requires_stop(error):
+                    raise
+                prev_end = None
+                item['continuity_warning'] = str(error)
+        _save_batch(h, t, batch)
+    h.step("拼接已保存片段", len(seq_files), n)
+    merged, aggregate_error = None, ''
+    if seq_files:
+        try:
+            merged = video_core.concat_sequences(seq_files, target if len(seq_files) == n else per * len(seq_files),
+                                                   story.get("title") or "video")
+        except Exception as error:
+            h.check_pause(); runtime_reset.assert_current()
+            if item_failure_requires_stop(error):
+                raise
+            aggregate_error = str(error)
     try:
         video_plan.write_trace(story["story_id"], trace_seqs)
     except Exception:
         pass
     rec = {"production_id": store.seq_id("VIDEO", int(time.time())), "story_id": story["story_id"],
            "episode_no": int(ep_no), "sequences": seq_meta, "output": merged, "created": time.time(),
+           "generation_completed": len(seq_files) == n and not aggregate_error,
+           "expected_sequences": n, "clips": seq_files, "failed_items": dict(batch['errors']),
+           "aggregate_error": aggregate_error,
+           "continuity_warnings": {key: '；'.join(row.get(field, '') for field in
+                ('continuity_warning', 'upstream_warning') if row.get(field))
+                for key, row in batch['items'].items()
+                if row.get('continuity_warning') or row.get('upstream_warning')},
            "project_style": ps.get("style", "")}
     store.save_json(PRODUCTIONS_DIR / (rec["production_id"] + ".json"), rec)
     return rec

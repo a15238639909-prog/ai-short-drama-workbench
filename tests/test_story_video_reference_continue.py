@@ -19,7 +19,7 @@ except ImportError:
 class ReferenceContinueTests(unittest.TestCase):
     def _flow(self, unavailable=(), asr_missing=False, audio=None, revision_failure=False,
               storyboard_failed=False, pause=False, mutate=None, failure=None, revision_binding_failure=False,
-              mutate_plan=None, source_text=None):
+              mutate_plan=None, source_text=None, after_run=None):
         folder, task, plan = fixture()
         if source_text is not None:
             task['inputs']['story_direction'] = source_text
@@ -143,6 +143,8 @@ class ReferenceContinueTests(unittest.TestCase):
                 if mutate:
                     mutate(folder, task, first)
             output = reference.run_job(task['id'])
+            if after_run:
+                output = after_run(folder, task, output)
             manifest = reference._read(folder / 'manifest.json')
             if pause:
                 self.assertEqual(manifest['segments'][0], previous)
@@ -233,8 +235,7 @@ class ReferenceContinueTests(unittest.TestCase):
 
     def test_guard_required_service_and_source_media_errors_propagate(self):
         errors = [RuntimeError('PUBG正在运行，任务已保留并暂停'),
-                  RuntimeError('本地模型格式修复仍未通过：质量回复与当前请求签名不一致，不能复用旧缓存'),
-                  RuntimeError('本地文字模型服务不可用')]
+                  RuntimeError('本地模型格式修复仍未通过：质量回复与当前请求签名不一致，不能复用旧缓存')]
         for error in errors:
             with self.subTest(error=str(error)), self.assertRaises(type(error)):
                 self._flow(failure=('segment', error))
@@ -242,18 +243,34 @@ class ReferenceContinueTests(unittest.TestCase):
             self.assertEqual(self.artifacts['joined'], [])
         for issue in (dict(code='missing_video', reason='文件丢失'),
                       dict(code='asr_worker_error', reason='音轨提取失败：测试')):
-            with self.subTest(issue=issue), self.assertRaisesRegex(RuntimeError, '视频或音轨文件处理失败'):
-                self._flow(audio=dict(status='unavailable', issues=[issue]))
-            self.assertEqual(self.artifacts['joined'], [])
+            with self.subTest(issue=issue):
+                _, _, manifest, output, _, generated, joined = self._flow(
+                    audio=dict(status='unavailable', issues=[issue]))
+                self.assertTrue(output['generation_completed'])
+                self.assertEqual(len(generated), 2)
+                self.assertEqual(len(joined), 1)
+                self.assertTrue(all(row['asr']['source_processing_issues'] for row in manifest['segments']))
 
-    def test_empty_observation_requires_latest_native_evidence_and_marker_keeps_binding(self):
+    def test_optional_service_failure_finishes_using_unknown_evidence_without_retakes(self):
+        for error in (RuntimeError('本地文字模型服务不可用'), TimeoutError('review timed out'),
+                      ConnectionRefusedError('review connection refused'), KeyError('choices')):
+            with self.subTest(error=type(error).__name__):
+                _, _, manifest, output, _, generated, joined = self._flow(failure=('segment', error))
+                self.assertEqual(len(generated), 2)
+                self.assertEqual(len(joined), 1)
+                self.assertTrue(output['generation_completed'])
+                self.assertTrue(all(row['observation']['beat_status'] == 'unknown'
+                                    for row in manifest['segments']))
+
+    def test_empty_observation_is_unavailable_and_marker_keeps_binding(self):
         folder, task, _ = fixture()
         session = reference._Session(task['id'], Handle(task, []), folder, task['inputs'], {})
         request = ('可选观察', dict(stage='opening'), {})
         with patch.object(session, 'guard'), patch.object(reference.core, 'request_json',
                 side_effect=RuntimeError(reference.EMPTY_OR_LENGTH)):
-            with self.assertRaisesRegex(RuntimeError, '为空或被截断'):
-                session.review(request, folder / 'report')
+            result = session.review(request, folder / 'report')
+            self.assertEqual(result['status'], 'unavailable')
+            self.assertNotIn('passed', result)
         marker_folder = folder / 'old_marker'
         reference._save(marker_folder / 'unavailable.json', dict(status='unavailable', reason='历史记录',
             request_sha256=reference._signature(dict(request=request, images=[]))))
@@ -271,7 +288,7 @@ class ReferenceContinueTests(unittest.TestCase):
         work = folder / 'cached_failure'
         reference._save(work / 'binding.json', dict(system=request[0], payload=request[1], schema=request[2], images=[]))
         reference._save(work / 'call_2_fixture/contract_error.json', dict(error='质量回复与当前请求签名不一致，不能复用旧缓存'))
-        with self.assertRaisesRegex(RuntimeError, '签名不一致'):
+        with patch.object(session, 'guard'), self.assertRaisesRegex(RuntimeError, '签名不一致'):
             session.review(request, work)
 
 

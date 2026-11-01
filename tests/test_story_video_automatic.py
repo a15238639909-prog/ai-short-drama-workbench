@@ -185,14 +185,14 @@ class AutomaticStoryFlowTests(_StoryFlowTests):
         self.assertEqual([item['beat'] for item in self.writer_states[1]['plan_advisories']], [0, 2])
         self.assertTrue(self.manifest()['quality_summary']['passed'])
 
-    def test_second_whole_plan_rejection_stops_before_any_video(self):
+    def test_second_whole_plan_rejection_warns_and_keeps_generating(self):
         self.review_replies = [review_fixture(False), review_fixture(False)]
-        with self.assertRaisesRegex(RuntimeError, '复审仍未通过'):
-            core.run_job(self.task['id'])
+        result = core.run_job(self.task['id'])
         self.assertEqual(len(self.review_payloads), 2)
         self.assertEqual(len(self.revision_payloads), 1)
-        self.assertEqual(len(self.video_calls), 0)
-        self.assertEqual(self.storyboard_calls, [])
+        self.assertEqual(len(self.video_calls), 2)
+        self.assertEqual(len(self.storyboard_calls), 2)
+        self.assertEqual(result['quality_status'], 'completed_with_warnings')
         self.assertFalse(self.manifest()['quality_summary']['passed'])
 
     def test_rejected_take_repairs_only_current_segment_from_same_first_frame(self):
@@ -212,31 +212,33 @@ class AutomaticStoryFlowTests(_StoryFlowTests):
     def test_two_failed_takes_stay_exhausted_when_task_resumes(self):
         self.visual_outcomes = [False, False]
         for _ in range(2):
-            with self.assertRaisesRegex(RuntimeError, '用完两次本地生成'):
-                core.run_job(self.task['id'])
-            self.assertEqual(len(self.video_calls), 2)
+            output = core.run_job(self.task['id'])
+            self.assertFalse(output['generation_completed'])
+            self.assertEqual(output['missing_segments'], [1])
+            self.assertEqual(len(self.video_calls), 3)
         manifest = self.manifest()
-        self.assertEqual(manifest['segments'], [])
+        self.assertEqual([row['index'] for row in manifest['segments']], [2])
         self.assertEqual([entry['status'] for entry in
                           manifest['quality_attempts']['1:1']['attempts'].values()],
                          ['rejected', 'rejected'])
-        self.assertFalse((self.folder/'segments/02_take_1').exists())
+        self.assertTrue((self.folder/'segments/02_take_1').exists())
 
-    def test_unavailable_asr_stops_without_retaking_and_resume_reuses_raw(self):
+    def test_legacy_unavailable_asr_keeps_slot_pending_and_other_slot_continues(self):
         self.audio_outcomes = ['unavailable']
-        with self.assertRaisesRegex(RuntimeError, '未浪费补拍'):
-            core.run_job(self.task['id'])
-        self.assertEqual(len(self.video_calls), 1)
-        self.assertEqual(self.acceptance_calls, [])
+        partial = core.run_job(self.task['id'])
+        self.assertFalse(partial['generation_completed'])
+        self.assertEqual(partial['missing_segments'], [1])
+        self.assertEqual(len(self.video_calls), 2)
+        self.assertEqual(len(self.acceptance_calls), 1)
         self.assertEqual(self.manifest()['quality_attempts']['1:1']['attempts']['1']['status'],
                          'audio_unavailable')
         first_frame = self.folder/'opening.png'
         initial_bytes = first_frame.read_bytes()
         first_frame.write_bytes(b'changed first frame for existing raw')
         try:
-            with self.assertRaisesRegex(RuntimeError, '首帧或计划输入发生变化'):
+            with self.assertRaisesRegex(RuntimeError, '首帧或计划输入发生变化|分段续接输入已变化'):
                 core.run_job(self.task['id'])
-            self.assertEqual(len(self.video_calls), 1)
+            self.assertEqual(len(self.video_calls), 2)
         finally:
             first_frame.write_bytes(initial_bytes)
         result = core.run_job(self.task['id'])
@@ -260,14 +262,16 @@ class AutomaticStoryFlowTests(_StoryFlowTests):
             self.assertEqual(payload['written']['timeline'][1]['start'], 4)
         self.assertEqual(self.manifest()['segments'][0]['take'], 1)
 
-    def test_storyboard_still_blocked_after_one_revision_never_dispatches(self):
+    def test_legacy_blocked_storyboard_only_skips_its_slot_and_continues(self):
         self.storyboard_outcomes = [False, False]
-        with self.assertRaisesRegex(RuntimeError, '分镜修订后仍未通过'):
-            core.run_job(self.task['id'])
-        self.assertEqual(len(self.writer_states), 2)
-        self.assertEqual(len(self.storyboard_calls), 2)
-        self.assertEqual(len(self.video_calls), 0)
-        self.assertEqual(self.audio.call_count, 0)
+        output = core.run_job(self.task['id'])
+        self.assertFalse(output['generation_completed'])
+        self.assertEqual(output['missing_segments'], [1])
+        self.assertEqual([row['index'] for row in self.manifest()['segments']], [2])
+        self.assertEqual(len(self.writer_states), 3)
+        self.assertEqual(len(self.storyboard_calls), 3)
+        self.assertEqual(len(self.video_calls), 1)
+        self.assertEqual(self.audio.call_count, 1)
         self.assertEqual(self.manifest()['quality_attempts']['1:1']['attempts']['1']['status'],
                          'blocked_before_generation')
 
@@ -311,7 +315,7 @@ class AutomaticStoryFlowTests(_StoryFlowTests):
                 {'clip': clip, 'anchor': anchor, 'first_frame': first_frame}[change].write_bytes(b'changed evidence')
             self.save_json(self.folder/'manifest.json', manifest)
             try:
-                with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '自动验收记录或输入已变化'):
+                with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '自动验收记录或输入已变化|分段续接输入已变化'):
                     core.run_job(self.task['id'])
                 self.assertEqual(len(self.video_calls), 2)
             finally:

@@ -137,152 +137,91 @@ def segment_signature(segment, parameters, previous=None, references=None):
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
 
-def scope_prompt(prompt, segment, director=None):
-    """Keep set references from restoring an object's obsolete staging."""
-    if (segment.get('plan') or {}).get('flow') != 'source-v1':
-        return prompt
-    fields = ('subject_definitions', 'summary', 'retention_analysis', 'detailed_description',
-              'overall_soundscape', 'non_diegetic_music')
-    headers = list(re.finditer(r'(?m)^(' + '|'.join(fields) + r'):[ \t]*', prompt))
-    if [match[1] for match in headers] != list(fields):
-        raise ValueError('场景引用范围校验失败：视频提示词六字段不完整')
-    sections = {match[1]: prompt[match.end():headers[index+1].start() if index+1 < len(headers) else len(prompt)].strip('\n')
-                for index, match in enumerate(headers)}
-    marker = 'Reference scope (' + REFERENCE_SCOPE_VERSION + '):'
-    if marker in sections['detailed_description']:
-        return prompt
-    environments = re.findall(r'<Subject\s+(\d+)>[^\n]*the environment(?: from <Picture\s+\d+>)?(?=[.,\s]|$)',
-                              sections['subject_definitions'])
-    if len(environments) != 1:
-        raise ValueError('场景引用范围校验失败：缺少唯一场景主体定义')
-    scene_number = environments[0]
-    transition = (director or {}).get('scene_transition') or {}
-    arrival_rule = (' This environment picture defines the arrival destination only. '
-                    'Begin at the established departure location when the written action starts there, '
-                    'retaining its existing door and architecture from preceding video evidence until the characters move away. '
-                    'Do not redesign the departure shop or replace its door with architecture from the destination. '
-                    'Descriptive wording does not authorize rebuilding an established location without a written alteration action.') if transition else ''
-    people = dict(re.findall(r'<Subject\s+(\d+)> is ([^\n,]+), the character from <Picture\s+\d+>', sections['subject_definitions']))
-    from .continuation_assets import source_narration
-    declared_shirts = set()
-    for sentence in re.split(r'[。！？!?\n]', source_narration(segment.get('source_text') or '')):
-        owners = [number for number, name in people.items() if name in sentence]
-        if len(owners) != 1:
-            continue
-        if (re.search(r'(?:身穿|穿着|衣着)[^，,]{0,16}衬衫', sentence)
-                or re.search(r'衬衫(?:的)?(?:领口|衣领|袖口|前襟|衣襟|纽扣)', sentence)):
-            # Holding a loose shirt is not a worn wardrobe state.
-            if not re.search(r'(?:拿|握|拎|提|捏|抱|没有|没|未|不|脱下|脱掉)[^，,]{0,10}衬衫', sentence):
-                declared_shirts.add(owners[0])
-    shirt_rule = ' Current source wardrobe uses a collared button-up shirt with a front placket (衬衫); keep its declared color and reference face/hair identity.'
-    object_rule = ('Movable story objects keep their declared quantity and latest location or holder from the confirmed source and preceding state. '
-                   'The same continuing object keeps its physical shape, color, material and markings from preceding video evidence unless a written action changes or replaces it. '
-                   'A stored object remains inside its closed container until a written action opens it or removes it. '
-                   'Continue completed transfers using the same physical objects; do not duplicate objects or restore their earlier staging from a reference image.')
-    wardrobe_rule = ('Keep the latest confirmed garment type, collar, color and coverage from the source and preceding video. '
-                     'Sheet clothing supplies a baseline when no current wardrobe state is specified; it must not replace an already established garment.')
-    from .observed_identity_continuity import POLICY
-    if 'Identity authority (' + POLICY + '):' in sections['retention_analysis']:
-        wardrobe_rule = ('Character references define stable face, hair and wardrobe identity. '
-                         'Apply explicit written wardrobe or hairstyle changes in story order; do not restore an earlier outfit after such a change. '
-                         'Preceding video carries pose, position and held objects, but an unapproved face, hair or clothing drift does not become a new design.')
-    definitions = []
-    for line in sections['subject_definitions'].splitlines():
-        if re.match(r'<Subject\s+' + scene_number + r'>', line):
-            line += ' Retain fixed architecture, fixed furniture layout and lighting only; movable objects follow the current story state.' + arrival_rule
-        elif re.match(r'<Subject\s+\d+>[^\n]*the character from <Picture\s+\d+>', line):
-            line += ' Retain identity, face and hair. ' + wardrobe_rule + ' Pose and hand occupancy follow the current action.'
-            number = re.match(r'<Subject\s+(\d+)>', line)[1]
-            if number in declared_shirts:
-                line += shirt_rule
-        definitions.append(line)
-    sections['subject_definitions'] = '\n'.join(definitions)
-    retained = []
-    for line in sections['retention_analysis'].splitlines():
-        if re.match(r'<Subject\s+' + scene_number + r'>', line):
-            line = ('<Subject %s> (appears in [Shot 1]): partially_preserved - fixed architecture, fixed furniture layout and lighting only. ' % scene_number) + arrival_rule + object_rule
-        elif re.match(r'<Subject\s+\d+>', line):
-            line += ' ' + wardrobe_rule + ' Reference identity does not restore an old pose or an earlier held object.'
-            number = re.match(r'<Subject\s+(\d+)>', line)[1]
-            if number in declared_shirts:
-                line = line.replace('fully_preserved', 'partially_preserved') + shirt_rule
-        retained.append(line)
-    sections['retention_analysis'] = '\n'.join(retained)
-    scene_has_picture = bool(re.search(r'<Subject\s+' + scene_number + r'>[^\n]*<Picture\s+\d+>', sections['subject_definitions']))
-    environment_rule = ('the set reference defines fixed room structure and lighting. ' if scene_has_picture else
-                        'the environment continues its established architecture and lighting from the current story state. ')
-    note = marker + ' Character references define identity; ' + environment_rule + arrival_rule + wardrobe_rule + ' ' + object_rule
-    # These notes are staging constraints, not extra spoken lines. Avoid adding
-    # quoted dialogue from a director's shorthand to an already voiced prompt.
-    start = str((director or {}).get('start_state') or '').strip()
-    if start and 'Continuity handoff:' not in sections['detailed_description']:
-        start = re.sub(r'[‘“\"「『][^’”\"」』\n]*[’”\"」』]', '', start)
-        note += ' Beginning state constraints (not additional dialogue): ' + start
-    sections['detailed_description'] = note + '\n' + sections['detailed_description']
-    return '\n\n'.join(field + ':\n' + sections[field] for field in fields)
-
-
-def handoff_prompt(prompt, frame_number, segment, previous, director=None, appearance_number=None):
-    """Bind frame evidence to the current shot without reviving departed people."""
-    director = director or {}
-    prior = previous['segment']
-    changed = bool(segment.get('scene') and prior.get('scene') and segment['scene'] != prior['scene'])
-    changed = changed or bool((segment.get('seam') or {}).get('scene_changed'))
-    context = {
-        'previous_episode': previous['episode'], 'previous_segment': previous['segment_no'],
-        'current_location': segment.get('scene'),
-        'planned_start_state': director.get('start_state') or '',
-        'planned_end_state': director.get('target_state') or segment.get('tail') or '',
-        'declared_cast': director.get('cast') if 'cast' in director else segment.get('chars', []),
-    }
-    note = ('\nContinuity handoff: <Picture %d> is the actual final frame of the preceding video. '
-            'Use it to carry over ongoing body support, held objects, wardrobe and spatial relationships '
-            'where the current action continues them. Character sheets define identity. '
-            'Apply explicit entrances, departures and time changes in this shot; reference availability '
-            'does not require a person to appear. Do not duplicate a character or invent bystanders. ' % frame_number)
-    transition = director.get('scene_transition') or {}
-    if transition:
-        note += ('This shot shows a written departure-to-arrival transition. The current environment picture is the destination, '
-                 'not a replacement for the opening departure location. Begin with the preceding video state, '
-                 'keep its established door, doorway, architecture and ongoing object appearance, '
-                 'then show the written movement into the destination. Do not close an already-open door or redesign the departure location. '
-                 'An unchanged physical entity keeps its observed appearance; a descriptive adjective is not an action replacing that entity. ')
-    elif changed:
-        note += ('This shot changes location: use the current environment reference for its background, '
-                 'and establish the transition using the current action. Do not copy the previous room. ')
-    else:
-        note += ('Keep the established room and props; a camera cut may change framing, '
-                 'but must not reset completed actions. ')
-    note += 'Declared shot context: ' + json.dumps(context, ensure_ascii=False) + '\n'
-    appearance_note = ''
-    if appearance_number is not None:
-        appearance_note = ('<Picture %d> is an earlier historical frame from the preceding video, used only as appearance evidence '
-                           'for already-confirmed continuing characters, objects and departure architecture. '
-                           'It is not a starting frame and does not establish current positions, poses, hand occupancy, '
-                           'ownership, object count, container open/closed state or unfinished actions. '
-                           'The immediately preceding final frame and current written actions control all those states. ' % appearance_number)
+def _prompt_sections(prompt, *, label):
     fields = ('subject_definitions', 'summary', 'retention_analysis', 'detailed_description',
               'overall_soundscape', 'non_diegetic_music')
     headers = list(re.finditer(r'(?m)^(' + '|'.join(fields) + r'):[ \t]*', prompt))
     if not headers:
-        # The approved legacy POV/time-block writer has no six-section wrapper.
-        # Add only reference transport; keep its original story, camera and voice
-        # instructions byte-for-byte rather than pretending it is malformed JSON.
-        return prompt + '\n\n' + note.strip() + ('\n' + appearance_note if appearance_note else '')
+        return fields, None
     if [match[1] for match in headers] != list(fields):
-        raise ValueError('续接提示词六字段顺序无效，已保留分镜，需修复后生成')
-    sections = {match[1]: prompt[match.end():headers[index+1].start() if index+1 < len(headers) else len(prompt)].strip('\n')
-                for index, match in enumerate(headers)}
-    sections['subject_definitions'] += ('\n<Picture %d> is the actual final frame of the immediately preceding video; '
-        'it is the continuity anchor for [Shot 1], while the current character and environment subjects retain their identities.' % frame_number)
-    sections['retention_analysis'] += ('\n<Picture %d> ([Shot 1] continuity): weak_reference - '
-        'carry over ongoing action and object ownership; apply declared entrances, departures and location changes.' % frame_number)
-    if appearance_number is not None:
-        sections['subject_definitions'] += '\n' + appearance_note
-        sections['retention_analysis'] += ('\n<Picture %d> ([Shot 1] historical appearance): partially_preserved - '
-            'physical shape, color, material and markings of continuing entities only; never restore earlier staging or replay actions.' % appearance_number)
-        note += '\n' + appearance_note
-    sections['detailed_description'] = note.strip() + '\n' + sections['detailed_description']
+        raise ValueError(label + '：视频提示词六字段不完整或顺序无效')
+    return fields, {match[1]: prompt[match.end():headers[index + 1].start() if index + 1 < len(headers)
+                                   else len(prompt)].strip('\n') for index, match in enumerate(headers)}
+
+
+def scope_prompt(prompt, segment, director=None):
+    """Validate reference scope; present concrete states without policy prose."""
+    if (segment.get('plan') or {}).get('flow') != 'source-v1':
+        return prompt
+    fields, sections = _prompt_sections(prompt, label='场景引用范围校验失败')
+    if sections is None:
+        raise ValueError('场景引用范围校验失败：视频提示词六字段不完整')
+    environments = re.findall(r'<Subject\s+(\d+)>[^\n]*the environment(?: from <Picture\s+\d+>)?(?=[.,\s]|$)',
+                              sections['subject_definitions'])
+    if len(environments) != 1:
+        raise ValueError('场景引用范围校验失败：缺少唯一场景主体定义')
+    # Compatibility reading: discard only automatically generated policy lines.
+    # Original shot prose, source dialogue and frame labels remain untouched.
+    prefixes = ('Reference scope (', 'Continuity handoff:', 'Declared shot context:',
+                'Identity authority (', 'Wardrobe continuity (', 'Current wardrobe contract:')
+    for field in ('retention_analysis', 'detailed_description'):
+        sections[field] = '\n'.join(line for line in sections[field].splitlines()
+            if not line.lstrip().startswith(prefixes))
+    people = dict(re.findall(r'<Subject\s+(\d+)> is ([^\n,]+), the character from <Picture\s+\d+>',
+                             sections['subject_definitions']))
+    from .continuation_assets import source_narration
+    shirt_people = set()
+    for sentence in re.split(r'[。！？!?\n]', source_narration(segment.get('source_text') or '')):
+        owners = [number for number, name in people.items() if name in sentence]
+        if len(owners) == 1 and (re.search(r'(?:身穿|穿着|衣着)[^，,]{0,16}衬衫', sentence)
+                or re.search(r'衬衫(?:的)?(?:领口|衣领|袖口|前襟|衣襟|纽扣)', sentence)):
+            if not re.search(r'(?:拿|握|拎|提|捏|抱|没有|没|未|不|脱下|脱掉)[^，,]{0,10}衬衫', sentence):
+                shirt_people.add(owners[0])
+    definitions = []
+    for line in sections['subject_definitions'].splitlines():
+        # Remove exact legacy suffix boundaries that this function produced.
+        for suffix in (' Retain fixed architecture,', ' Retain identity, face and hair.'):
+            line = line.split(suffix, 1)[0]
+        number = re.match(r'<Subject\s+(\d+)>', line)
+        if number and number[1] in shirt_people and '有翻领、前襟与纽扣的衬衫' not in line:
+            line += ' 当前穿着有翻领、前襟与纽扣的衬衫。'
+        definitions.append(line)
+    sections['subject_definitions'] = '\n'.join(definitions)
+    start = str((director or {}).get('start_state') or '').strip()
+    if start and start not in sections['detailed_description']:
+        start = re.sub(r'[‘“\"「『][^’”\"」』\n]*[’”\"」』]', '', start).strip()
+        if start:
+            sections['detailed_description'] = '起镜状态：' + start + '\n' + sections['detailed_description']
+    return '\n\n'.join(field + ':\n' + sections[field] for field in fields)
+
+
+def handoff_context(segment, previous, director=None):
+    """Internal request evidence, never part of the generator's scene prose."""
+    director = director or {}
+    return dict(previous_episode=previous['episode'], previous_segment=previous['segment_no'],
+        current_location=segment.get('scene'), planned_start_state=director.get('start_state') or '',
+        planned_end_state=director.get('target_state') or segment.get('tail') or '',
+        declared_cast=director.get('cast') if 'cast' in director else segment.get('chars', []))
+
+
+def handoff_prompt(prompt, frame_number, segment, previous, director=None, appearance_number=None):
+    """Add concise factual frame roles, preserving source camera and dialogue."""
+    fields, sections = _prompt_sections(prompt, label='续接提示词六字段顺序无效')
+    definition = '<Picture %d>是紧接本段的前一段视频末帧，呈现该时刻的位置、姿态、穿戴和持物。' % frame_number
+    prior = previous['segment']
+    changed = bool(segment.get('scene') and prior.get('scene') and segment['scene'] != prior['scene'])
+    changed = changed or bool((segment.get('seam') or {}).get('scene_changed'))
+    retention = '<Picture %d>：%s。' % (frame_number,
+        '此前地点中已出现实体的状态参考' if changed else '本段起镜的动态状态参考')
+    historical = ('<Picture %d>是此前视频的历史画面，提供已出现实体的形状、色彩、材质和标记参考。' %
+                  appearance_number) if appearance_number is not None else ''
+    if sections is None:
+        return prompt + '\n\n' + '\n'.join(x for x in (definition, historical) if x)
+    sections['subject_definitions'] += '\n' + definition
+    sections['retention_analysis'] += '\n' + retention
+    if historical:
+        sections['subject_definitions'] += '\n' + historical
+        sections['retention_analysis'] += '\n<Picture %d>：已出现实体的外观参考。' % appearance_number
     return '\n\n'.join(field + ':\n' + sections[field] for field in fields)
 
 

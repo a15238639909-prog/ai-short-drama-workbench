@@ -73,19 +73,28 @@ class ContinuationEvidenceTests(unittest.TestCase):
             self.ask(ask, images=[str(self.folder/'absent.png')])
         ask.assert_not_called()
 
-    def test_service_gpu_cancel_and_signature_errors_are_never_swallowed(self):
+    def test_gpu_cancel_and_signature_errors_are_never_swallowed(self):
         class LocalASRBlocked(RuntimeError):
             pass
         class ControlStop(Exception):
             pass
-        errors = [URLError('service offline'), TimeoutError('service timeout'),
-            LocalASRBlocked('PUBG正在运行'), ControlStop('cancelled'),
-            RuntimeError('PUBG正在运行'), RuntimeError('模型文件缺失'),
+        errors = [LocalASRBlocked('PUBG正在运行'), ControlStop('cancelled'),
+            RuntimeError('PUBG正在运行'),
             RuntimeError('本地模型格式修复仍未通过：质量回复与当前请求签名不一致，不能复用旧缓存')]
         for error in errors:
             with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
                 self.ask(Mock(side_effect=error))
         self.assertFalse(list(self.folder.glob('unavailable_*.json')))
+
+    def test_optional_report_service_outage_is_unknown_and_does_not_claim_pass(self):
+        for number, error in enumerate((URLError('service offline'), TimeoutError('service timeout'),
+                                       RuntimeError('模型文件缺失'))):
+            with self.subTest(error=type(error).__name__):
+                self.request[1]['stage'] = 'optional_%d' % number
+                report = self.ask(Mock(side_effect=error))
+                self.assertEqual(report['status'], 'unavailable')
+                self.assertEqual(report['reason'], str(error))
+                self.assertNotIn('passed', report)
 
     def test_wrapped_real_fault_is_not_mistaken_for_report_formatting(self):
         try:

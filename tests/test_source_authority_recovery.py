@@ -1,5 +1,6 @@
 """Source-first writing and bounded output recovery, without a model or project writes."""
 import copy
+import json
 import os
 os.environ['V41_NO_MODEL'] = '1'
 import unittest
@@ -11,18 +12,19 @@ from api import saga_api
 
 
 class SourceAuthorityTests(unittest.TestCase):
-    def test_writer_uses_idea_once_and_never_rechecks_finished_source(self):
+    def test_writer_uses_idea_once_then_checks_only_new_prose_internal_state(self):
         prose = '张明走进大厅。\n\n他举手说：“大家开始吧。”\n工人们齐声说：“好。”'
-        with patch.object(writer, 'call', return_value=prose) as call, \
+        with patch.object(writer, 'call', side_effect=[prose, json.dumps({'verdict': 'clear', 'issues': [], 'summary': '无内部硬矛盾'})]) as call, \
                 patch.object(writer, 'review_prose', side_effect=AssertionError('No source recheck')), \
                 patch.object(writer, 'merge_consistency', side_effect=AssertionError('No idea veto')):
             result = writer.write({'story_mode': 'single', 'one_line': '张明与工人在大厅集合。'},
                                   brief='张明与工人在大厅集合。')
         self.assertEqual(result['prose'], prose)
         self.assertTrue(result['review']['source_authority'])
-        self.assertEqual(call.call_count, 1)
-        self.assertIn('张明与工人在大厅集合', call.call_args.args[1])
-        self.assertNotIn('核对目标', call.call_args.args[1])
+        self.assertEqual(call.call_count, 2)
+        self.assertIn('张明与工人在大厅集合', call.call_args_list[0].args[1])
+        self.assertNotIn('核对目标', call.call_args_list[0].args[1])
+        self.assertEqual(set(json.loads(call.call_args.args[1])), {'新正文编号段落'})
 
     def test_manual_writer_saves_exact_literary_prose_without_fidelity_calls(self):
         prose = '张明站在大厅里。\n\n张明说：“好。”\n工人们齐声回答：“开始吧。”'

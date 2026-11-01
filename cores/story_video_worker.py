@@ -19,9 +19,9 @@ def main():
     except ControlStop:
         return 0
     except Exception as error:
-        task = runtime.load(tid) or {}
-        task.update(error=str(error)[:1500])
-        runtime.save(task)
+        # Error reporting must not overwrite a concurrent parent control or
+        # newer progress snapshot with a task read before the failure.
+        runtime.update(tid, error=str(error)[:1500])
         traceback.print_exc()
         return 1
     return 0

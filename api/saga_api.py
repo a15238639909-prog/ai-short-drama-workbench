@@ -19,6 +19,19 @@ globals().update(ctx())
 _JOBS = {}
 
 
+def _main_image_worker(sid, target):
+    """Capture the chosen image model and canvas before starting a saga worker."""
+    from cores import main_images
+    settings = project_settings.get(story_core.get_story(sid) or {}) or {}
+    options = main_images.snapshot(settings)
+
+    def run(*args, **kwargs):
+        with main_images.frozen(options):
+            return target(*args, **kwargs)
+
+    return runtime_reset.worker(run)
+
+
 def _job(sid):
     if sid not in _JOBS:
         from cores.generation_recovery import RecoveryStore
@@ -45,6 +58,34 @@ def _persist_job(j):
         if j.get("status"):
             record["status"] = j["status"]
         RecoveryStore().save(record)
+
+
+def _retain_pending_render(j, ep, number, message, segment=None):
+    """Keep each uncertain receipt even when another segment finishes later."""
+    raw = (segment or {}).get("render_request")
+    request = raw if isinstance(raw, dict) else {}
+    unknown = any(word in str(message) for word in (
+        "任务查询暂时失败", "提交结果待核对", "任务状态暂时无法确认", "生成超时"))
+    uncertain = (unknown or (raw is not None and not isinstance(raw, dict))
+        or bool(request.get("key") and request.get("status") not in ("failed", "cancelled")))
+    if not uncertain:
+        return False
+    key = "video:%d:%d" % (ep, number)
+    value = dict(episode=ep, segment_no=number, external=key,
+        request_key=request.get("key") or "", status=request.get("status") or "unknown",
+        reason=str(message)[:500])
+    j.setdefault("pending_render_requests", {})[key] = value
+    record = j.get("_recovery")
+    if record is not None:
+        record.setdefault("pending_external", {})[key] = value
+    _persist_job(j)
+    return True
+
+
+def _clear_pending_render(j, ep, number):
+    key = "video:%d:%d" % (ep, number)
+    (j.get("pending_render_requests") or {}).pop(key, None)
+    ((j.get("_recovery") or {}).get("pending_external") or {}).pop(key, None)
 
 
 def _job_event(j, level, msg):
@@ -154,6 +195,8 @@ def _finish_job(j, error=""):
         j["status"] = "partial" if j.get("partial") else "blocked"
         if j.get("failed_render_segments") and j.get("saved_video_count") == 0:
             j["status"] = "failed"
+        if j.get("pending_render_requests"):
+            j["status"] = "waiting_task"
         j["step"] = str(j.get("partial") or j.get("step") or "等待处理")
         _job_event(j, "warning", j["step"])
     else:
@@ -757,6 +800,36 @@ def saga_build(h, path, d):
     return _RESP({"ok": True, "data": {"started": True}})
 
 
+def _scene_image_failure(j, card, error):
+    """Keep a useful per-scene reason without turning control stops into skips."""
+    from cores.workbench_director_runtime import control_error
+    if control_error(error):
+        raise error
+    reason = str(error)[:180]
+    prompt_error = (getattr(error, 'code', '') == 'scene_prompt_content' or
+                    'Moss提示词格式' in reason or 'Qwen未按本次画面格式输出' in reason or
+                    ('提示词' in reason and any(word in reason for word in
+                        ('未完整结束', '未按', '格式修复', '格式无效'))))
+    stage = 'prompt' if prompt_error else 'image'
+    message = ('写提示词失败，尚未提交生图：' if prompt_error else '场景素材处理失败：') + reason
+    j.setdefault('scene_image_failures', {})[card['scene_id']] = {
+        'name': str(card.get('name') or card['scene_id']), 'stage': stage,
+        'reason': reason, 'message': message}
+    return message
+
+
+def _missing_scene_image_warning(missing, cards, failures):
+    names = {card.get('scene_id'): str(card.get('name') or card.get('scene_id'))
+             for card in cards}
+    labels = []
+    for scene_id in sorted(missing):
+        name = names.get(scene_id) or scene_id
+        failure = (failures or {}).get(scene_id) or {}
+        message = failure.get('message') or ''
+        labels.append('%s（%s）' % (name, message) if message else name)
+    return '本话仍缺少有效场景图：' + '、'.join(labels)
+
+
 def _ep_scene_images(sid, no, j, skip_existing=True):
     """第 no 话场景图主体（episode-scenes 路由与「生视频/全部生成」链共用，
     2026-08-29 抽出）。进度走传入的 job j，不自己开/收 job。
@@ -765,6 +838,8 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
     用户自己上传的场景板不会被自动生成顶掉，重复点也不白烧 GPU
     （2026-08-29 用户定）。要重画单张走资源页的「🏛 重新生成场景图」。"""
     from cores import asset_core, saga_core as sc, scene_layer, project_settings as _ps
+    from cores.workbench_director_runtime import control_error
+    j['scene_image_failures'] = {}
     saga = sc.get_saga(sid)
     e = sc.episode(saga, no) or {}
     body = str(e.get("body") or "")
@@ -791,6 +866,8 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
                 _job_event(j, "info", "场景设计稿 %d 个景：%s" % (
                     len(_dc), "、".join(str(x.get("name") or "") for x in _dc[:6])))
         except Exception as _ex:
+            if control_error(_ex):
+                raise
             _job_event(j, "error", "场景设计稿没做成（按原卡出图）：" + str(_ex)[:120])
     heads = scene_layer._scene_headers(body)
     # 【新链路没有场景头】旧剧本靠「## 场景N｜地点｜…」这种头来知道要画哪些场景；
@@ -833,6 +910,8 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
         if _fx:
             _job_event(j, "info", "补写了场景空间描述：" + "、".join(_fx))
     except Exception as _fex:
+        if control_error(_fex):
+            raise
         _job_event(j, "error", "补写场景空间描述失败：" + str(_fex)[:120])
     if settings.get("no_images"):
         _job_event(j, "info", "项目设置 no_images：场景卡已设计、空间已补写，跳过出图")     # P429/P430：只做文字（放在设计和补写之后）
@@ -906,8 +985,9 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
                 asset_core.adopt(sid, v["visual_id"])
                 imgs.append(cardname)
         except Exception as ex:
-            note = "跳过：" + str(ex)[:80]
-            _job_event(j, "error", "场景图失败（%s）：%s" % (cardname, str(ex)[:150]))
+            failure = _scene_image_failure(j, card, ex)
+            note = "待重试：" + failure[:120]
+            _job_event(j, "error", "场景图失败（%s）：%s" % (cardname, failure))
         _complete_step(j, note)
     # P422：剧本场景头没点到、但这一话用得着的卡（美术指导拆出来的「浅滩/林缘」）也要有图——没图的卡全补一遍
     try:
@@ -928,8 +1008,11 @@ def _ep_scene_images(sid, no, j, skip_existing=True):
                     asset_core.adopt(sid, v["visual_id"])
                     imgs.append(str(_c.get("name") or ""))
             except Exception as ex:
-                _job_event(j, "error", "场景图失败（%s）：%s" % (_c.get("name"), str(ex)[:150]))
+                failure = _scene_image_failure(j, _c, ex)
+                _job_event(j, "error", "场景图失败（%s）：%s" % (_c.get("name"), failure))
     except Exception as _ax:
+        if control_error(_ax):
+            raise
         _job_event(j, "error", "补场景图这步出错：" + str(_ax)[:120])
     _job_event(j, "info", "第%d话场景图完成：%s" % (no, "、".join(imgs) or "无"))
 
@@ -1409,7 +1492,7 @@ def ep_scenes(h, path, d):
             except Exception:
                 pass
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -2295,12 +2378,18 @@ def _preflight_gate(sid, j, ready, ep=1, force=False, fix_only=False):
 
 def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only=False, approved=False):
     ep = int(ep or 1)                                                      # P302：制作第 N 话
+    # Reconcile the current attempt from saved slots. A previous partial label
+    # must not survive after its original requests have all been recovered.
+    for key in ('partial', 'blocked', 'missing_prompt_segments', 'failed_render_segments',
+                'saved_video_segments', 'saved_video_count', 'unexecuted_render_segments',
+                'pending_render_segments', 'failure_reason', 'failure_stage'):
+        j.pop(key, None)
     j["ep"] = ep                                                           # P327③：设定页停在出片前门时要知道是哪一话
     _whole = n is None                                                     # P342：n=None → 这一话全部段（门修完剧本段数变了也跟着补）
     """场景图 → 逐段导演 → 装配提示词 → 出片，默认出**前 5 段**
     （2026-08-29 用户定：全部生成一次给够五段）。
     size_tier=None 用默认档（0.4 测试档）；传 "1.0" 出 1376×768 成片档。
-    某一段导演三轮不过就停在那儿，前面已出的段照样保留。"""
+    某一段无法修复时保留该段待补，继续处理其他段，已出的段照样保留。"""
     import os
     import shutil
     import subprocess
@@ -2312,12 +2401,14 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     # 可实际只附了场景参考图——人物长相全靠模型现编，段与段之间必然换脸
     # （2026-08-30 实测 STORY_065：4 张人设卡全无图，成片人脸没有任何锚）。
     # 这条链原来只补场景图，人设图要靠「全部生成」，单点「🎥生视频」就留了这个缺口。
-    from cores import reference_ready as _rr
+    from cores import reference_ready as _rr, workbench_director_runtime as _original_runtime
     if not text_only:
         try:
             _rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
-        except _rr.MissingReferencesError as error:
-            raise RuntimeError(str(error) + "；保留已有素材，补齐引用后继续") from error
+        except Exception as error:
+            if _original_runtime.control_error(error):
+                raise
+            _job_event(j, "warning", "本话人设图未全部补齐，按段检查并继续可执行段：%s" % str(error)[:200])
     # P166①：出片之前先对齐上游——正文改了先重出剧本，剧本改了这一趟必须重拆分镜，
     # 否则就是拿旧剧本的段接着烧片。已有的视频按段号保留，不重烧。
     _fresh = {}
@@ -2330,9 +2421,16 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
             for _m in _rl:
                 _job_event(j, "info", _m)
         except Exception as _ex:
+            if _original_runtime.control_error(_ex):
+                raise
             _job_event(j, "error", "对齐上游失败：%s" % str(_ex)[:120])
     if not text_only:
-        _ep_scene_images(sid, ep, j)
+        try:
+            _ep_scene_images(sid, ep, j)
+        except Exception as error:
+            if _original_runtime.control_error(error):
+                raise
+            _job_event(j, "warning", "场景图未全部补齐，继续处理可执行段：%s" % str(error)[:200])
     if _whole:
         try:
             n = max(1, authoring.total_segments(sid, ep))
@@ -2363,6 +2461,9 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         _can = authoring.total_segments(sid, ep)
     except Exception:
         _can = 0
+    if _can and n > _can:
+        n = _can
+        j["expected_segments"] = n
     _no_prompt = [i for i in range(1, n + 1) if i not in _have0]
     _need_more = bool(_no_prompt) and _can >= _no_prompt[0]
     if not _have0 and _can and not approved:
@@ -2373,6 +2474,8 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         except JobCancelled:
             raise
         except Exception as _gx0:
+            if _original_runtime.control_error(_gx0):
+                raise
             _job_event(j, "error", "写提示词前的剧本自修出错（照旧写）：%s" % str(_gx0)[:120])
         try:
             _can = authoring.total_segments(sid, ep)
@@ -2385,17 +2488,35 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     from cores import workbench_director_runtime as _original_runtime
     if not text_only and _original_runtime.enabled(sid, ep):
         wanted = list(range(1, min(n, _can or n) + 1))
+        failed, saved = {}, set()
         def _original_render(scene_no, no):
             return _generation_step(j, "video:%d:%d" % (ep, no),
                 lambda: seg_api.render_segment_checked(sid, ep, scene_no, no,
                     size_tier=size_tier, log_fn=lambda m: _set_step(j, m)),
                 phase="render", model=True, external="video:%d:%d" % (ep, no))
         def _original_complete(no, reused):
+            saved.add(no)
+            _clear_pending_render(j, ep, no)
             _complete_step(j)
             _complete_step(j)
             _job_event(j, "info", "第%d段%s，已保存原词和视频" % (no, "已有视频" if reused else "生成完成"))
+        def _original_error(no, message):
+            failed[no] = message
+            try:
+                segment = _segs().get(no)
+            except (OSError, ValueError, TypeError):
+                segment = None
+            _retain_pending_render(j, ep, no, message, segment)
+            _job_event(j, "warning", "第%d段保留待重试，继续后续段：%s" % (no, message[:200]))
         outs = _original_runtime.run_sequence(sid, ep, wanted, render=_original_render,
-            on_step=lambda m: _set_step(j, m), on_complete=_original_complete, size_tier=size_tier)
+            on_step=lambda m: _set_step(j, m), on_complete=_original_complete,
+            on_error=_original_error, size_tier=size_tier)
+        if failed:
+            j.update(failed_render_segments=sorted(failed), pending_render_segments=sorted(failed),
+                saved_video_segments=sorted(saved), saved_video_count=len(saved),
+                failure_reason="；".join("第%d段：%s" % item for item in failed.items())[:1000],
+                partial="本轮已处理所有目标段，保留%d/%d段视频；第%s段待重试" % (
+                    len(saved), len(wanted), "、".join(map(str, sorted(failed)))))
         try:
             from cores import episode_ledger as _ledg
             _set_step(j, "记这一话结束时的状态账本")
@@ -2403,6 +2524,8 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         except JobCancelled:
             raise
         except Exception as _lx:
+            if _original_runtime.control_error(_lx):
+                raise
             _job_event(j, "error", "状态账本没记成：" + str(_lx)[:120])
         _job_event(j, "info", "原版中文导演逐段完成，共保留或生成%d段视频" % len(outs))
         return outs
@@ -2420,21 +2543,24 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                               if 1 <= no <= n and str(row.get("prompt") or "").strip())
             message = "已保存%d/%d段提示词；%s。修正后可从缺失段继续。" % (saved_count, n, str(ex))
             _job_event(j, "error", message)
-            # Keep the original failure; do not disguise it as an empty storyboard
-            # or render an incomplete episode after a writer failure.
-            raise RuntimeError(message) from ex
+            if _original_runtime.control_error(ex):
+                raise
+            # Saved prompts remain useful even if a later writer failed.
 
     ready, missing_prompts = [], []
-    prompt_failures = (sc.ep_timeline(sid, ep) or {}).get("prompt_failures") or {}
+    def _usable_prompt(number):
+        row = _segs().get(number) or {}
+        failures = (sc.ep_timeline(sid, ep) or {}).get("prompt_failures") or {}
+        return bool(str(row.get("prompt") or "").strip() and not row.get("prompt_repair_pending")
+            and str(number) not in failures and number not in failures)
     for i in range(1, n + 1):
         g = _segs().get(i)
-        if g and (not str(g.get("prompt") or "").strip() or g.get("prompt_repair_pending")
-                  or str(i) in prompt_failures):
+        if g and not _usable_prompt(i):
             g = None                                                       # 作废的段：按没有提示词处理
         if not g:
             if authoring.use_new_pipeline():
                 missing_prompts.append(i)
-                _job_event(j, "warning", "第%d段提示词待补，暂停依赖它的后续片段" % i)
+                _job_event(j, "warning", "第%d段提示词待补，继续处理后续可执行段" % i)
                 continue
             _set_step(j, "写第 %d 段视频提示词" % i)
             try:
@@ -2444,9 +2570,12 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                 else:
                     g, _raw = director.direct_next(sid, ep)
             except Exception as ex:
+                if _original_runtime.control_error(ex):
+                    raise
                 _job_event(j, "error", "第 %d 段导演没通过（%s）——先出前 %d 段"
                            % (i, str(ex)[:120], len(ready)))
-                break
+                missing_prompts.append(i)
+                continue
             if not g:
                 # 分清两种：剧本真的只有这么长，还是提示词根本没写出来。
                 # 原来一律报「剧本只够分 N 段」——剧本明明能分 23 段时也这么说（P226）。
@@ -2457,50 +2586,68 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                                % (i, _can, i - 1))
                 else:
                     _job_event(j, "info", "剧本只够分 %d 段" % (i - 1))
-                break
+                missing_prompts.append(i)
+                continue
         ready.append(i)
         _complete_step(j)
     if missing_prompts:
         j["missing_prompt_segments"] = missing_prompts
         j["partial"] = "本轮已处理，提示词第%s段待补（已完成段保留）" % "、".join(map(str, missing_prompts))
         _job_event(j, "warning", j["partial"])
-        return []
     if not ready:
-        raise RuntimeError("一段分镜都没导出来")
+        return []
     # ── 出片前一道门（P248）：先看这条片子能不能讲清故事，再烧 GPU ──
     try:
         _gate = _preflight_gate(sid, j, ready, ep=ep, force=force, fix_only=True) if not approved else {"blocked": False}   # P353：只修不问，永远不停；P462 认可过的不查
     except JobCancelled:
         raise
     except Exception as _ex:
+        if _original_runtime.control_error(_ex):
+            raise
         _job_event(j, "error", "出片前检查本身出错（照旧出片）：%s" % str(_ex)[:120])
         _gate = {"blocked": False}
     if _gate.get("blocked"):
-        return []
+        _job_event(j, "warning", "出片前自修未完成，继续逐段检查可执行内容")
+        j.pop("blocked", None)
+        j.update(running=True, status="running")
     if _whole:
         # P342：门修剧本（补镜头/台词）可能让段数变了 → 补写多出来的段、把作废的段补齐，整话都出
+        _tot2 = n
         try:
             _tot2 = max(1, authoring.total_segments(sid, ep))
-            _miss2 = [i for i in range(1, _tot2 + 1) if not str((_segs().get(i) or {}).get("prompt") or "").strip()]
-            if _miss2 and not missing_prompts:
+            _miss2 = [i for i in range(1, _tot2 + 1) if not _usable_prompt(i)]
+            if _miss2:
                 _set_step(j, "剧本修后补写第 %d~%d 段提示词" % (_miss2[0], _tot2))
                 authoring.next_prompts(sid, ep, _tot2, on_step=lambda m: _set_step(j, m))
-            ready = [i for i in range(1, _tot2 + 1) if str((_segs().get(i) or {}).get("prompt") or "").strip()]
-            if len(ready) != _tot2:
-                raise RuntimeError("剧本修后提示词仍缺段，已完成内容保留，停止下游生成")
-            j["total"] = int(j.get("total") or 0) + max(0, len(ready) - n) * 2
-            n = len(ready)
+            ready = [i for i in range(1, _tot2 + 1) if _usable_prompt(i)]
+            missing_prompts = [i for i in range(1, _tot2 + 1) if i not in ready]
+            j["total"] = int(j.get("total") or 0) + max(0, _tot2 - n) * 2
+            n = _tot2
             j["expected_segments"] = n
         except JobCancelled:
             raise
         except Exception as _ex:
-            raise RuntimeError("门修后补写提示词失败：%s" % str(_ex)[:250]) from _ex
+            if _original_runtime.control_error(_ex):
+                raise
+            _job_event(j, "warning", "门修后补写提示词未完成，继续已保存段：%s" % str(_ex)[:250])
+            n = _tot2
+            j["expected_segments"] = n
+            ready = [i for i in range(1, n + 1) if _usable_prompt(i)]
+            missing_prompts = [i for i in range(1, n + 1) if i not in ready]
+    if missing_prompts:
+        j["missing_prompt_segments"] = missing_prompts
+        j["partial"] = "本轮已处理，提示词第%s段待补（已完成段保留）" % "、".join(map(str, missing_prompts))
+    elif str(j.get("partial") or "").startswith("本轮已处理，提示词第"):
+        j.pop("partial", None)
+        j.pop("missing_prompt_segments", None)
     try:
         if not missing_prompts:
             from cores import episode_ledger as _ledg
             _set_step(j, "记这一话结束时的状态账本")
             _ledg.build(sid, ep)                                                             # P445③：下一话从这里接
     except Exception as _lx:
+        if _original_runtime.control_error(_lx):
+            raise
         _job_event(j, "error", "状态账本没记成：" + str(_lx)[:120])
     if text_only:
         _job_event(j, "info", "提示词已写好 %d 段（只写文字，没出片）——去 🎬 分镜视频 页看，满意再出片" % len(ready))   # P412
@@ -2517,9 +2664,14 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
     except JobCancelled:
         raise
     except Exception as _ox:
+        if _original_runtime.control_error(_ox):
+            raise
         _job_event(j, "error", "开场段：%s" % str(_ox)[:120])
 
     outs, failed_renders, saved_segments = [], [], set()
+    def _scene_no(number):
+        return next((int(scene.get("no") or 1) for scene in (sc.ep_timeline(sid, ep) or {}).get("scenes") or []
+            if any(int(row.get("no") or 0) == number for row in scene.get("segments") or [])), 1)
     for i in ready:
         g = _segs().get(i)
         if not g:
@@ -2528,29 +2680,29 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
         # （2026-08-29 实测：补出第 4、5 段时前 3 段会白重出 30 分钟）。
         # 要重出某一段，去分镜页点那一段的「重新生成」。
         _old = str(g.get("video") or "")
-        if _old and seg_api.is_segment_current(sid, ep, 1, i, size_tier=size_tier):
+        scene_no = _scene_no(i)
+        if _old and seg_api.is_segment_current(sid, ep, scene_no, i, size_tier=size_tier):
             outs.append(_old)
             saved_segments.add(i)
+            _clear_pending_render(j, ep, i)
             _set_step(j, "第 %d 段已有视频，跳过" % i)
             _complete_step(j)
             continue
         _set_step(j, "生成第 %d 段视频" % i)
         try:
             patch = _generation_step(j, "video:%d:%d" % (ep, i),
-                                    lambda: seg_api.render_segment_checked(sid, ep, 1, i, size_tier=size_tier,
+                                    lambda: seg_api.render_segment_checked(sid, ep, scene_no, i, size_tier=size_tier,
                                                                           log_fn=lambda m: _set_step(j, m)),
                                     phase="render", model=True, external="video:%d:%d" % (ep, i))
+            if not patch.get("video"):
+                raise RuntimeError("本段未返回已保存视频")
         except JobCancelled:
-            raise
-        except (OSError, TimeoutError):
             raise
         except Exception as ex:
             from cores.age_policy import AgePolicyError
             # Cancellation/game mode and unavailable infrastructure are not
             # recoverable clip-format errors. Do not keep submitting work.
-            if isinstance(ex, AgePolicyError) or any(x in str(ex) for x in
-                    ('已取消', '游戏模式', '生成超时', '未就绪', 'python 不存在', 'V41_NO_MODEL',
-                     '任务查询暂时失败', '提交结果待核对', '任务状态暂时无法确认')):
+            if isinstance(ex, AgePolicyError) or _original_runtime.control_error(ex):
                 raise
             failed_renders.append(i)
             j["failure_reason"] = str(ex)[:1000]
@@ -2563,6 +2715,7 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                 failed_segment = None
             raw_request = (failed_segment or {}).get("render_request")
             request = raw_request if isinstance(raw_request, dict) else {}
+            _retain_pending_render(j, ep, i, str(ex), failed_segment)
             before_submit = (failed_segment is not None and
                 (raw_request is None or isinstance(raw_request, dict)) and not request.get("key"))
             j["failure_stage"] = "video_preflight" if before_submit else "video_render"
@@ -2570,48 +2723,54 @@ def _first_video_chain(sid, j, n=5, size_tier=None, ep=1, force=False, text_only
                 "request_exists" if request.get("key") else "unknown")
             if before_submit and j.get("_recovery"):
                 j["_recovery"]["external_inflight"] = ""
-            _job_event(j, "warning", "第 %d 段出片未成，保留错误并停止依赖它的后续片段：%s" % (i, str(ex)[:180]))
-            seg_api._apply(sid, 1, i, {"render_error": str(ex),
-                "render_failure_stage": j["failure_stage"],
-                "render_submission_state": j["render_submission_state"]}, ep=ep)
-            break
+            _job_event(j, "warning", "第 %d 段出片未成，保留错误并继续后续段：%s" % (i, str(ex)[:180]))
+            try:
+                seg_api._apply(sid, scene_no, i, {"render_error": str(ex),
+                    "render_failure_stage": j["failure_stage"],
+                    "render_submission_state": j["render_submission_state"]}, ep=ep)
+            except Exception as cache_error:
+                if _original_runtime.control_error(cache_error):
+                    raise
+                _job_event(j, "warning", "第%d段错误备注保存失败，原提交记录保留：%s" % (i, str(cache_error)[:160]))
+            continue
         out = patch["video"]
         if g.get("render_error"):
-            seg_api._apply(sid, 1, i, {"render_error": ""}, ep=ep)
+            try:
+                seg_api._apply(sid, scene_no, i, {"render_error": ""}, ep=ep)
+            except Exception as cache_error:
+                if _original_runtime.control_error(cache_error):
+                    raise
+                _job_event(j, "warning", "第%d段已生成，旧错误备注暂未清除：%s" % (i, str(cache_error)[:160]))
         outs.append(out)
         saved_segments.add(i)
+        _clear_pending_render(j, ep, i)
         _complete_step(j)
         _job_event(j, "info", "第 %d 段视频已生成（%s）：%s"
-                   % (i, patch["size"], out))
-    if failed_renders:
+                   % (i, patch.get("size") or "当前尺寸", out))
+    if failed_renders or missing_prompts:
         j["failed_render_segments"] = failed_renders
         # Later valid clips may predate this run. Count them as saved without
         # regenerating them or treating unexecuted dependent clips as failures.
         for no, row in _segs().items():
             if no in ready and no not in saved_segments and row.get("video") and seg_api.is_segment_current(
-                    sid, ep, 1, no, size_tier=size_tier):
+                    sid, ep, _scene_no(no), no, size_tier=size_tier):
                 saved_segments.add(no)
-        first_failed = failed_renders[0]
-        unexecuted = [no for no in ready if no > first_failed and no not in saved_segments]
-        pending = sorted(set(missing_prompts + failed_renders + unexecuted))
+        pending = sorted(set(missing_prompts + failed_renders))
         j["saved_video_segments"] = sorted(saved_segments)
         j["saved_video_count"] = len(saved_segments)
-        j["unexecuted_render_segments"] = unexecuted
+        j["unexecuted_render_segments"] = []
         j["pending_render_segments"] = pending
         head = "视频未完成，已保存%d/%d段" % (len(saved_segments), n) if saved_segments else "视频生成失败，当前0/%d段视频" % n
-        stage = "提交前检查失败" if j.get("failure_stage") == "video_preflight" else "出片失败"
-        summary = head + "；第%d段%s" % (first_failed, stage)
-        if unexecuted:
-            summary += "；第%s段尚未执行" % "、".join(map(str, unexecuted))
+        summary = head + "；本轮已处理全部目标段，第%s段待重试" % "、".join(map(str, pending))
         if saved_segments:
             summary += "；已保存视频保留"
-        j["partial"] = summary + "。原因：" + str(j.get("failure_reason") or "原因未知")
+        j["partial"] = summary + "。原因：" + str(j.get("failure_reason") or "部分提示词待补")
         _job_event(j, "warning", j["partial"])
     if not outs and not failed_renders:
         raise RuntimeError("一段视频都没出来")
     _job_event(j, "info", "共出片 %d 段" % len(outs))
     # Successful clips remain saved, but an episode with gaps is not a full movie.
-    return [] if missing_prompts or failed_renders else outs
+    return outs
 
 
 def _timeline_busy(sid):
@@ -2771,7 +2930,7 @@ def saga_gen_story(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e)[:200])
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3097,7 +3256,7 @@ def saga_gen_first_video(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e)[:200])
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3558,7 +3717,7 @@ def saga_auto_all(h, path, d):
             except Exception:
                 _finish_job(j, e)
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3711,7 +3870,7 @@ def saga_redesign_character(h, path, d):
             _job_event(j, "error", str(ex)[:200])
             _finish_job(j, str(ex)[:120])
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -3742,7 +3901,7 @@ def saga_gen_char_images(h, path, d):
             _job_event(j, "error", str(e)[:200])
             _finish_job(j, str(e))
 
-    threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
+    threading.Thread(target=_main_image_worker(sid, _run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})
 
 
@@ -4300,26 +4459,56 @@ def _generation_step(j, key, fn, phase=None, model=False, external=""):
 
 
 def _merge_generated_episode(sid, ep, j):
+    import os
     from cores import episode_merge as em
     from cores.video_continuity import validate_video
     expected = int(j.get("expected_segments") or 0)
     clips = em.episode_videos(sid, ep)
-    if not expected or [no for no, _ in clips] != list(range(1, expected + 1)):
-        raise RuntimeError("本话仍有缺失或过期片段，保留已有视频并等待补齐，不能标记成片完成")
+    available = {no for no, _ in clips}
+    missing = sorted(set(range(1, expected + 1)) - available)
+    if not clips:
+        j["partial"] = j.get("partial") or "本轮已处理，暂没有可合成视频；缺失段及原提交记录保留待重试"
+        _job_event(j, "warning", j["partial"])
+        return ""
+    partial = bool(missing or j.get("partial") or not expected)
+    target = (os.path.join("outputs", "成片_%s_第%d话_部分.mp4" % (em.film_title(sid), ep))
+              if partial else None)
     _set_step(j, "合成第 %d 话成片" % ep)
+    report = {}
     def merge():
-        destination = em.merge_episode(sid, ep)
+        destination = em.merge_episode(sid, ep, dst=target, skip_invalid=True, report=report)
         if not destination:
-            raise RuntimeError("合成未返回成片，已有视频保留")
+            return ""
         validate_video(destination)
         return destination
     destination = _generation_step(j, "merge", merge, phase="merge")
+    if not destination:
+        j["partial"] = j.get("partial") or "本轮已处理，现有片段暂不能合成，原文件保留待重试"
+        _job_event(j, "warning", j["partial"])
+        return ""
     j["merged"] = destination
-    _job_event(j, "info", "第 %d 话成片已验证：%s" % (ep, destination))
+    j["merged_segments"] = report.get("merged_segments") or sorted(available)
+    if partial or report.get("partial"):
+        j["merged_partial"] = True
+        j["partial"] = (j.get("partial") or "本轮已处理全部目标段，部分段待重试") + "；已合成可用片段（部分成片）"
+        j["merge_skipped"] = report.get("skipped") or []
+        skipped_numbers = {row['segment_no'] for row in j['merge_skipped']
+                           if isinstance(row, dict) and type(row.get('segment_no')) is int}
+        j["pending_render_segments"] = sorted(set(j.get("pending_render_segments") or []) |
+                                              set(missing) | skipped_numbers)
+    _job_event(j, "info", "第 %d 话%s已验证：%s" % (ep, "部分成片" if j.get("merged_partial") else "成片", destination))
     return destination
 
 
 def _run_registered_make(sid, j):
+    from cores import main_images
+    # A historical request without a snapshot must retain its Krea2 contract.
+    options = j["_recovery"]["request"].get("main_image_options")
+    with main_images.frozen(options):
+        return _run_registered_make_bound(sid, j)
+
+
+def _run_registered_make_bound(sid, j):
     from cores import authoring, shot_edit, manual_story as ms, reference_ready as rr
     record = j["_recovery"]
     request = record["request"]
@@ -4335,20 +4524,40 @@ def _run_registered_make(sid, j):
             return
         if phase not in ("video", "render", "merge"):
             def images():
+                from cores.workbench_director_runtime import control_error
+                warnings = []
                 _set_step(j, "检查并补齐本话人设图")
-                rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
+                try:
+                    rr.ensure_characters(sid, ep, on_step=lambda m: _set_step(j, m))
+                except Exception as error:
+                    if control_error(error):
+                        raise
+                    warnings.append(str(error))
+                    _job_event(j, "warning", "人设图未全部补齐，继续场景图及可执行段：%s" % str(error)[:200])
                 _complete_step(j)
                 _set_step(j, "检查并补齐本话场景图")
-                _ep_scene_images(sid, ep, j)
-                scene_ids = rr.scene_ids_for_episode(sid, ep)
-                if scene_ids is not None:
-                    missing = sorted(scene_ids - set(rr.adopted_paths(sid, "scene")))
-                    if missing:
-                        raise rr.MissingReferencesError("本话仍缺少有效场景图：%s；已有素材保留" % "、".join(missing))
+                try:
+                    _ep_scene_images(sid, ep, j)
+                    scene_ids = rr.scene_ids_for_episode(sid, ep)
+                    if scene_ids is not None:
+                        missing = sorted(scene_ids - set(rr.adopted_paths(sid, "scene")))
+                        if missing:
+                            from cores import asset_core
+                            warnings.append(_missing_scene_image_warning(
+                                missing, asset_core.list_assets(sid, 'scenes'),
+                                j.get('scene_image_failures')))
+                except Exception as error:
+                    if control_error(error):
+                        raise
+                    warnings.append(str(error))
+                    _job_event(j, "warning", "场景图未全部补齐，继续可执行段：%s" % str(error)[:200])
                 _complete_step(j)
+                j["reference_warnings"] = warnings
             _generation_step(j, "images", images, phase="images", model=True, external="images")
             _generation_checkpoint(j, "video")
         if stage == "images":
+            if j.get("reference_warnings"):
+                j["partial"] = "素材本轮处理完成，部分素材待重试：" + "；".join(j["reference_warnings"])[:500]
             _finish_job(j)
             return
         if phase != "merge":
@@ -4358,16 +4567,18 @@ def _run_registered_make(sid, j):
             _generation_checkpoint(j, "video")
             outputs = _first_video_chain(sid, j, n=request.get("n"), size_tier=request.get("size_tier"),
                                          ep=ep, approved=True, text_only=bool(request.get("text_only")))
-            if j.get("blocked") or j.get("partial"):
-                _finish_job(j)
-                return
             if request.get("text_only"):
                 _finish_job(j)
                 return
             if not outputs:
-                raise RuntimeError("没有完整视频输出，已有成果保留")
+                j["partial"] = j.get("partial") or "本轮未新增视频，继续检查已有片段是否可合成"
             _generation_checkpoint(j, "merge")
         _merge_generated_episode(sid, ep, j)
+        pending = j.get("pending_render_requests") or {}
+        if pending:
+            # The completed later clips and merge must not erase an earlier
+            # uncertain receipt. Recovery reconciles the saved original task.
+            _generation_checkpoint(j, "render", external=next(iter(pending)))
         _finish_job(j)
     except JobCancelled:
         j["cancel"] = True
@@ -4412,8 +4623,13 @@ def restore_generation_jobs(start_monitor=True):
         inflight = str(record.get("external_inflight") or "")
         if inflight.startswith("video:"):
             from api import segment_api
+            from cores import saga_core
             segment_no = int(inflight.split(":")[-1])
-            if not segment_api.can_resume_segment(sid, ep, segment_no, size_tier=record['request'].get('size_tier')):
+            timeline = saga_core.ep_timeline(sid, ep) or {}
+            scene_no = next((int(scene.get('no') or 1) for scene in timeline.get('scenes') or []
+                if any(int(row.get('no') or 0) == segment_no for row in scene.get('segments') or [])), 1)
+            if not segment_api.can_resume_segment(sid, ep, segment_no, scene_no=scene_no,
+                    size_tier=record['request'].get('size_tier')):
                 j.update(running=False, status="paused", step="进度已保留",
                          err="上次视频请求缺少可核对记录，暂停避免重复提交")
                 _persist_job(j)
@@ -4454,7 +4670,7 @@ def restore_generation_jobs(start_monitor=True):
 @runtime_reset.admission
 def saga_make(h, path, d):
     """P463 设定页三按钮：stage=text（剧本+分段）| images（+人设图+场景图）| video（+提示词+全部视频+成片）。后一阶段自动先补前面的。"""
-    from cores import shot_edit, manual_story as _ms
+    from cores import shot_edit, manual_story as _ms, main_images
     sid = path.split("/")[3]
     stage = str(d.get("stage") or "text")
     if stage not in ("text", "images", "video"):
@@ -4477,6 +4693,8 @@ def saga_make(h, path, d):
     request = {"ep": ep, "stage": stage, "one": one,
                "size_tier": str(d.get("size_tier") or "").strip() or None,
                "n": int(d.get("n") or 0) or None, "text_only": bool(d.get("text_only"))}
+    request["main_image_options"] = main_images.snapshot(
+        project_settings.get(story_core.get_story(sid) or {}) or {})
     j["_sid"] = sid
     j["_recovery"] = RecoveryStore().register(sid, request, _generation_input_signature(sid, ep))
     _persist_job(j)

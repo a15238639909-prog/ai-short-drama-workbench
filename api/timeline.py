@@ -368,18 +368,45 @@ def tl_shots(h, path, d):
 
 @post(("/api/timeline/", "/save-scene"))
 def tl_save_scene(h, path, d):
-    """用户在界面上改完时长、景别、参考图之后保存。"""
+    """Merge explicit scene edits without accepting browser-owned render state."""
+    from api import segment_api
     sid = path.split("/")[3]
-    _ep_of(sid, d)
-    st, tl = _load(sid)
+    ep = _ep_of(sid, d)
     no = int(d.get("scene_no") or 1)
-    sc = next((x for x in tl.get("scenes") or [] if int(x.get("no")) == no), None)
-    if not sc:
-        return _RESP({"ok": False, "error": "没有第 %d 场" % no}, 400)
-    for k in ("title", "location", "time_of_day", "beats", "shots", "text", "segments"):
-        if k in d:
-            sc[k] = d[k]
-    _save(sid, tl)
+    # Same lock as renderer writes: load current rows inside the lock. A stale
+    # page may edit references/adoption but cannot replace receipts or videos.
+    with segment_api._SAVE_LOCK:
+        st, tl = _load(sid, ep)
+        sc = next((x for x in tl.get("scenes") or [] if int(x.get("no")) == no), None)
+        if not sc:
+            return _RESP({"ok": False, "error": "没有第 %d 场" % no}, 400)
+        edits = [d['segment_patch']] if 'segment_patch' in d else d.get('segments') or []
+        if not isinstance(edits, list) or any(not isinstance(row, dict) for row in edits):
+            return _RESP({'ok': False, 'error': '段编辑格式不完整，请刷新后重试'}, 400)
+        if 'segment_patch' in d and set(d['segment_patch']) - {'no', 'refs', 'ref_hide', 'adopted'}:
+            return _RESP({'ok': False, 'error': '本入口仅保存参考图或采用状态，提示词请使用逐段保存'}, 400)
+        current = {int(row.get('no') or 0): row for row in sc.get('segments') or []}
+        for edit in edits:
+            try:
+                number = int(edit.get('no') or 0)
+            except (TypeError, ValueError):
+                return _RESP({'ok': False, 'error': '段号格式不正确，请刷新后重试'}, 400)
+            if number not in current:
+                return _RESP({'ok': False, 'error': '第%d段已变化，请刷新后重试' % number}, 400)
+            if any(key in edit and not isinstance(edit[key], list) for key in ('refs', 'ref_hide')):
+                return _RESP({'ok': False, 'error': '参考图编辑必须是列表'}, 400)
+            if 'adopted' in edit and type(edit['adopted']) is not bool:
+                return _RESP({'ok': False, 'error': '采用状态必须是布尔值'}, 400)
+        for k in ("title", "location", "time_of_day", "beats", "shots", "text"):
+            if k in d:
+                sc[k] = d[k]
+        for edit in edits:
+            row = current[int(edit['no'])]
+            for key in ('refs', 'ref_hide', 'adopted'):
+                if key in edit:
+                    row[key] = copy.deepcopy(edit[key])
+        if _save(sid, tl, ep) is False:
+            return _RESP({'ok': False, 'error': '项目已不存在，本次编辑未保存'}, 409)
     return _RESP({"ok": True, "data": {"scene": sc}})
 
 
@@ -1154,21 +1181,16 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                 return ["没有可用提示词"]
             return _seg._render_critical_problems(source_story, current, row, row["prompt"], ep, no)
 
-        def _stop_for_prompts(current, wanted, before_video=True):
+        def _pending_prompts(current, wanted):
             problems = {no: _prompt_issues(current, no) for no in wanted}
             missing = [no for no, issues in problems.items() if issues]
             if not missing:
-                return False
-            message = "提示词仅完成 %d/%d 段；第 %s 段待补或待修，已完成内容保留，%s" % (
-                len(wanted) - len(missing), len(wanted), "、".join(map(str, missing)),
-                "尚未生成视频" if before_video else "停止后续生成")
+                return {}
+            message = "提示词已完成 %d/%d 段；第 %s 段待补或待修，继续处理其余段" % (
+                len(wanted) - len(missing), len(wanted), "、".join(map(str, missing)))
             detail = "；".join("第%d段：%s" % (no, "；".join(map(str, problems[no]))) for no in missing)
-            j.update(running=False, status="partial", step="提示词未齐，进度已保留", partial=message,
-                     err=detail[:500], missing_prompt_segments=missing)
-            if before_video:
-                j["done"] = min(int(j.get("done") or 0), len(wanted) - len(missing))
-            j.setdefault("logs", []).append({"level": "error", "msg": message + "；" + detail})
-            return True
+            j.setdefault("logs", []).append({"level": "warn", "msg": message + "；" + detail})
+            return {no: "；".join(map(str, problems[no])) for no in missing}
 
         # A later successful segment must not hide a hole in the middle. Keep
         # the requested window bounded to n consecutive segment numbers.
@@ -1219,16 +1241,31 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                     size_tier=size_tier, log_fn=_chk)
             def _original_complete(no, reused):
                 j["done"] = min(j["total"], j["done"] + 2)
+            failed = {}
+            def _original_error(no, message):
+                failed[no] = message
+                j.setdefault("logs", []).append({"level": "warn", "msg": "第%d段待重试：%s" % (no, message[:200])})
             outs = _original_runtime.run_sequence(sid, ep, targets,
                 render=_original_render, prepare=_original_prepare, on_step=_chk,
-                on_complete=_original_complete, size_tier=size_tier)
-            j.update(running=False, status="completed", step="完成",
+                on_complete=_original_complete, on_error=_original_error, size_tier=size_tier)
+            j.update(running=False, status="partial" if failed else "completed",
+                step="本轮处理完成，部分段待重试" if failed else "完成",
                 note="原版中文导演逐段完成，共保留或生成 %d 段视频" % len(outs))
+            if failed:
+                j.update(partial="已保留%d/%d段视频；缺失段待重试" % (len(outs), len(targets)),
+                    err="；".join("第%d段：%s" % item for item in failed.items())[:500],
+                    missing_video_segments=sorted(failed))
             return
 
         # ① 提示词：补到第 first+n-1 段为止（已有的不重写）
         j["step"] = "写第 %d~%d 段的视频提示词" % (targets[0], targets[-1])
-        new_ps, total = _au.next_prompts(sid, ep, targets[-1], on_step=_chk)
+        try:
+            new_ps, total = _au.next_prompts(sid, ep, targets[-1], on_step=_chk)
+        except Exception as error:
+            if _original_runtime.control_error(error):
+                raise
+            j.setdefault("logs", []).append({"level": "warn", "msg": "提示词补写未完成，继续使用已保存内容：%s" % str(error)[:200]})
+            new_ps, total = [], _au.total_segments(sid, ep)
         _chk()
         if total and targets[0] > total:
             j.update(running=False, step="已到结尾",
@@ -1241,7 +1278,16 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
             (("按新剧本重写提示词 %d 段" % _rewrote) if _rewrote else "提示词已有，直接出片")
         if _cut_note:
             j["note"] += "；" + _cut_note
-        if _stop_for_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets):
+        pending = _pending_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets)
+        j["done"] = len(targets) - len(pending)
+        if prompts_only:
+            j.update(running=False, status="partial" if pending else "completed",
+                step="提示词处理完成，部分段待重试" if pending else "提示词已写好（没出图没出视频）",
+                note=(j.get("note") or "") + "；只写提示词")
+            if pending:
+                j.update(partial="提示词已完成%d/%d段" % (len(targets) - len(pending), len(targets)),
+                    missing_prompt_segments=sorted(pending),
+                    err="；".join("第%d段：%s" % item for item in pending.items())[:500])
             return
 
         # ①b 出片前门（第二次确认，契约 H）：写完提示词、烧 GPU 之前先看这条片子能不能讲清故事。
@@ -1263,24 +1309,18 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                 j.setdefault("logs", []).append({"level": "warn", "msg": "出片前自修没跑起来（照旧出片）：%s" % str(_gx)[:120]})
                 _gate = {"blocked": False}
             if _gate.get("blocked"):
-                j["note"] = (j.get("note") or "") + "；出片前自修没完成，先不出片"
-                return
+                j["note"] = (j.get("note") or "") + "；出片前自修未完成，继续处理可执行段"
+                j.update(running=True, status="running")
             _chk()
 
-        if _stop_for_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets):
-            return
-
-        if prompts_only:
-            # P312：只写/重写提示词，不出图不出视频（文字按钮、验收用）
-            j.update(running=False, status="completed", step="提示词已写好（没出图没出视频）", note=(j.get("note") or "") + "；只写提示词")
-            return
-        # ①c 参考图（P266）：目标段绑的人物/场景还没有设定图的先出，不然出片那步只会抛「没有参考图」
-        _ensure_refs(sid, ep, targets, j, _chk, _JC)
+        pending = _pending_prompts(_sc.ep_timeline(sid, ep) or {"scenes": []}, targets)
+        j["done"] = len(targets) - len(pending)
         _chk()
 
         # ①d 开场段（P316）：场景板全景 + 人物亮相，先于第 1 段出；出不来只记日志不拦正片
         try:
-            _n_op, _e_op = _seg.render_opening_all(sid, ep, size_tier=size_tier, log_fn=_chk, chk=_chk)
+            _n_op, _e_op = (_seg.render_opening_all(sid, ep, size_tier=size_tier, log_fn=_chk, chk=_chk)
+                            if len(pending) < len(targets) else (0, ""))
             if _n_op:
                 j.setdefault("logs", []).append({"level": "info", "msg": "开场段出了 %d 段（场景和人物亮相）" % _n_op})
             if _e_op:
@@ -1295,12 +1335,17 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
 
         # ② 视频：目标段里还没片子的，依次出
         outs = []
+        failed = {}
         for t in targets:
+            _chk()
             tl = _sc.ep_timeline(sid, ep) or {"scenes": []}
             g = next((x for sc0 in (tl.get("scenes") or []) for x in (sc0.get("segments") or [])
                       if int(x.get("no") or 0) == t), None)
-            if _stop_for_prompts(tl, [t], before_video=False):
-                return
+            issues = _prompt_issues(tl, t)
+            if issues:
+                failed[t] = "；".join(map(str, issues))
+                j.setdefault("logs", []).append({"level": "warn", "msg": "第%d段提示词待重试，继续后续段：%s" % (t, failed[t][:200])})
+                continue
             current_scene = next((int(scene.get("no") or 1) for scene in tl.get("scenes") or []
                                   if any(int(row.get("no") or 0) == t for row in scene.get("segments") or [])), 1)
             if _seg.is_segment_current(sid, ep, current_scene, t, size_tier=size_tier):
@@ -1308,8 +1353,13 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
                 continue
             _chk("生成第 %d 段视频（%d/%d）" % (t, len(outs) + 1, len(targets)))
             try:
-                patch = _seg.render_segment_checked(sid, ep, 1, t, size_tier=size_tier,
+                # A missing reference for one segment must not stop unrelated
+                # later scenes. Keep strict per-segment reference binding.
+                _ensure_refs(sid, ep, [t], j, _chk, _JC)
+                patch = _seg.render_segment_checked(sid, ep, current_scene, t, size_tier=size_tier,
                                                     log_fn=_chk)
+                if not patch.get("video"):
+                    raise RuntimeError("本段未返回已保存视频")
                 outs.append(patch.get("video"))
                 # 重出成功了：这一段不再是"按旧剧本出的"（P282）
                 try:
@@ -1324,17 +1374,23 @@ def _gen_next(sid, ep, n, size_tier=None, force=False, prompts_only=False):
             except _Cancelled:
                 raise
             except Exception as ex:
-                if j.get("cancel") or "已取消" in str(ex):
+                if j.get("cancel") or _original_runtime.control_error(ex):
                     raise _Cancelled()
-                j.update(running=False, step="第 %d 段出片失败" % t, err=str(ex)[:200],
-                         note=j["note"] + "；已出 %d 段" % len(outs))
-                return
+                failed[t] = str(ex)
+                j.setdefault("logs", []).append({"level": "warn", "msg": "第%d段待重试，继续后续段：%s" % (t, str(ex)[:200])})
+                continue
             j["done"] += 1
-        j.update(running=False, status="completed", step="完成",
+        j.update(running=False, status="partial" if failed else "completed",
+                 step="本轮处理完成，部分段待重试" if failed else "完成",
                  note=j["note"] + "；本次出片 %d 段（第 %d~%d 段）" % (
                      len(outs), targets[0], targets[-1]) if targets else j["note"])
+        if failed:
+            j.update(partial="已保留%d/%d段视频；本轮已处理所有目标段，第%s段待重试" % (
+                    len(targets) - len(failed), len(targets), "、".join(map(str, sorted(failed)))),
+                err="；".join("第%d段：%s" % item for item in failed.items())[:500],
+                missing_prompt_segments=sorted(pending), missing_video_segments=sorted(failed))
     except _Cancelled:
-        j.update(running=False, step="已取消", err="",
+        j.update(running=False, status="cancelled", step="已取消", err="",
                  note=(j.get("note") or "") + "；已生成的部分保留")
     except Exception as ex:
         j.update(running=False, step="出错", err=str(ex)[:200])
@@ -1444,21 +1500,43 @@ def timeline_rerender(h, path, d):
     ep = _CUR_EP.get(sid, 1)
 
     def _run():
+        from cores.workbench_director_runtime import control_error
         try:
-            j.update(running=True, err="", step="准备重渲", done=0, total=len(segs), note="", cancel=False)
+            j.update(running=True, status="running", err="", step="准备重渲", done=0, total=len(segs), note="", cancel=False)
             st, tl = _load(sid)
+            failed = {}
             for k, n in enumerate(segs):
                 if j.get("cancel"):
-                    break
+                    raise _Cancelled()
                 sc = next((s for s in tl.get("scenes") or [] if any(int(g.get("no") or 0) == n for g in s.get("segments") or [])), None)
                 if not sc:
+                    failed[n] = "没有这一段"
                     continue
                 j["step"] = "重渲第 %d 段" % n
-                _seg.render_segment_checked(sid, ep, int(sc.get("no") or 1), n, log_fn=lambda m: j.__setitem__("step", "第 %d 段：%s" % (n, str(m)[:60])))   # P394：重渲也核对台词
-                j["done"] = k + 1
-            j.update(running=False, step="重渲完成")
+                def log(message):
+                    if j.get("cancel"):
+                        raise _Cancelled()
+                    j["step"] = "第 %d 段：%s" % (n, str(message)[:60])
+                try:
+                    result = _seg.render_segment_checked(sid, ep, int(sc.get("no") or 1), n, log_fn=log)
+                    if not result.get("video"):
+                        raise RuntimeError("本段未返回已保存视频")
+                    j["done"] += 1
+                except Exception as error:
+                    if control_error(error):
+                        raise
+                    failed[n] = str(error)
+                    j.setdefault("logs", []).append({"level": "warn", "msg": "第%d段重渲待重试，继续后续段：%s" % (n, str(error)[:200])})
+            j.update(running=False, status="partial" if failed else "completed",
+                step="重渲本轮完成，部分段待重试" if failed else "重渲完成")
+            if failed:
+                j.update(missing_video_segments=sorted(failed),
+                    err="；".join("第%d段：%s" % item for item in failed.items())[:500])
+        except _Cancelled:
+            j.update(running=False, status="cancelled", step="已取消", err="")
         except Exception as e:
-            j.update(running=False, err="重渲失败：" + str(e)[:200])
+            j.update(running=False, status="cancelled" if control_error(e) else "partial",
+                err="重渲未完成：" + str(e)[:200])
 
     threading.Thread(target=runtime_reset.worker(_run), daemon=True).start()
     return _RESP({"ok": True, "data": {"started": True}})

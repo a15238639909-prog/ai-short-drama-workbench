@@ -2,7 +2,7 @@
 
 这份说明用于让 Codex 等 AI 工具配置**本项目调用的模型服务**，不是把 Codex 自身切换成本地模型，也不需要修改 Codex 的 `model_provider`。
 
-本项目已经实现了特定的 llama.cpp、ComfyUI / Krea2、Anima、MiniMax H3 调用链。下载工作台不等于同时安装模型、推理引擎、显卡驱动和工作流节点，也不能保证任意模型直接替换后可用。
+本项目已经实现了特定的 llama.cpp、ComfyUI / Krea2、MOSS、Anima、MiniMax H3 调用链，并提供可选的 Qwen Image 2.1 漫画局部编辑。下载工作台不等于同时安装模型、推理引擎、显卡驱动和工作流节点，也不能保证任意模型直接替换后可用。
 
 ## 直接复制给 AI
 
@@ -13,7 +13,7 @@
 
 先只读调查，暂不安装、不下载、不启动模型、不生成内容，也不修改文件：
 1. 确定当前项目根目录，读取 AGENTS.md、AI接入说明.md、docs/LOCAL_MODEL_INTEGRATION.md、README.md、requirements.txt 和 config.example.json。
-2. 在本地读取已有 config.json（如存在），以及 cores/paths.py、models/qwen_client.py、models/gpu_manager.py、models/krea_client.py、models/krea_edit_client.py、models/anima_client.py、models/h3_client.py、models/story_video_client.py、cores/story_video_offline.py 和实际工作流。不要在回复、日志或提交中暴露任何密钥、令牌或私人内容。
+2. 在本地读取已有 config.json（如存在），以及 cores/paths.py、models/qwen_client.py、models/gpu_manager.py、models/krea_client.py、models/krea_edit_client.py、models/moss_client.py、models/moss_prompt.py、models/anima_client.py、models/h3_client.py、models/story_video_client.py、cores/story_video_offline.py 和实际工作流。需要漫画局部修图时另读 models/qwen_image21_client.py、cores/long_comic_edit.py；需要角色查询时检查 cores/anima_names.py 和包内名字库。不要在回复、日志或提交中暴露任何密钥、令牌或私人内容。
 3. 在已配置目录、我提供的目录、PATH 和当前运行进程中自动发现已有 Python、llama.cpp、ComfyUI、H3、模型文件和 FFmpeg。只做定向查找，不扫描整个磁盘，不覆盖或重装已有环境。若需要扩大搜索范围，先说明理由并征求同意。
 4. 检查配置字段、环境变量覆盖、端口、实际目录布局、模型文件、节点类型及 API 能力是否匹配。对已运行的本机服务只做文档列出的只读状态请求；不要调用 /api/doctor，不要把生成请求当健康检查。
 5. 给出“已找到 / 缺失 / 不兼容 / 未验证”清单，每个结论附证据。不要虚构路径、接口或依赖，不要把服务能响应等同于模型已接通。
@@ -26,7 +26,7 @@
 
 ## 开始前告诉 AI 的信息
 
-- 你想使用哪些功能：文字、图片、图片编辑、Anima 或 H3 视频；不必一次接通全部功能。
+- 你想使用哪些功能：文字、Krea2/MOSS生图、Anima、长篇漫画、可选Qwen图片编辑或H3视频；不必一次接通全部功能。
 - 已安装模型环境的大致目录，以及是否已经有服务在运行；不知道的可以写“不知道”。
 - 是否允许安装依赖、启动服务和做一次真实测试。默认先调查，不自动执行这些操作。
 

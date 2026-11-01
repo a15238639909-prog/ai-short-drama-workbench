@@ -5,8 +5,9 @@ const vm = require('node:vm');
 const source = fs.readFileSync('web/shell.js', 'utf8');
 const handlers = source.slice(source.indexOf('  function loadTasks()'), source.indexOf('  function loadLogs()'));
 
-function harness(status, reject = false) {
-  const task = {id:'task_displayed',kind:'story_video',status,title:'本地故事视频',done:1,total:4};
+function harness(status, reject = false, kind = 'story_video') {
+  const task = {id:'task_displayed',kind,status,title:'本地故事视频',done:1,total:4};
+  if(kind==='long_comic')task.project_id='LC_project_target';
   const buttons = new Map(), posts = [], toasts = [], events = [], storage = new Map();
   const bar = {style:{}, querySelectorAll:()=>Array.from(buttons.values())};
   Object.defineProperty(bar, 'innerHTML', {set(html) {
@@ -62,5 +63,14 @@ function harness(status, reject = false) {
   view.buttons.get('tbViewStory').onclick();
   assert.equal(view.storage.get('storyVideoTask'),'task_displayed');
   assert.equal(JSON.parse(view.storage.get('storyVideoDraft')).new_task,false);
-  console.log('Taskbar checks passed: waiting cancellation, displayed task targeting, paused controls, visible errors, and returning to a waiting story.');
+  const comic=harness('running',false,'long_comic');
+  await comic.context.loadTasks();
+  await comic.buttons.get('tbPause').onclick();
+  assert.equal(comic.posts[0].url,'/api/long-comic/project/LC_project_target/action');
+  assert.equal(JSON.stringify(comic.posts[0].body),JSON.stringify({action:'pause'}));
+  await comic.buttons.get('tbCancel').onclick();
+  assert.equal(comic.posts[1].url,'/api/long-comic/project/LC_project_target/action');
+  assert.equal(JSON.stringify(comic.posts[1].body),JSON.stringify({action:'cancel'}));
+  assert.equal(comic.bar.style.display,'none');
+  console.log('Taskbar checks passed: waiting cancellation, displayed task targeting, paused controls, visible errors, returning to a waiting story, and long-comic pause/cancel routing.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

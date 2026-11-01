@@ -55,11 +55,12 @@ class HandoffTests(unittest.TestCase):
         prompt = 'subject_definitions:\n<Subject 1> person\n\nsummary:\ncontinue\n\nretention_analysis:\nidentity\n\ndetailed_description:\n[Shot 1] The scene opens.\n\noverall_soundscape:\nquiet\n\nnon_diegetic_music:\nNone.'
         result = vc.handoff_prompt(prompt, 3,
                                   {'scene': '街道', 'chars': ['阿宁']}, previous)
-        self.assertIn('Do not copy the previous room', result)
-        self.assertIn('departures', result)
-        self.assertIn('Do not duplicate', result)
+        self.assertIn('<Picture 3>是紧接本段的前一段视频末帧', result)
+        self.assertIn('此前地点中已出现实体的状态参考', result)
+        self.assertNotIn('Do not', result)
         detail = result.split('detailed_description:\n', 1)[1].split('\n\noverall_soundscape:', 1)[0]
-        self.assertLess(detail.index('Continuity handoff'), detail.index('[Shot 1]'))
+        self.assertTrue(detail.startswith('[Shot 1]'))
+        self.assertNotIn('Declared shot context', result)
         self.assertIn('<Picture 3>', result.split('\n\nsummary:', 1)[0])
         self.assertIn('<Picture 3>', result.split('retention_analysis:', 1)[1].split('detailed_description:', 1)[0])
         self.assertNotIn('Continuity handoff', result.split('non_diegetic_music:', 1)[1])
@@ -82,11 +83,10 @@ class HandoffTests(unittest.TestCase):
         merged = vc.handoff_prompt(prompt, 3, {'scene': '院子'}, previous, director, appearance_number=4)
         scoped = vc.scope_prompt(merged, {'plan': {'flow': 'source-v1'}}, director)
         self.assertNotIn('Do not copy the previous room', scoped)
-        self.assertIn('arrival destination only', scoped)
-        self.assertIn('not a starting frame', scoped)
-        self.assertIn('ownership, object count, container open/closed state', scoped)
-        self.assertIn('Do not close an already-open door', scoped)
-        self.assertIn('physical shape, color, material and markings', scoped)
+        self.assertIn('形状、色彩、材质和标记参考', scoped)
+        self.assertNotIn('Reference scope (', scoped)
+        self.assertNotIn('Declared shot context', scoped)
+        self.assertNotIn('Do not', scoped)
         self.assertIn('门已打开', scoped)
         vc.validate_prompt_references(scoped, ['actor', 'yard', 'last', 'appearance'])
 
@@ -98,8 +98,8 @@ class HandoffTests(unittest.TestCase):
                   '[Shot 1]\n<Subject 1> closes the box. <d>[Chinese] 收好。</d>', 'quiet', 'N/A']
         original = '\n\n'.join(k + ':\n' + v for k, v in zip(fields, values))
         scoped = vc.scope_prompt(original, {'plan': {'flow': 'source-v1'}}, {'start_state': '表已经放入盒内。'})
-        self.assertIn('<Subject 2> (appears in [Shot 1]): partially_preserved', scoped)
-        self.assertIn('remains inside its closed container', scoped)
+        self.assertIn('<Subject 2> is 店里, the environment from <Picture 2>.', scoped)
+        self.assertNotIn('Reference scope (', scoped)
         self.assertIn('表已经放入盒内', scoped)
         self.assertEqual(scoped.count('<d>[Chinese] 收好。</d>'), 1)
         self.assertNotIn('Reference scope', scoped.split('non_diegetic_music:', 1)[1])
@@ -107,14 +107,13 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(vc.scope_prompt(original, {'plan': {'flow': 'legacy'}}), original)
         declared = vc.scope_prompt(original, {'plan': {'flow': 'source-v1'},
             'source_text': '阿宁双手端盒，灰色衬衫的领口随呼吸微动。'})
-        self.assertIn('collared button-up shirt', declared)
-        self.assertIn('<Subject 1> partially_preserved', declared)
+        self.assertIn('有翻领、前襟与纽扣的衬衫', declared)
         mentioned = vc.scope_prompt(original, {'plan': {'flow': 'source-v1'},
             'source_text': '阿宁：林海需要一件衬衫。'})
-        self.assertNotIn('collared button-up shirt', mentioned)
+        self.assertNotIn('有翻领、前襟与纽扣的衬衫', mentioned)
         unworn = vc.scope_prompt(original, {'plan': {'flow': 'source-v1'},
             'source_text': '阿宁没有穿着衬衫，换上了蓝色外套。'})
-        self.assertNotIn('collared button-up shirt', unworn)
+        self.assertNotIn('有翻领、前襟与纽扣的衬衫', unworn)
 
     def test_signature_changes_with_source_reference_or_predecessor(self):
         segment = {'prompt': 'a', 'seconds': 4}

@@ -32,9 +32,19 @@ class SceneEntranceTests(unittest.TestCase):
         return [policy.include_scene('TEST', row, ep=2, timeline=timeline)
                 for scene in timeline['scenes'] for row in scene['segments']]
 
-    def test_each_entrance_and_return_uses_one_scene_reference(self):
+    def test_each_scene_uses_one_reference_only_on_its_first_planned_use(self):
         self.assertEqual(self.decisions(self.timeline(['修表店', '修表店', '小院', '小院', '修表店'])),
-                         [True, False, True, False, True])
+                         [True, False, True, False, False])
+
+    def test_returning_camera_alias_is_the_same_previously_used_scene_id(self):
+        timeline = self.timeline(['修表店', '小院', '店门内', '工作台前'])
+        self.assertEqual(self.decisions(timeline), [True, True, False, False])
+
+    def test_legacy_source_scope_cannot_force_scene_images_on_every_segment(self):
+        timeline = self.timeline(['修表店', '修表店', '小院', '小院', '修表店'])
+        for row in timeline['scenes'][0]['segments']:
+            row['plan'] = {'flow': 'source-v1', 'scene_reference_scope': 'current-scene-v1'}
+        self.assertEqual(self.decisions(timeline), [True, False, True, False, False])
 
     def test_canonical_ids_merge_camera_position_aliases(self):
         self.assertEqual(self.decisions(self.timeline(['修表店', '工作台前', '店门内', '小院'])),
@@ -76,6 +86,10 @@ class SceneEntranceTests(unittest.TestCase):
     def test_missing_scene_between_rows_is_conservative(self):
         timeline = self.timeline(['修表店', '', '修表店'])
         self.assertEqual(self.decisions(timeline), [True, True, True])
+
+    def test_known_continuation_after_unknown_boundary_does_not_repeat_again(self):
+        timeline = self.timeline(['修表店', '', '修表店', '工作台前'])
+        self.assertEqual(self.decisions(timeline), [True, True, True, False])
 
     def test_explicit_legacy_location_names_use_exact_equality(self):
         timeline = self.timeline(['北海港', '北海港', '北海港灯塔'])
@@ -175,6 +189,18 @@ class SceneImagePromptTests(unittest.TestCase):
 
     def test_empty_removal_is_an_exact_no_op(self):
         self.assertEqual(policy.strip_scene_images('自定义原提示词', []), '自定义原提示词')
+
+    def test_director_then_renderer_can_remove_same_trailing_scene_slot(self):
+        original = self.six_fields('<Subject 1> is 成人甲, the character from <Picture 1>.\n'
+                                   '<Subject 2> is 修表店, the environment from <Picture 2>.')
+        written = policy.strip_scene_images(original, [2])
+        self.assertEqual(policy.strip_scene_images(written, [2]), written)
+
+    def test_unbound_environment_does_not_authorize_deleting_character_or_custom_slot(self):
+        for use in ('<Subject 1> is 成人甲, the character from <Picture 1>.',
+                    '<Picture 1> is a custom reference.'):
+            with self.assertRaises(ValueError):
+                policy.strip_scene_images(use + '\n<Subject 2> is 修表店, the environment.', [1])
 
 
 if __name__ == '__main__':

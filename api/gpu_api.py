@@ -77,12 +77,13 @@ def r_clear(h, path, d):
         epoch = runtime_reset.begin()
         runtime_reset.bind_thread(epoch)
         from api import saga_api, timeline, video_api, story
-        from cores import story_video_core
+        from cores import story_video_core, long_comic_core
         from models import gpu_manager, h3_client
         h3_client.request_cancel()
         modules = (saga_api, timeline, video_api, story)
         cancelled = sum(module.clear_runtime_jobs() for module in modules)
         cancelled += _legacy_clear()
+        cancelled += long_comic_core.cancel_all_jobs()['cancelled']
         children = story_video_core.cancel_all_children()
         if children.get('errors'):
             raise RuntimeError('故事视频进程未完全退出：' + '; '.join(children['errors']))

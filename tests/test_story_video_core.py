@@ -336,27 +336,28 @@ class StoryFlowTests(unittest.TestCase):
         core.run_job(self.task['id'])
         self.assertEqual(self.text.call_count, calls)
 
-    def test_second_failed_review_stops_before_video_and_reuses_review(self):
+    def test_second_failed_review_warns_continues_and_reuses_review(self):
         self.review_replies = [review_fixture(False), review_fixture(False)]
-        with self.assertRaisesRegex(RuntimeError, '复审仍未通过'):
-            core.run_job(self.task['id'])
+        result = core.run_job(self.task['id'])
         manifest = self.manifest()
         self.assertFalse(manifest['plan_review']['passed'])
         self.assertEqual(manifest['plan_review']['round'], 2)
         self.assertEqual(len(self.revision_payloads), 1)
-        self.assertEqual(len(self.video_calls), 0)
-        self.assertEqual(self.writer_states, [])
+        self.assertEqual(len(self.video_calls), 2)
+        self.assertEqual(result['segments'], 2)
+        self.assertEqual(result['quality_status'], 'completed_with_warnings')
+        self.assertFalse(result['quality_passed'])
+        self.assertTrue(manifest['continuation_warnings'])
         self.assertEqual(len(manifest['rejected_plan_versions']), 1)
         calls = self.text.call_count
-        with self.assertRaisesRegex(RuntimeError, '复审仍未通过'):
-            core.run_job(self.task['id'])
+        core.run_job(self.task['id'])
         self.assertEqual(self.text.call_count, calls)
         self.assertEqual(len(self.revision_payloads), 1)
-        self.assertEqual(len(self.video_calls), 0)
+        self.assertEqual(len(self.video_calls), 2)
 
     def test_pause_preserves_completed_segment_and_resume_continues_once(self):
         def pause(label, done):
-            if label == '已完成1/2段':
+            if label in ('已完成1/2段', '已保存1/2段'):
                 self.task['pause_requested'] = True
         self.after_step = pause
         with self.assertRaises(core.ControlStop):
@@ -374,7 +375,7 @@ class StoryFlowTests(unittest.TestCase):
 
     def test_cancel_at_checkpoint_stays_cancelled_and_keeps_media(self):
         def cancel(label, done):
-            if label == '已完成1/2段':
+            if label in ('已完成1/2段', '已保存1/2段'):
                 self.task['cancel_requested'] = True
         self.after_step = cancel
         with self.assertRaises(core.ControlStop):

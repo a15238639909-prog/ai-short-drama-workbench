@@ -95,7 +95,7 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(segment_api, "can_resume_segment", return_value=True, create=True) as check, \
                 patch.object(sa.threading, "Thread") as thread:
             self.assertEqual(sa.restore_generation_jobs(start_monitor=False), ["STORY_TEST"])
-            check.assert_called_once_with("STORY_TEST", 2, 1, size_tier=None)
+            check.assert_called_once_with("STORY_TEST", 2, 1, scene_no=1, size_tier=None)
             thread.return_value.start.assert_called_once()
 
     def test_restart_recovers_registered_safe_checkpoint(self):
@@ -245,14 +245,14 @@ class RecoveryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(segment_api, "render_opening_all", return_value=(0, "")))
         self.stack.enter_context(patch.object(segment_api, "is_segment_current", return_value=True, create=True))
 
-    def test_missing_prompt_blocks_all_downstream_generation(self):
+    def test_missing_prompt_preserves_ready_video_for_partial_merge(self):
         job = self.job(phase="video")
         self.chain_mocks({"scenes": [{"segments": [{"no": 1, "prompt": "one", "video": "one.mp4"}]}]})
         with patch.object(authoring, "next_prompts", return_value=([], 2)), \
                 patch.object(segment_api, "render_segment_checked") as render:
             result = sa._first_video_chain("STORY_TEST", job, ep=2, n=None, approved=True)
         render.assert_not_called()
-        self.assertEqual(result, [])
+        self.assertEqual(result, ['one.mp4'])
         self.assertEqual(job["missing_prompt_segments"], [2])
 
     def test_failed_second_clip_preserves_first_and_retries_second(self):
@@ -271,7 +271,7 @@ class RecoveryTests(unittest.TestCase):
                           "scenes": [{"segments": [{"no": 1, "prompt": "one", "video": "one.mp4"},
                                                     {"no": 2, "prompt": "bad"}]}]})
         with patch.object(segment_api, "render_segment_checked") as render:
-            self.assertEqual(sa._first_video_chain("STORY_TEST", job, ep=2, n=None, approved=True), [])
+            self.assertEqual(sa._first_video_chain("STORY_TEST", job, ep=2, n=None, approved=True), ['one.mp4'])
         render.assert_not_called()
         self.assertEqual(job["missing_prompt_segments"], [2])
 

@@ -61,55 +61,52 @@ def problems(body, mode, who):
 
 def format_dialogue(body, dialogue, chars, who):
     """模型写的「名：台词」「台词：名：台词」→ 给定的 H3 格式行；找不到的台词补到含这句的块末；非拍摄者说话前加「X嘴唇开合。」。"""
-    lines = body.split("\n")
-    canon = {}
-    for d in dialogue:
-        m = re.search(r"\[Chinese\](.*?)</d>", d)
-        if m:
-            canon[re.sub(r"[^一-龥]", "", m.group(1))] = d
-    fixed = []
-    for l in lines:
-        if "says" in l or "<d>" in l:
-            m = re.search(r"<d>\s*(?:\[Chinese\])?\s*(.*?)\s*</d>", l)
-            nq = re.sub(r"[^一-龥]", "", m.group(1)) if m else re.sub(r"[^一-龥]", "", l.split("says", 1)[-1])
-            hit = canon.get(nq) or next((v for k, v in canon.items() if nq and (nq in k or k in nq) and min(len(nq), len(k)) >= 2), "")
-            if hit:
-                pre = l[:l.find("<Subject")] if "<Subject" in l and l.find("<Subject") > 0 and "说：" in l[:l.find("<Subject")] else ""
-                fixed.append(hit)                                              # 歪写的 says 行 → 标准行
-            continue                                                            # 台词表里没有的 says 行（模型编的）→ 删
-        fixed.append(l)
-    lines = fixed
-    for d in dialogue:
-        m = re.search(r"^(.*?)说：<Subject (\d+)> \(S\d+\) says:<d>\[Chinese\](.*?)</d>", d)
-        if not m:
+    offscreen = {who} | {c['name'] for c in chars or [] if c.get('_h3_voice_only')}
+    canon = []
+    for line in dialogue:
+        match = re.match(r'^(.*?)说：<Subject (\d+)> \(S\d+\) says:<d>\[Chinese\](.*?)</d>', line)
+        if match:
+            canon.append((match[1].strip(), match[3].strip(), line))
+    if not canon:
+        return body
+    words = {text for _, text, _ in canon}
+    labels = {speaker for speaker, _, _ in canon}
+    slot = object()
+    cleaned = []
+    for line in body.splitlines():
+        if 'says' in line or '<d>' in line:
+            # Retain visible action before a speech tag, then replace the
+            # utterance by source occurrence rather than a quote-keyed dict.
+            prefix = re.split(r'<Subject\s*\d+>', line, maxsplit=1)[0]
+            if prefix != line:
+                prefix = re.sub(r'(?:' + '|'.join(re.escape(x) for x in labels)
+                                + r')说[：:]\s*$', '', prefix).strip()
+                if prefix:
+                    cleaned.append(prefix)
+            match = re.search(r'<d>\s*(?:\[Chinese\])?\s*(.*?)\s*</d>', line)
+            if match and match[1].strip() in words:
+                cleaned.append(slot)
             continue
-        spk, quote = m.group(1).strip(), m.group(3).strip()
-        nq = re.sub(r"[^一-龥]", "", quote)
-        cue = "" if spk == who else ("%s嘴唇开合。" % spk)
-        done = False
-        for i, l in enumerate(lines):
-            if "says:<d>" in l:
-                if nq and nq in re.sub(r"[^一-龥]", "", l):
-                    done = True
-                    break
-                continue
-            t = l.strip()
-            mm = re.match(r"^(?:台词[：:]\s*)?([^：:]{1,8})[：:]\s*[“「\"]?(.+?)[”」\"]?\s*$", t)
-            if mm and nq and re.sub(r"[^一-龥]", "", mm.group(2)) == nq:
-                lines[i] = (cue + "\n" if cue and not any(cue in x for x in lines[max(0, i - 3):i]) else "") + d
-                done = True
-                break
-        if not done and nq:
-            for i, l in enumerate(lines):
-                if nq in re.sub(r"[^一-龥]", "", l) and "这一段结束时" not in l:
-                    lines[i] = re.sub(re.escape(quote), "", l).rstrip("，,") + ("" if cue and cue in l else cue)
-                    lines.insert(i + 1, d)
-                    done = True
-                    break
-        if not done:
-            k = next((i for i, l in enumerate(lines) if "这一段结束时" in l), len(lines))
-            lines.insert(k, (cue + "\n" if cue else "") + d)
-    return "\n".join(lines)
+        plain = re.match(r'^\s*(?:台词[：:]\s*)?[^：:]{1,12}[：:]\s*(.*?)\s*$', line)
+        if plain and plain[1].strip('“”「」"') in words:
+            cleaned.append(slot)
+        elif line.strip() not in {name + '嘴唇开合。' for name in labels}:
+            cleaned.append(line)
+    missing = len(canon) - sum(item is slot for item in cleaned)
+    end = next((i for i, line in enumerate(cleaned)
+                if isinstance(line, str) and '这一段结束时' in line), len(cleaned))
+    cleaned[end:end] = [slot] * max(0, missing)
+    out, used = [], 0
+    for item in cleaned:
+        if item is not slot:
+            out.append(item)
+        elif used < len(canon):
+            speaker, _, line = canon[used]
+            if speaker not in offscreen:
+                out.append(speaker + '嘴唇开合。')
+            out.append(line)
+            used += 1
+    return '\n'.join(out)
 
 
 def generate(mode, who, shots, chars, seconds, previous, scene, space, dialogue, call):
@@ -126,30 +123,54 @@ def generate(mode, who, shots, chars, seconds, previous, scene, space, dialogue,
                 dialogue.append("%s说：<Subject %d> (S%d) says:<d>[Chinese]%s</d>" %
                                 (m.group(1), n, n, m.group(2).strip('“”「」"')))
     sys = instructions(mode, who)
+    source_voices = [c['name'] for c in chars or [] if c.get('_h3_voice_only') and c['name'] != who]
+    if source_voices:
+        sys += ('\n这些仅为原文声音标签，身份尚未核定：%s。原话逐句保留；'
+                '不将标签写成可见人物，不添加其脸、身体或嘴唇动作，不擅自归给其他角色。'
+                % '、'.join(source_voices))
     user = ("时长：%s秒\n场景：%s；%s\n人物编号：%s\n上一段结果：%s\n画面稿：\n%s\n台词原文：\n%s"
             % (seconds or 10, scene, space, "；".join("%s=Subject %d" % (c["name"], i)
                for i, c in enumerate(chars, 1)), previous or "开头", shots, "\n".join(dialogue)))
-    body = str(call(sys, user, mt=2400, temperature=0.4) or "").strip()
+    transport_warning = []
+    def ask(text, temperature):
+        try:
+            return str(call(sys, text, mt=2400, temperature=temperature) or '').strip()
+        except (RuntimeError, OSError) as error:
+            from .runtime_core import item_failure_requires_stop
+            if item_failure_requires_stop(error):
+                raise
+            transport_warning.append('视点写词服务不可用，沿用本段原文：' + str(error))
+            return ''
+
+    body = ask(user, .4)
     def check(text):
         bad = problems(text, mode, who)
-        for line in dialogue:
-            m = re.search(r"\[Chinese\](.*?)</d>", line)
-            quote = (m.group(1) if m else line).strip()
-            # 检查台词内容出现一次即可，导演可以换说话标签但不能删句或重复句。
-            n = text.count(quote)
-            if n != 1:
-                bad.append("台词缺失或重复：%s" % quote[:20])
+        speech = r'<Subject\s*(\d+)>\s*\(S(\d+)\)\s*says:\s*<d>\[Chinese\](.*?)</d>'
+        expected = re.findall(speech, '\n'.join(dialogue))
+        if re.findall(speech, text) != expected or len(re.findall(r'<d>', text)) != len(expected):
+            bad.append('台词编号、原字、出现次数或顺序与本段原文不一致')
         times = [(int(a), int(b)) for a, b in re.findall(r"(?m)^\s*(\d+)\s*[—–-]\s*(\d+)\s*秒[：:]", text)]
         if not times or times[0][0] != 0 or times[-1][1] != int(round(float(seconds or 10))) or any(a >= b for a, b in times) or any(times[i][1] != times[i+1][0] for i in range(len(times)-1)):
             bad.append("时间块不连续或总秒数不符")
         return bad
     bad = check(body)
-    if bad:
-        body = str(call(sys, user + "\n当前稿：\n" + body + "\n只修这些问题，保留全部事件及台词：" + "；".join(bad), mt=2400, temperature=0.2) or "").strip()
+    if bad and not transport_warning:
+        revised = ask(user + "\n当前稿：\n" + body + "\n只修这些问题，保留全部事件及台词：" + "；".join(bad), .2)
+        body = revised or body
         bad = check(body)
+    if not body.strip():
+        # A valid saved source can be transported without another model call.
+        # This asserts no invented camera cut, actor, dialogue or completion.
+        from .authoring import _pic_parts
+        actions = [value for spoken, value in _pic_parts(shots)
+                   if not spoken and not value.startswith('──')]
+        marker = who + ('主观视角' if mode == '第一视角POV' else '手持自拍')
+        body = '0—%s秒：%s，%s\n这一段结束时：保留本段原文末态，实际结果待视频观察确认。' % (
+            int(round(float(seconds or 10))), marker, '。'.join(actions) or '观察本段原文所述现场。')
+        transport_warning.append('视点写词修复后无可用正文，使用本段原文保守时间轴。')
     body = format_dialogue(body, dialogue, chars, who)                          # P456③：台词行统一成 H3 格式
     bad = check(body)
-    generate.last_problems = list(bad)
+    generate.last_problems = list(bad) + transport_warning
     if bad and not body.strip():
         raise RuntimeError("视点检查未通过，请编辑提示词：" + "；".join(bad))
     # P456：两次都没过 → 留最后一稿、问题记在段上（原来抛异常会把整批 11 段提示词全丢掉）

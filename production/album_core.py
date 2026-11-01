@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """album_core.py — V4.1 Album Production：规划 / 样片 / 批量 / PDF（clean-room）。"""
-import json, re, time
+import json, re, time, uuid
 from pathlib import Path
 from PIL import Image
 from cores import store
@@ -64,10 +64,24 @@ def _compile_album_prompt(item, bible, style, char_anchor=""):
 
 def produce_album(story, theme, count=3, style="电影级写实", kind="cinematic", task=None):
     from models import krea_client
-    plan = plan_album(story, theme, int(count), kind)
+    from cores import runtime_core as runtime
+    snapshot = task._get() if task else None
+    batch = (runtime._batch_checkpoint(task, snapshot, 'album', dict(story=story, theme=theme,
+             count=int(count), style=style, kind=kind)) if task else dict(items={}, errors={}))
+    plan = batch.get('plan')
+    if plan is None:
+        plan = plan_album(story, theme, int(count), kind)
+        batch['plan'] = plan
     title = re.sub(r'[\\/:*?"<>|]', "", plan.get("album_name") or "album")
-    outdir = ALBUM_ROOT / (title + "_" + time.strftime("%Y%m%d_%H%M%S"))
+    outdir = Path(batch.get('outdir') or (ALBUM_ROOT / (title + "_" + time.strftime("%Y%m%d_%H%M%S") + '_' + uuid.uuid4().hex[:8])))
     outdir.mkdir(parents=True, exist_ok=True)
+    batch['outdir'] = str(outdir)
+    batch.setdefault('production_id', store.new_id('ALBUM'))
+    def checkpoint():
+        store.save_json(outdir / 'receipt.json', batch)
+        if task:
+            runtime._save_batch(task, snapshot, batch)
+    checkpoint()
     char_anchor = ""
     if kind == "character_photography" and story.get("character_ids"):
         c = asset_core.get_asset(story["story_id"], "characters", story["character_ids"][0])
@@ -78,18 +92,61 @@ def produce_album(story, theme, count=3, style="电影级写实", kind="cinemati
         if task:
             task.check_pause()
             task.step("画册图片", idx, len(plan["images"]))
-        prompt = _compile_album_prompt(item, plan.get("series_bible", {}), style, char_anchor)
-        res = krea_client.generate(prompt, width=1024, height=1024)
-        dst = outdir / ("%02d.png" % int(item.get("index", 1)))
-        import shutil
-        shutil.copy2(res["output_path"], str(dst))
-        images.append(str(dst))
-        plan["_prompt_" + str(item.get("index"))] = prompt
+        key, saved = str(idx + 1), batch['items'].get(str(idx + 1))
+        if saved and saved.get('status') == 'completed':
+            runtime._batch_file(saved['path'], saved['sha256'])
+            images.append(saved['path'])
+            continue
+        try:
+            prompt = _compile_album_prompt(item, plan.get("series_bible", {}), style, char_anchor)
+            if saved and saved.get('raw_path'):
+                runtime._batch_file(saved['raw_path'], saved['raw_sha256'])
+                source = saved['raw_path']
+            else:
+                res = krea_client.generate(prompt, width=1024, height=1024)
+                source = res['output_path']
+                saved = batch['items'][key] = dict(status='generated', raw_path=source,
+                    raw_sha256=runtime._batch_file(source), prompt=prompt)
+                checkpoint()
+            # Sequence position remains unique even if the model repeated an index.
+            dst = outdir / ("%02d.png" % (idx + 1))
+            import shutil
+            shutil.copy2(source, str(dst))
+            saved.update(status='completed', path=str(dst), sha256=runtime._batch_file(dst))
+            images.append(str(dst))
+            plan["_prompt_" + key] = prompt
+            batch['errors'].pop(key, None)
+        except Exception as error:
+            if task:
+                task.check_pause()
+            if runtime.item_failure_requires_stop(error):
+                raise
+            batch['errors'][key] = str(error)
+            batch['items'].setdefault(key, {}).update(status='failed', error=str(error))
+        checkpoint()
     pdf = outdir / "album.pdf"
-    imgs = [Image.open(p).convert("RGB") for p in images]
-    imgs[0].save(pdf, save_all=True, append_images=imgs[1:])
-    rec = {"production_id": store.seq_id("ALBUM", int(time.time())), "story_id": story["story_id"],
-           "name": plan.get("album_name", ""), "kind": kind, "images": images, "pdf": str(pdf),
+    imgs, aggregate_error = [], ''
+    try:
+        for path in images:
+            with Image.open(path) as source:
+                imgs.append(source.convert('RGB'))
+        if imgs:
+            imgs[0].save(pdf, save_all=True, append_images=imgs[1:])
+    except Exception as error:
+        if runtime.item_failure_requires_stop(error):
+            raise
+        aggregate_error = str(error)
+    finally:
+        for image in imgs:
+            image.close()
+    if task:
+        task.step('画册本轮已处理', len(images), len(plan['images']))
+    rec = {"production_id": batch['production_id'], "story_id": story["story_id"],
+           "name": plan.get("album_name", ""), "kind": kind, "images": images,
+           "pdf": str(pdf) if images and not aggregate_error else None,
+           "generation_completed": len(images) == len(plan['images']) and not aggregate_error,
+           "expected_images": len(plan['images']), "failed_items": dict(batch['errors']),
+           "aggregate_error": aggregate_error,
            "bible": plan.get("series_bible", {}), "prompts": {k: v for k, v in plan.items() if k.startswith("_prompt_")},
            "created": time.time()}
     store.save_json(store.DATA / "productions" / (rec["production_id"] + ".json"), rec)

@@ -120,7 +120,7 @@ async function main(){
   assert.match(h.get('quality-note').textContent,/每段生成一次，无自动补拍/);assert.equal(h.get('ratio-control').hidden,false);
   assert.match(h.get('quality-note').textContent,/先有限修复/);assert.match(h.get('quality-note').textContent,/审稿、观察报告不可用、未通过时，记录提醒后继续/);
   assert.match(h.get('audio-review-note').textContent,/增加耗时/);assert.match(h.get('audio-review-note').textContent,/声音按原设置生成/);
-  assert.match(h.get('quality-note').textContent,/生成服务不可用时仍会停止/);
+  assert.match(h.get('quality-note').textContent,/单段失败保留待补，继续后续段/);
   assert.equal(h.get('mode-tabs').children[2].attributes['aria-selected'],'true');
 
   h.get('mode').value='image';c.draft.opening_image='D:/AI视频工作台/outputs/opening.png';

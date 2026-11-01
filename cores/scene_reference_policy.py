@@ -1,6 +1,6 @@
-"""Select a set image at each planned scene entrance without rewriting a story.
+"""Select a set image on its first planned use in an episode.
 
-The timeline, rather than completed videos, determines an entrance.  Reference
+The timeline, rather than completed videos, determines first use.  Reference
 transport uses these helpers only for new requests; frozen requests are owned by
 the renderer's existing recovery rules.
 """
@@ -8,6 +8,8 @@ import re
 
 
 VERSION = 'scene-entry-only-v1'
+# New authoring contract; VERSION still identifies frozen transport snapshots.
+SCOPE = 'scene-first-use-v1'
 _PICTURE = re.compile(r'<Picture\s+(\d+)>')
 _SUBJECT = r'<Subject\s*(\d+)>'
 _FIELDS = ('subject_definitions', 'summary', 'retention_analysis',
@@ -66,8 +68,24 @@ def _rows(timeline):
     return rows
 
 
+def first_use_in_plan(current_key, previous_keys):
+    """Share the first-use decision between canonical writing and transport.
+
+    An unknown location keeps its evidence and forms a conservative boundary;
+    completed videos, frame availability and render order are never inputs.
+    """
+    if current_key is None:
+        return True
+    for key in reversed(previous_keys):
+        if key is None:
+            return True
+        if key == current_key:
+            return False
+    return True
+
+
 def include_scene(sid, g, ep=None, timeline=None):
-    """True on A,A,B,B,A entrances: True,False,True,False,True.
+    """On A,A,B,B,A use True,False,True,False,False.
 
     No video, frame, completion status or model output participates.  A missing
     row/location, ambiguous copied row or unavailable timeline keeps its scene
@@ -81,6 +99,12 @@ def include_scene(sid, g, ep=None, timeline=None):
     rows = _rows(timeline)
     positions = [index for index, (_, row) in enumerate(rows) if row is g]
     cards = asset_core.list_assets(sid, 'scenes') or []
+    keys_by_hint = {}
+    def row_key(row, scene):
+        hint = _scene_hint(row, scene)
+        if hint not in keys_by_hint:
+            keys_by_hint[hint] = _scene_key(sid, ep, row, scene, cards)
+        return keys_by_hint[hint]
     if not positions:
         for identity in ('segment_id', 'clip_id', 'id', 'uid'):
             if g.get(identity) is not None:
@@ -89,18 +113,18 @@ def include_scene(sid, g, ep=None, timeline=None):
                 if positions:
                     break
     if not positions and g.get('no') is not None:
-        target = _scene_key(sid, ep, g, {}, cards)
+        target = row_key(g, {})
         positions = [index for index, (scene, row) in enumerate(rows)
                      if str(row.get('no')) == str(g['no'])
-                     and (target is None or _scene_key(sid, ep, row, scene, cards) == target)]
+                     and (target is None or row_key(row, scene) == target)]
     if len(positions) != 1 or positions[0] == 0:
         return True
     index = positions[0]
     scene, current = rows[index]
-    previous_scene, previous = rows[index - 1]
-    current_key = _scene_key(sid, ep, current, scene, cards)
-    previous_key = _scene_key(sid, ep, previous, previous_scene, cards)
-    return current_key is None or previous_key is None or current_key != previous_key
+    current_key = row_key(current, scene)
+    previous_keys = [row_key(row, container)
+                     for container, row in rows[:index]]
+    return first_use_in_plan(current_key, previous_keys)
 
 
 def _definition_region(prompt):
@@ -165,6 +189,15 @@ def strip_scene_images(prompt, removed_picture_numbers):
             raise ValueError('同一场景图片绑定多个主体，保留完整参考图')
         bindings[number] = subject
         rewritten.append(changed + ending)
+    # The director may already have removed the trailing scene image. A second
+    # transport pass must not mistake the missing old slot for a custom binding.
+    # Only accept a no-op when no requested token remains anywhere, and an
+    # explicit unbound environment still exists in the definition region.
+    unbound = re.findall(r'(?m)^\s*<Subject\s*\d+>[^\n]*(?:the environment|场景)[^\n]*$', definitions)
+    unbound = [line for line in unbound if not _PICTURE.search(line)]
+    used = {int(match[1]) for match in _PICTURE.finditer(prompt)}
+    if not bindings and not (used & removed) and len(unbound) >= len(removed):
+        return prompt
     if set(bindings) != removed:
         raise ValueError('待移除图片没有明确场景绑定，保留完整参考图')
     # An image cannot supply both a character and a scene merely because its
